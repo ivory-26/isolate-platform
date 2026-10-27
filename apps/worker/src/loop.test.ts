@@ -475,6 +475,7 @@ describe("worker loop — lease lifecycle", () => {
 			ownerId: "test-worker",
 			leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
 		};
+		const startedAt = Date.now();
 		queue.jobs.push(job);
 		const ticker = createHeartbeatTicker({
 			queue,
@@ -489,7 +490,12 @@ describe("worker loop — lease lifecycle", () => {
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		const beats = queue.heartbeats.length;
 		expect(beats).toBeGreaterThanOrEqual(2);
-		expect(beats).toBeLessThanOrEqual(12);
+		// Anti-spam property: one beat per configured interval at most, with slack
+		// for scheduler jitter. A fixed cap fails on slow CI runners (wall-clock
+		// scheduling produces more 15ms windows than on a fast dev machine), so
+		// bound by actually-elapsed time at interval granularity instead.
+		const elapsedMs = Date.now() - startedAt;
+		expect(beats).toBeLessThanOrEqual(Math.ceil(elapsedMs / 15) + 3);
 		ticker.stop();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(queue.heartbeats.length).toBe(beats);

@@ -2,6 +2,12 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — CI: timing-window upper bounds fail on slow runners (worker heartbeat spam test)
+- Symptom: local suite 20/20 green, but CI failed `(fail) per-job heartbeat ticker keeps leases alive without spamming — Expected: <= 12` on the sprint-merge commit; pass/fail depended on machine speed.
+- Root cause: the test asserted an absolute beat cap (12) inside a fixed 200ms wall-clock window; on a slower shared runner more 15ms scheduling windows elapse before the observer wakes, so the beat count legitimately exceeds a locally-calibrated constant. (The agent's own lesson — "tolerant bounds instead of exact counts" — had been applied to the lower bound only.)
+- Correction: bound scaled to actually-elapsed time at interval granularity (`ceil(elapsedMs / intervalMs) + 3`), which preserves the anti-spam property (≤1 beat per configured interval) while being runner-independent; worker suite re-run ×3 green, biome + tsc clean.
+- Prevention: any assertion over C/f clock-dependent counts must scale with measured elapsed time (or use injected/fake clocks) — never a locally-calibrated constant. Added to the wave-2 integration checklist for future review of all timing tests.
+
 ## 2026-10-27 — B2: Mastra parses dotted step ids as nested paths during resume
 - Symptom: `run.resume({step: "sdlc.review_ready"})` threw `This workflow step "sdlc" was not suspended. Available suspended steps: [sdlc.review_ready]`.
 - Root cause: `Run._resume` does `stepParam.split(".")`, assuming step ids never contain dots; the first segment is validated against top-level `suspendedPaths`.

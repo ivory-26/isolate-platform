@@ -2,6 +2,56 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 3 — Product surface expansion (`task/w3-*` branches, one worktree per agent)
+
+Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w3-*`. Common rules: agents own ONLY the files listed; root files (`package.json` at root, `bun.lock` root changes beyond `apps/web` scaffolding, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package (`bunx biome check <owned>`, `bunx --bun tsc -p <project>/tsconfig.json --noEmit`, `bun test <owned-tests>`); commit on the task branch before reporting; never push; never read/print `.env*`.
+
+### W3-W — Worker consumes promoted `WorkerConfig.jobTimeoutMs`
+- Owner: agent session W3-W · Branch: `task/w3-worker`
+- File ownership: `apps/worker/**`
+- Work: the per-job hard timeout now has its contract in `@isolate/shared` (`workerConfigSchema.jobTimeoutMs`, default 120000, bounds 1000–3600000). Source it from parsed WorkerConfig; keep the dep-level override strictly as a test seam; update createdAt/fixtures; keep all 20 loop/config tests green and add coverage that config-supplied timeouts are honored (including BUDGET_EXCEEDED path).
+- DoD: scoped gates green ×2 reproducibility, commit, report with command evidence.
+- Status: in progress
+
+### W3-D — Wave-3 DB schema + repositories
+- Owner: agent session W3-D · Branch: `task/w3-db`
+- File ownership: `packages/db/**`
+- Work: migration `0002_workflow_compilation.sql` (idempotent, Postgres ≥13, editorial style matching 0001): `compiled_plans` (org-scoped, `workflow_definition_id` + version-pinned `workflow_version` uniqueness, `plan` JSONB, `created_at`) and `rejection_issues` (`workflow_definition_id`, `workflow_version`, `issues` JSONB, `created_at`); new repositories `CompiledPlanRepository` (save/get/list, version immutability) and `WorkflowRejectionRepository` (record by version, list latest) with in-memory fakes built on pure decision helpers, offline tests mirroring `approval-repository.test.ts` style, live-Neon suite updates that skip cleanly without `DATABASE_URL`.
+- DoD: scoped gates green ×2; migration NOT applied (coordinator applies); commit + report.
+- Status: in progress
+
+### W3-F — Compiler: forbid dotted node ids
+- Owner: agent session W3-F · Branch: `task/w3-wfschema`
+- File ownership: `packages/workflow-schema/**`
+- Work: validator must reject any node id containing `.` (Mastra resume treats `.` as a path separator — see DECISIONS B2 note); new rejection class with dedicated tests; keep all 52 existing tests green; document in the module docstring.
+- DoD: scoped gates green ×2; commit + report.
+- Status: in progress
+
+### W3-U — Fresh web app scaffold + minimal control-plane UI
+- Owner: agent session W3-U · Branch: `task/w3-web`
+- File ownership: `apps/web/**` only (its package.json is inside). May `bun add` (worktree-local bun.lock changes allowed; coordinator owns the root lockfile merge).
+- Work: fresh TanStack Start app (not a port) — Bun, React, TS strict; two routes: task submission (org-scoped, server function validates via `@isolate/shared` schemas and enqueues through `TaskRepository`/`QueueRepository` contracts; when `DATABASE_URL` is absent use the in-memory fakes from `@isolate/db/testing`) and a runs/tasks list (latest-first, sanitized fields only). Deps: `@tanstack/react-start`, `@tanstack/react-router`, `@tanstack/react-query`, react/react-dom, zod. Use the installed skills `tanstack-start-best-practices` / `tanstack-router-best-practices` / `tanstack-query-best-practices` + context7 for API confirmation. No secrets, no model providers, no sandbox execution in browser bundles; verify `dist/client` excludes `apiKey`/`DATABASE_URL`/provider hosts. Must pass root `bun run typecheck` (project auto-discovery) and `bunx biome check apps/web`.
+- DoD: scoped gates + production build green; commit (excluding node_modules); report with command evidence. If online scaffold tooling fails, hand-build a minimal TanStack Start app from docs (do not commit broken state).
+- Status: in progress
+
+### W3-S — `packages/sandbox`: adapter contract + git helpers + command policy
+- Owner: agent session W3-S · Branch: `task/w3-sandbox`
+- File ownership: `packages/sandbox/**`
+- Work: package from scratch (package.json, tsconfig matching sibling conventions, src). Deliver: (1) `SandboxProvider` adapter interface + a deny-by-default `NullProvider` that refuses every execution (no host process spawning of untrusted code — enforce in types and tests); (2) `commandPolicy` — timeout/arg-shape/output-cap/egress validators over an explicit allowlist shape; (3) `git` helpers — `openRepo`, `createBranch`, `createWorktree`, `removeWorktree`, unique `task/<id>` branch naming, operating with `Bun.$` on explicit paths (temp fixtures under the platform temp dir; never the host repo), bounded output; offline tests only.
+- DoD: scoped gates green; package discovered by root typecheck (already wired); commit + report.
+- Status: in progress
+
+## Wave 3 — Integration & validation (coordinator, after W3-* report)
+- Merge `task/w3-*` → `main` centrally; regenerate root lockfile; full `bun run validate`; apply `0002_workflow_compilation.sql` to Neon `isolate-platform` **with user approval (Neon MCP)**; QA/DoD audit; web client-bundle secret sweep; docs (ARCHITECTURE/STATUS/CHALLENGES/SKILL-REGISTRY); push; verify CI green.
+- Status: in progress
+
+## Wave 2 — Integration & validation (coordinator)
+- Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.
+- Status: done
+
+## Later (event scope decisions pending)
+- Sandbox hosted providers, visual editor UI (React Flow), auth/tenancy surface on the web app.
+
 ## Sprint A — Foundation & Data Plane (`sprint/a-foundation`)
 
 ### A1 — `@isolate/shared` implementation
@@ -38,9 +88,3 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 - Coordinator verification: commit `9226219` — biome 0 issues, tsc clean, **26 pass / 0 fail** (redact 6 + rest-client 20). Deny-default approval gating redaction-proof + audit sink covered; contract note: failure union extended with NOT_FOUND/RATE_LIMITED (optional sanitized message), consumers switch on `code`.
 - Status: **done**
 
-## Wave 2 — Integration & validation (coordinator)
-- Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.
-- Status: planned
-
-## Later (event scope decisions pending)
-- Post-kickoff web app (fresh TanStack Start scaffold, NOT a port of the legacy app), sandbox execution plane, visual editor UI.

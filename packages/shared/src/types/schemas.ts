@@ -65,6 +65,7 @@ export const WORKER_CONFIG_DEFAULTS = {
 	maxAgentTurns: 12,
 	maxOutputBytes: 262144,
 	repairBudget: 2,
+	jobTimeoutMs: 120000,
 	networkEgressDefault: "deny",
 } as const;
 
@@ -111,6 +112,14 @@ export const workerConfigSchema = z.object({
 		.min(0)
 		.max(5)
 		.default(WORKER_CONFIG_DEFAULTS.repairBudget),
+	// Per-job hard execution budget; the worker loop applies it to every
+	// handler invocation (test seams may override for determinism).
+	jobTimeoutMs: z
+		.number()
+		.int()
+		.min(1000)
+		.max(3600000)
+		.default(WORKER_CONFIG_DEFAULTS.jobTimeoutMs),
 	networkEgressDefault: z
 		.enum(["deny", "allowlist"])
 		.default(WORKER_CONFIG_DEFAULTS.networkEgressDefault),

@@ -104,6 +104,7 @@ describe("workerConfigSchema", () => {
 			maxAgentTurns: WORKER_CONFIG_DEFAULTS.maxAgentTurns,
 			maxOutputBytes: WORKER_CONFIG_DEFAULTS.maxOutputBytes,
 			repairBudget: WORKER_CONFIG_DEFAULTS.repairBudget,
+			jobTimeoutMs: WORKER_CONFIG_DEFAULTS.jobTimeoutMs,
 			networkEgressDefault: "deny",
 		});
 	});
@@ -117,11 +118,13 @@ describe("workerConfigSchema", () => {
 			maxAgentTurns: 24,
 			maxOutputBytes: 1048576,
 			repairBudget: 1,
+			jobTimeoutMs: 300000,
 			networkEgressDefault: "allowlist",
 		});
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.value.maxConcurrency).toBe(16);
+			expect(result.value.jobTimeoutMs).toBe(300000);
 			expect(result.value.networkEgressDefault).toBe("allowlist");
 		}
 	});
@@ -141,6 +144,9 @@ describe("workerConfigSchema", () => {
 
 		const wrongType = parseWorkerConfig({ maxAgentTurns: "many" });
 		expect(wrongType.ok).toBe(false);
+
+		const tinyTimeout = parseWorkerConfig({ jobTimeoutMs: 100 });
+		expect(tinyTimeout.ok).toBe(false);
 	});
 
 	test("rejects unknown egress modes", () => {

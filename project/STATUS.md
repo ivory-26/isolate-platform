@@ -1,6 +1,15 @@
 # Status
 
-Last updated: 2026-10-27 (event build, day 1 — wave 2 integrated + Neon data plane live)
+Last updated: 2026-10-27 (event build, day 1 evening — wave 3 launched, 5-agent branch-per-agent swarm)
+
+## Current: wave 3 in flight (5 parallel agent sessions + coordinator)
+
+- Swarm topology: one worktree + one branch per agent under `C:/Users/Sahil/Documents/worktrees-platform/w3-*`, branches `task/w3-worker` (apps/worker), `task/w3-db` (packages/db), `task/w3-wfschema` (packages/workflow-schema), `task/w3-web` (apps/web, fresh TanStack Start scaffold), `task/w3-sandbox` (new packages/sandbox). Task specs + DoD in `project/TASKS.md`.
+- Coordinator pre-commit (on `main`) landed first: `workerConfigSchema.jobTimeoutMs` promoted (contract from B1 proposal — default 120000, bounds 1000–3600000, shared tests updated); `packages/sandbox` added to typecheck-all auto-discovery; B1 `JobRow.lease`/`lastError` totality proposal verified ALREADY SATISFIED by the db contract (total nullable, consumers use `== null` guards) — recorded in DECISIONS. Scoped gates green: biome ✅ · tsc ✅ · bun test shared 60/60 ✅.
+- New skills installed per SKILLS.md checklist and reviewed: `tanstack-start-best-practices`, `tanstack-router-best-practices`, `tanstack-query-best-practices` (source `deckardger/tanstack-agent-skills`, installed user-level 2026-10-27, contents reviewed — guidance-only, no policy bypass).
+- Integration (coordinator, after agents report): central merge → main, lockfile regen, full validate, migration 0002 apply to Neon (with user approval), secret sweep on web client bundle, docs, push, CI.
+
+## Event build day 1 — wave 2 integrated (verified)
 
 ## Repository
 - This repo (`isolate-platform`) contains ONLY event-week work (started Oct 27, 2026), fresh git history. The pre-event spike/compatibility MVP lives in a separate private repo and stays out of this history — including file blobs in ALL branch histories (verified: a pre-event migration file that had leaked back via a transplant merge was purged from every ref by a coordinator history rewrite and force-push).

@@ -9,6 +9,7 @@ const candidates = [
 	"packages/mastra",
 	"packages/workflow-schema",
 	"packages/integrations",
+	"packages/sandbox",
 	"apps/worker",
 	"apps/web",
 ];

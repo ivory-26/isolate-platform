@@ -10,7 +10,15 @@ Installed/considered skills with source, owner, and review status. Policy lives 
 | Neon MCP (`tools.Neon.*`) | Available MCP server | Coordinator only (migration application, SQL verification). Write/destructive tools require explicit user approval | Approved with guardrails: `delete_project` never called autonomously |
 | mastra-docs MCP | Available MCP server | SB2 (Mastra API orientation) | Approved; biased-review: treat docs as orientation, d.ts as authority (2026-10-25 entry) |
 | opencode MCP | Available MCP server | Coordinator session management/worktrees | Approved |
-| find-skills | Available harness skill | Coordinator, on demand | Not invoked this sprint; blocked pending concrete skill needs — install policy: trusted source + pin + review each script before enabling |
+| find-skills | Available harness skill | Coordinator, on demand | Used 2026-10-27 to discover `deckardger/tanstack-agent-skills`; installed 3 skills below and reviewed per SKILLS.md checklist |
+
+## Installed wave-3 (2026-10-27, coordinator-reviewed)
+
+| Skill | Source | Used by | Review status |
+|---|---|---|---|
+| tanstack-start-best-practices | `deckardger/tanstack-agent-skills` (skills.sh), user-level `~/.agents/skills` | W3-U (web scaffold agent) | Approved: guidance-only rules (server functions, secrets-server-side, CSRF). No policy-bypass or secret-disclosure content found in review |
+| tanstack-router-best-practices | Same source | W3-U | Approved (same review) |
+| tanstack-query-best-practices | Same source | W3-U | Approved (same review) |
 
 ## Deliberately not installed this sprint
 

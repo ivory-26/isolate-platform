@@ -2,6 +2,12 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — A1: post-migration CRLF checkout broke the Biome format gate on unchanged files
+- Symptom: after repo migration, `bunx biome check packages/shared` failed with 19 formatter-only errors; every diff was CRLF(␍) → LF on files whose content had not changed.
+- Root cause: Windows Git `core.autocrlf=true` converts LF blobs to CRLF on checkout; Biome's default lineEnding wants LF. Seed blobs are correct LF.
+- Correction: `bunx biome check --write <owned dir>` normalizes on disk; `git status` then shows identical blobs ("nothing to commit"). Permanent fix: root `.gitattributes` added (`* text=auto eol=lf`) by the coordinator.
+- Prevention: pin `eol=lf` in `.gitattributes` before onboarding any Windows-based agent clones; agents hitting the same failure should run the scoped `--write` first and diff to confirm no real formatting issues hide beneath.
+
 ## 2026-10-27 — B1: `JobRow.lease` optional+nullable narrowing friction
 - Symptom: tsc TS18048 "lease possibly undefined" despite `!== null` checks.
 - Root cause: contract declared optional `lease?: {...} | null` so null-check is not a total guard.

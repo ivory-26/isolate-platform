@@ -7,8 +7,9 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 ### A1 — `@isolate/shared` implementation
 - Owner: agent session A1 · Worktree: `../worktrees-platform/sa1-shared` · Branch: `task/sa1-shared`
 - File ownership: `packages/shared/**`
-- DoD: brief §Task A1 (schemas + deep redaction + full test set). Coordinator handoff notes: implementation + 60 passing tests transplanted; remaining: gates re-run in the new repo, biome formating drift settle, commit.
-- Status: in progress
+- DoD: brief §Task A1 (schemas + deep redaction + full test set).
+- Coordinator verification: implementation + 60 passing tests verified in the new repo — scoped gates all green (biome / tsc / 60 pass · 0 fail), no drift to commit (work is at the seed commit). Its `.gitattributes` CRLF proposal adopted by the coordinator.
+- Status: **done**
 
 ### A2 — `@isolate/db` implementation
 - Owner: agent session A2 · Worktree: `../worktrees-platform/sa2-db` · Branch: `task/sa2-db`

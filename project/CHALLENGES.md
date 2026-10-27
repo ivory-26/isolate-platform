@@ -2,6 +2,24 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — Compliance: pre-event spike migration leaked back through a branch merge (purged from refs AND history)
+- Symptom: while applying the migration on the new Neon project, the runner logged `applying 0001_agent_smoke_test_runs.sql` — the pre-event spike migration was still present in the event repo, created in the fresh DB, and present in git history of every branch.
+- Root cause: the sa2-db transplant copied the whole legacy `packages/db` from a snapshot that contained both migrations; the rename only renumbered the NEW migration. The seed-time cleanup deleted the file in the main checkout only; the later merge of `task/sa2-db` re-introduced it into the pushed history.
+- Correction: file removed (`54c3953`) and dropped from the new DB; coordinator history rewrite (`git filter-branch --index-filter` over all branches) purged the blob from every public ref; force-pushed; verified zero refs contain the path; `refs/original/*` backups and the `legacy` remote-tracking refs deleted so `git log --all` is clean.
+- Prevention: transplant audits must diff the FULL file inventory (done after B3's lesson) AND re-audit after merges — a merge can resurrect excluded files; assert "no pre-event paths in any ref" as a wave-2 CI/gauntlet step before pushing.
+
+## 2026-10-27 — A2: postgres.js decodes jsonb columns inconsistently under Neon pooled + `prepare: false`
+- Symptom: live Neon suite failed `budget_limits.max_agent_turns` (undefined) although storage was correct; probes showed the same column decoded as object for a literal cast but string when the value passed a parameter binding (`INSERT ... RETURNING` included).
+- Root cause: on the Neon pooled endpoint with `prepare: false`, postgres.js 3.4.9 does not reliably decode (3802) values that traversed a bound parameter — driver-level, not app-level drift.
+- Correction: `parseJsonbColumn` normalizer at every repository row-mapping boundary (tasks.budget_limits, attempts.outcome, audit.details, jobs.payload); offline + live suites 28/28.
+- Prevention: don't assume driver type decoding parity in pooled/serverless deployments; pin row-mapping invariants with shape-checked helpers and a live regression test.
+
+## 2026-10-27 — A2: live suite exposed a transition classification-order bug the offline tests couldn't
+- Symptom: live test expected `CONFLICT`, received `INVALID_TRANSITION` for a stale `expectedStatus` whose target pair was also illegal.
+- Root cause: the PG driver's fast-path guard pre-checked pair legality with `current := expectedStatus` — a stale expectation short-circuited to INVALID_TRANSITION, violating the documented "CONFLICT wins" ordering in `guardTransition` and the fake.
+- Correction: driver classifies against the REAL current status after a failed UPDATE (mirrors fake + pure helper); final fallback CONFLICT (lost race).
+- Prevention: invariants asserted by pure helpers must hold at every call site, including optimizations bypassing them — write the integration test that exercises the optimisticconcurrency let contract against the real store before wave-close.
+
 ## 2026-10-27 — CI: timing-window upper bounds fail on slow runners (worker heartbeat spam test)
 - Symptom: local suite 20/20 green, but CI failed `(fail) per-job heartbeat ticker keeps leases alive without spamming — Expected: <= 12` on the sprint-merge commit; pass/fail depended on machine speed.
 - Root cause: the test asserted an absolute beat cap (12) inside a fixed 200ms wall-clock window; on a slower shared runner more 15ms scheduling windows elapse before the observer wakes, so the beat count legitimately exceeds a locally-calibrated constant. (The agent's own lesson — "tolerant bounds instead of exact counts" — had been applied to the lower bound only.)

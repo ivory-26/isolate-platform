@@ -1,15 +1,20 @@
 # Status
 
-Last updated: 2026-10-27 (event build, day 1)
+Last updated: 2026-10-27 (event build, day 1 — wave 2 integrated)
 
 ## Repository
 - This repo (`isolate-platform`) contains ONLY event-week work (started Oct 27, 2026), fresh git history. The pre-event spike/compatibility MVP lives in a separate repo and stays out of this history.
-- CI: lint/typecheck/test advisory-gitleaks on every push/PR; build returns when the web app scaffold lands.
+- CI: lint/typecheck/test + advisory gitleaks on every push/PR; build returns when the web app scaffold lands.
 
-## Current sprint state (6 agent sessions, 2 lanes)
-- Sprint A: A1 `@isolate/shared` **done** (seed; 60 tests). A2 `@isolate/db` **done** (`bcf71f6`+`0f96283`; 27 pass/1 skip offline, 28/28 live pre-migration; migration `0001_platform_core.sql` awaiting Neon apply).
-- Sprint B: B1 worker **done** (`45fe874`; 20/20 tests). B2 Mastra (in flight — largest remaining build). B3 compiler **done** (`ec6afde`; 52/52). B4 connector **done** (`9226219`; 26/26).
-- All task branches pushed to origin. Remaining: B2 completion → wave-2 integration (sprint lanes → main, full validate, contract-proposal review), Neon migration apply (user approval pending), CI/DoD audit.
+## Sprint state — ALL SIX TASKS COMPLETE, WAVE 2 MERGED
+- Sprint A: A1 `@isolate/shared` done (60 tests); A2 `@isolate/db` done (`bcf71f6`+`0f96283`; 27 pass/1 skip offline, 28/28 live pre-migration; fresh client rewrite).
+- Sprint B: B1 worker done (`45fe874`; 20 tests); B2 Mastra done (`4353dba`; 14 tests, dountil machine + policy-gated tools); B3 compiler done (`ec6afde`; 52 tests); B4 connector done (`9226219`; 26 tests).
+- Integration: all `task/*` merged → `sprint/a-foundation` + `sprint/b-runtime` → `main` (`a453af8`), ownership segregation yielded ZERO merge conflicts. Full validate on main: biome clean, typecheck 6/6, **172 pass / 0 fail / 1 skip offline** (live db test skips without env; live worktree run WITH env: 28/28 pass, pre-migration probe).
+- Deferred to wave 3 (reviewed, not applied — see `project/DECISIONS.md`): B1's `JobRow.lease`/`lastError` totality + `WorkerConfig.jobTimeoutMs` promotion; B3's db/shared schema proposals (compiled_plans, workflow events); B2's mandate to B3 compiler: forbid dotted node ids.
+
+## Verified evidence summary
+- `bun run check`: 61 files, 0 errors/warnings. `bun run typecheck`: 6/6 projects. `bun run test`: 172 pass / 0 fail / 1 skip across 15 files (all suites, offline).
+- All task branches pushed to origin with their committing agent's tip verified via `git ls-remote`.
 
 ## Verified in the legacy workspace (pre-migration; informational)
 - Coordinator seed gates at migration time: biome ✅, typecheck 6 projects ✅, bun test ✅ (shared 60 pass incl. transplants), workspace install reproducible.

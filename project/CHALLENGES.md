@@ -2,6 +2,48 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — B1: frozen in-memory clock made every new job unclaimable
+- Symptom: after repo migration, claim-dependent worker tests hung in `eventually` for 2s and failed 5/20; same tests passed pre-pause.
+- Root cause: test fake captured `now = Date.now()` once at construction while `makeJob()` stamped `notBefore` 1–2 ms later; on the frozen clock `notBefore <= now` is false forever — pass/fail depended purely on where the scheduler's ~15.6 ms tick boundary fell vs the capture order.
+- Correction: fake `now` became a getter following real time until a test assigns it (assignment then freezes it deterministically); verified via a standalone probe run before touching source.
+- Prevention: an in-memory fake must use ONE clock for every gate it enforces; never take two `Date.now()` calls across construction and use.
+
+## 2026-10-27 — B1: fake heartbeat didn't simulate lease loss, so "stale ack rejected" was untestable
+- Symptom: `heartbeat false aborts the handler signal and ack is rejected` timed out asserting `status === "claimed"` even though the heartbeat returned false as configured.
+- Root cause: the fake's "lost" beat returned false but left the lease row intact; the subsequent `ackComplete` found the job still owned and accepted it — simulation contradicted the contract (`heartbeat === false` ⇒ lease gone; ack thereafter = LEASE_LOST).
+- Correction: on a "lost" beat the fake now clears `job.lease` before returning false; ticker fixtures hold live leases and wire `leaseLost` to abort the signal, mirroring production wiring.
+- Prevention: fakes must implement the state CHANGE the real backend performs, not merely the return value; assert the downstream contract consequence, not just the flag.
+
+## 2026-10-27 — B1: ticker self-stop made "no beats yet" indistinguishable from "timer broken"
+- Symptom: heartbeat ticker tests counted exactly 1 beat and terminated; first hypothesis blamed `timer.unref()` (disproven by probe: 15/16 ticks fired).
+- Root cause: the ticker intentionally self-stops on its first false beat (lease-lost contract); tests exercising an unowned job deterministically produced a single beat — a valid feature colliding with an invalid fixture.
+- Correction: fixtures now hold a live lease for the ticker's owner; spam test uses tolerant bounds (≥2 beats in 200 ms) instead of exact counts.
+- Prevention: when a component terminates on an invariant, fixtures must satisfy the invariant's preconditions; run a cheap probe script before blaming timing APIs.
+
+## 2026-10-27 — A2: circular self-imports made the package unbuildable and hid unexportable contract types
+- Symptom: tsc TS2305/TS2459/TS2303 ×11 across 5 repository modules; `JobRow`/`QueueRepository` unexportable for `apps/worker`.
+- Root cause: transplanted files imported their own contract interfaces from themselves; the interfaces existed nowhere in the module graph — snapshot was committed without a green tsc.
+- Correction: declared and exported every contract interface + `JobType`/`JobStatus`/`JobRow` in the module that implements it; re-verified `apps/worker` typechecks as a consumer.
+- Prevention: typecheck before committing any transplant; forbid `import ... from "./<this-file>"` in review checklist.
+
+## 2026-10-27 — A2: camelCase budget jsonb keys vs snake_case row contract (hidden by `as` casts in the driver)
+- Symptom: tsc TS2739 in the new in-memory fake; the Postgres driver had masked it with two `as` casts.
+- Root cause: `create()` persisted camelCase keys into `budget_limits` jsonb while the row contract and the `budget_limits->>'max_duration_ms'` over-budget scan expect snake_case — every persisted task stored jsonb the row type would never read.
+- Correction: serialize snake_case keys at the insert boundary (TS input stays camelCase); same mapping in the fake; regression asserted in fakes test + live test post-migration.
+- Prevention: cast-based row mapping silently hides drift — prefer shape-checked mapping helpers; the fake run-through caught it because the fake uses the real type without casts.
+
+## 2026-10-27 — A2: 3 test-authoring misses vs helper semantics (helpers were correct)
+- Symptom: 3/28 first-suite failures.
+- Root cause: (a) edge-count split on `),(` instead of `), (`; (b) assumed dead-letter at `maxAttempts=0` while the clamp `max(1, ...)` requeues; (c) checked legality after mutating status, firing the CONFLICT branch (checked before INVALID_TRANSITION by design).
+- Correction: fixed the tests to the documented semantics; no production changes.
+- Prevention: derive expected values from the shared contract (`TASK_STATE_TRANSITIONS`) computed in-test rather than hand-enumeration.
+
+## 2026-10-27 — A2: stale paths + timeouts after worktree relocation
+- Symptom: live test skipped despite valid `DATABASE_URL`; Neon connect+TLS exceeded Bun's 5s test timeout; pre-migration live probe failed with `42P01`.
+- Root cause: borrowed env-file path `../isolate/.env` was relative to the OLD worktree layout (correct: `../../isolate/.env`); default timeout too short; migration not yet applied.
+- Correction: corrected path (never read/printed); explicit 120s timeout; live test probes `to_regclass('public.organizations')` and exits cleanly pre-migration.
+- Prevention: after any worktree relocation, re-derive all relative paths in briefs and record corrected ones in the report.
+
 ## 2026-10-27 — B4: transplanted redaction implementation vs test contract drift
 - Symptom: `bun test packages/integrations` failed 2 redaction tests despite the stop report claiming only 3 tsc errors.
 - Root cause: transplanted `redact.ts` and `redact.test.ts` were mutually out of date revisions (impl ate keyword markers; tests expected them preserved in `"Bearer [auth-redacted]"`; homogeneous filler runs swallowed wholesale vs capped).

@@ -13,17 +13,15 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 
 ### A2 — `@isolate/db` implementation
 - Owner: agent session A2 · Worktree: `../worktrees-platform/sa2-db` · Branch: `task/sa2-db`
-- File ownership: `packages/db/**`
-- Coordinator handoff notes: migration transplanted (RENAME to `0001_platform_core.sql`); 6 repositories implemented; known defects: type self-imports in repository files + missing tests + no gates yet; also rewrite `client.ts` fresh (no legacy port).
-- Status: in progress
+- Coordinator verification: commits `bcf71f6` + `0f96283` — contracts declared/exported in-module (self-imports gone, 11 tsc errors → 0), fresh `client.ts` rewrite (26 LOC), budget jsonb snake_case bug fixed at insert boundary. Gates: biome clean (9 non-null warnings, test files only), tsc 0 errors, **27 pass / 1 skip** offline; **28 pass / 0 fail live** (pre-migration probe, correct `../../isolate/.env` path). Migration `0001_platform_core.sql` ready to apply (coordinator, with user approval).
+- Status: **done**
 
 ## Sprint B — Runtime & Orchestration (`sprint/b-runtime`)
 
 ### B1 — Durable worker loop (`apps/worker`)
 - Owner: agent session B1 · Worktree: `../worktrees-platform/sb1-worker` · Branch: `task/sb1-worker`
-- File ownership: `apps/worker/src/**`
-- Coordinator handoff notes: loop + heartbeat + sanitize + ~14 tests transplanted; known defects: 2 tsc typing errors in loop.ts; gates/commit outstanding.
-- Status: in progress
+- Coordinator verification: commit `45fe874` — both tsc defects fixed (generic `settle()`, explicit `.catch` return annotation); 3 transplant test-fake defects found + fixed (frozen clock, simulated lease-loss, ticker fixtures). Gates: biome 0 issues ×2, tsc clean, **20 pass / 0 fail** (loop 17 + config 3), ×3 reproducibility. Contract proposals queued for wave-2 review: `JobRow.lease`/`lastError` totality; `WorkerConfig.jobTimeoutMs` promotion.
+- Status: **done**
 
 ### B2 — Mastra SDLC workflow (`packages/mastra`)
 - Owner: agent session B2 · Worktree: `../worktrees-platform/sb2-mastra` · Branch: `task/sb2-mastra`

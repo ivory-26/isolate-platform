@@ -25,9 +25,8 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 
 ### B2 — Mastra SDLC workflow (`packages/mastra`)
 - Owner: agent session B2 · Worktree: `../worktrees-platform/sb2-mastra` · Branch: `task/sb2-mastra`
-- File ownership: `packages/mastra/src/**`
-- Coordinator handoff notes: d.ts verification + `agents/runtime.ts` done; workflow + tools registry + tests not started. Use the design ruling in brief §Task B2 (dountil machine).
-- Status: in progress
+- Coordinator verification: commit `4353dba` — `createSdlcWorkflow` per ratified dountil mapping (validate→repair loop body, persisted `repairAttemptsUsed`, bail short-circuits); policy-gated `wirePlatformTools` (deny-by-default, approval-required for sensitive); fake-runtime-only tests. Gates: biome 0 issues ×2, tsc clean, **14 pass / 0 fail**. Key artifacts for wave 2: dash-only step ids (dotted ids break resume — B3 must forbid `.` in node ids), `mastra` instance with storage required for suspend/resume, agent-turn budget = `maxRepairAttempts + 2`.
+- Status: **done**
 
 ### B3 — Workflow registry/validation/compiler (`packages/workflow-schema`)
 - Owner: agent session B3 · Worktree: `../worktrees-platform/sb3-wf-schema` · Branch: `task/sb3-wf-schema`

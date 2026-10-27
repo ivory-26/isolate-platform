@@ -2,6 +2,24 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — B2: Mastra parses dotted step ids as nested paths during resume
+- Symptom: `run.resume({step: "sdlc.review_ready"})` threw `This workflow step "sdlc" was not suspended. Available suspended steps: [sdlc.review_ready]`.
+- Root cause: `Run._resume` does `stepParam.split(".")`, assuming step ids never contain dots; the first segment is validated against top-level `suspendedPaths`.
+- Correction: renamed all SDLC step ids to dash-form (`sdlc-planning`, `sdlc-gate`, …) and resume via `suspendOptions.resumeLabel` → `run.resume({label, resumeData})`; suspension→resume tests fail if a dotted id returns.
+- Prevention: forbid `.` in node/step ids — flagged to B3's compiler as a validation rule (`INVALID_TYPE` on dotted ids); verify id grammar against the consumer's own primitives, not just the compiler.
+
+## 2026-10-27 — B2: in-memory `run.resume` requires a storage-backed snapshot
+- Symptom: after `run.start` returned `status: "suspended"`, `run.resume(...)` threw `No snapshot found for this workflow run` when no `Mastra`/storage was attached.
+- Root cause: `_resume` always resolves the suspended snapshot through `mastra.getStorage()`; suspend works without storage, resume does not.
+- Correction: `createSdlcWorkflow(deps, { mastra })` now requires the durable state plane (Neon-backed store in production, `InMemoryStore` in tests); worker contract noted.
+- Prevention: verify both halves of a suspend/resume pair independently — mid-workflow API asymmetries don't surface until the second half runs.
+
+## 2026-10-27 — B2: `InferPublicSchema` requires structural zod schemas
+- Symptom: hand-rolled "schema-like" objects fail `@mastra/schema-compat`'s public-schema boundary; zod v3/v4 pass (shallow structural check on `_output`/`_input`/`_zod`).
+- Root cause: Mastra's schema compatibility layer defines schemas structurally, not nominally.
+- Correction: typed per-tool zod schemas instead of a generic `Record<string, unknown>` tool input.
+- Prevention: when a framework claims generic schema support, check its compatibility layer's structural requirements before adopting non-zod schema shapes.
+
 ## 2026-10-27 — B1: frozen in-memory clock made every new job unclaimable
 - Symptom: after repo migration, claim-dependent worker tests hung in `eventually` for 2s and failed 5/20; same tests passed pre-pause.
 - Root cause: test fake captured `now = Date.now()` once at construction while `makeJob()` stamped `notBefore` 1–2 ms later; on the frozen clock `notBefore <= now` is false forever — pass/fail depended purely on where the scheduler's ~15.6 ms tick boundary fell vs the capture order.

@@ -13,12 +13,22 @@ export const MAX_SANITIZED_MESSAGE_LENGTH = 480;
  */
 const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 	[
-		/(?:bearer|token|authorization[:=]?)\s+[A-Za-z0-9._~+/=-]{6,}/gi,
-		"[auth-redacted]",
+		// Keyword-led authorization material: the imperative keyword is kept for
+		// readability, the credential run that follows it is scrubbed. Requires
+		// whitespace before the credential so already-redacted markers such as
+		// "[token-redacted]" are never re-matched against themselves.
+		/(\b(?:bearer|token))\s*[:=]?\s+[A-Za-z0-9._~+/=-]{6,}/gi,
+		"$1 [auth-redacted]",
 	],
 	[/github_pat_[A-Za-z0-9_]{8,}/g, "[token-redacted]"],
 	[/gh[a-z]_[A-Za-z0-9]{8,}/g, "[token-redacted]"],
-	[/[A-Za-z0-9+/_-]{43,}/g, "[redacted]"],
+	[
+		// Long opaque runs that look credential-shaped. The lookaheads require
+		// mixed character classes (upper plus lower) so plain repeated filler
+		// text is not swallowed wholesale and still gets length-capped below.
+		/(?=[A-Za-z0-9+/_-]{43,})(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/_-]{43,}/g,
+		"[redacted]",
+	],
 ];
 
 const OVERRIDDEN_SECRET_MARKER = "[token-redacted]";

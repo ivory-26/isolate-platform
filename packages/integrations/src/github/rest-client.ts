@@ -3,6 +3,7 @@ import {
 	pullRequestResponseSchema,
 	pullRequestSpecSchema,
 	summarizeZodIssues,
+	type ValidatedPullRequestSpec,
 } from "./schemas";
 import type {
 	GitHubCredentials,
@@ -15,7 +16,6 @@ import type {
 	PullRequestFailureCode,
 	PullRequestInfo,
 	PullRequestSpec,
-	ValidatedPullRequestSpec,
 } from "./types";
 
 /**

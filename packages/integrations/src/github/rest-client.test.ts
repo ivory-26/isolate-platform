@@ -6,7 +6,11 @@ import {
 	extractOwnerRepo,
 	sha256Hex,
 } from "./rest-client";
-import type { PrCreationAuditSink, PullRequestSpec } from "./types";
+import type {
+	PrCreationAuditSink,
+	PullRequestFailureCode,
+	PullRequestSpec,
+} from "./types";
 
 const INSTALLATION_TOKEN = "ghs_fix_0123456789";
 const FABRICATED_TOKEN = "ghp_fabricated1234567890abc";
@@ -141,6 +145,21 @@ function makeDeps(): {
 	return depsWithResponses([{ status: 201, body: OK_RESPONSE_BODY }]);
 }
 
+/**
+ * Deny-default spec (§8): the same base request carrying a payload-bound
+ * approval computed over `canonicalPullRequestPayload(spec)`, so the connector
+ * proceeds past gating to its REST surface.
+ */
+async function approvedSpec(
+	spec: PullRequestSpec = BASE_SPEC,
+): Promise<PullRequestSpec> {
+	return {
+		...spec,
+		approvalId: "approval_1",
+		approvalPayloadSha256: await sha256Hex(canonicalPullRequestPayload(spec)),
+	};
+}
+
 describe("extractOwnerRepo", () => {
 	test("splits owner/repo and rejects malformed refs", () => {
 		expect(extractOwnerRepo("acme/widgets")).toEqual({
@@ -156,7 +175,7 @@ describe("extractOwnerRepo", () => {
 describe("createPullRequest", () => {
 	test("success path builds endpoint, headers, body, and audits SUCCEEDED", async () => {
 		const { creator, requestLog, calls } = makeDeps();
-		const result = await creator.createPullRequest(BASE_SPEC);
+		const result = await creator.createPullRequest(await approvedSpec());
 
 		expect(result.ok).toBe(true);
 		if (result.ok) {
@@ -282,10 +301,14 @@ describe("createPullRequest", () => {
 		[404, { message: "Not Found" }, "NOT_FOUND"],
 		[422, { message: "Validation Failed" }, "VALIDATION_FAILED"],
 	])("status %i maps to %s with redacted provider message", async (status, body, expectedCode) => {
-		const { creator, requestLog } = depsWithResponses([{ status, body }]);
+		// Explicit non-sensitive classification: this suite covers status
+		// mapping, not approval gating (deny-default is covered above).
+		const { creator, requestLog } = depsWithResponses([{ status, body }], {
+			isSensitive: () => false,
+		});
 		const result = await creator.createPullRequest(BASE_SPEC);
 		const failure = expectFailure(result);
-		expect(failure.code).toBe(expectedCode);
+		expect(failure.code).toBe(expectedCode as PullRequestFailureCode);
 		expect(failure.message).toBeDefined();
 		expect(failure.message).not.toContain(FABRICATED_TOKEN);
 		expect(failure.message).not.toContain(INSTALLATION_TOKEN);
@@ -293,13 +316,16 @@ describe("createPullRequest", () => {
 	});
 
 	test("429 maps to RATE_LIMITED and surfaces the retry-after hint", async () => {
-		const { creator } = depsWithResponses([
-			{
-				status: 429,
-				body: { message: "API rate limit exceeded" },
-				headers: { "retry-after": "30" },
-			},
-		]);
+		const { creator } = depsWithResponses(
+			[
+				{
+					status: 429,
+					body: { message: "API rate limit exceeded" },
+					headers: { "retry-after": "30" },
+				},
+			],
+			{ isSensitive: () => false },
+		);
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("RATE_LIMITED");
 		expect(failure.message).toContain("rate limited");
@@ -310,38 +336,45 @@ describe("createPullRequest", () => {
 		[401, { message: "Bad credentials" }],
 		[500, { message: "internal boom" }],
 	])("status %i maps to INTEGRATION_UNAVAILABLE", async (status, body) => {
-		const { creator } = depsWithResponses([{ status, body }]);
+		const { creator } = depsWithResponses([{ status, body }], {
+			isSensitive: () => false,
+		});
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("INTEGRATION_UNAVAILABLE");
 	});
 
 	test("unmapped 4xx denies by default (POLICY_DENIED)", async () => {
-		const { creator } = depsWithResponses([
-			{ status: 418, body: { message: "teapot" } },
-		]);
+		const { creator } = depsWithResponses(
+			[{ status: 418, body: { message: "teapot" } }],
+			{ isSensitive: () => false },
+		);
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("POLICY_DENIED");
 	});
 
 	test("malformed JSON on success status maps to INTEGRATION_UNAVAILABLE", async () => {
-		const { creator } = depsWithResponses([
-			{ status: 201, rawBody: "not json {" },
-		]);
+		const { creator } = depsWithResponses(
+			[{ status: 201, rawBody: "not json {" }],
+			{ isSensitive: () => false },
+		);
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("INTEGRATION_UNAVAILABLE");
 	});
 
 	test("response failing the zod contract maps to INTEGRATION_UNAVAILABLE", async () => {
-		const { creator } = depsWithResponses([
-			{
-				status: 201,
-				body: {
-					number: "seven",
-					html_url: "https://github.com/x/y/pull/1",
-					head: { ref: "x" },
+		const { creator } = depsWithResponses(
+			[
+				{
+					status: 201,
+					body: {
+						number: "seven",
+						html_url: "https://github.com/x/y/pull/1",
+						head: { ref: "x" },
+					},
 				},
-			},
-		]);
+			],
+			{ isSensitive: () => false },
+		);
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("INTEGRATION_UNAVAILABLE");
 	});
@@ -352,6 +385,7 @@ describe("credential redaction through every Result path", () => {
 		const { creator, calls } = depsWithResponses(
 			[{ status: 201, body: OK_RESPONSE_BODY }],
 			{
+				isSensitive: () => false,
 				fetchImpl: (async () => {
 					throw new Error(
 						`request to https://api.github.com failed: Bearer ${FABRICATED_TOKEN}`,
@@ -370,6 +404,7 @@ describe("credential redaction through every Result path", () => {
 		const { creator, calls } = depsWithResponses(
 			[{ status: 201, body: OK_RESPONSE_BODY }],
 			{
+				isSensitive: () => false,
 				fetchImpl: (() => {
 					throw Object.assign(new Error("The operation was aborted"), {
 						name: "TimeoutError",
@@ -386,12 +421,15 @@ describe("credential redaction through every Result path", () => {
 	});
 
 	test("provider errors echoing the injected credential are scrubbed", async () => {
-		const { creator } = depsWithResponses([
-			{
-				status: 403,
-				body: { message: `your token ${INSTALLATION_TOKEN} expired` },
-			},
-		]);
+		const { creator } = depsWithResponses(
+			[
+				{
+					status: 403,
+					body: { message: `your token ${INSTALLATION_TOKEN} expired` },
+				},
+			],
+			{ isSensitive: () => false },
+		);
 		const failure = expectFailure(await creator.createPullRequest(BASE_SPEC));
 		expect(failure.code).toBe("POLICY_DENIED");
 		expect(failure.message).not.toContain(INSTALLATION_TOKEN);
@@ -409,6 +447,7 @@ describe("credential redaction through every Result path", () => {
 			credentials: CREDENTIALS,
 			audit: failingAudit,
 			actor: ACTOR,
+			isSensitive: () => false,
 			fetchImpl: impl as unknown as typeof fetch,
 		});
 		const result = await creator.createPullRequest(BASE_SPEC);

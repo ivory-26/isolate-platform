@@ -1,10 +1,10 @@
 import { PlatformError } from "@isolate/shared";
 
-export * from "./types";
-export * from "./nodes";
-export * from "./graph";
-export * from "./validate";
 export * from "./compiler";
+export * from "./graph";
+export * from "./nodes";
+export * from "./types";
+export * from "./validate";
 
 /**
  * Error construction for the control plane: structured code, no payloads or

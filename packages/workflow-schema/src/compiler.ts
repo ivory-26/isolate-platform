@@ -1,13 +1,13 @@
-import { newId } from "@isolate/shared";
 import type { Result } from "@isolate/shared";
+import { newId } from "@isolate/shared";
 import { nodeAdjacency, tarjanComponents } from "./graph";
-import { validateDefinitionParts } from "./validate";
 import type {
 	CompiledWorkflow,
 	CompileOptions,
 	WorkflowDefinition,
 	WorkflowIssue,
 } from "./types";
+import { validateDefinitionParts } from "./validate";
 
 /**
  * Compiles a validated, version-pinned definition into an execution plan:
@@ -46,7 +46,8 @@ export function compileWorkflow(
 	}
 
 	const validated = validateDefinitionParts(def, options);
-	if (validated.issues.length > 0) return { ok: false, error: validated.issues };
+	if (validated.issues.length > 0)
+		return { ok: false, error: validated.issues };
 
 	const nodes = def.nodes;
 	const graphEdges = edgesAsIndices(def);
@@ -80,7 +81,8 @@ export function compileWorkflow(
 						{
 							path: `nodes[${nodeIndex}].config`,
 							code: "INVALID_TYPE",
-							message: "internal: validated config missing after successful validation",
+							message:
+								"internal: validated config missing after successful validation",
 						},
 					],
 				};
@@ -126,7 +128,9 @@ function edgesAsIndices(
 	// Validation has already run, so endpoints resolve; map defensively for
 	// structurally broken inputs.
 	const indexOf = new Map<string, number>();
-	def.nodes.forEach((node, i) => indexOf.set(node.id, i));
+	for (let i = 0; i < def.nodes.length; i++) {
+		indexOf.set(def.nodes[i]?.id, i);
+	}
 	return def.edges.map((edge) => ({
 		from: indexOf.get(edge.from) ?? -1,
 		to: indexOf.get(edge.to) ?? -1,
@@ -202,7 +206,7 @@ function orderedNodesForComponent(
 		return adjacency[v].filter((w) => members.has(w));
 	};
 	const ordered: number[] = [loopIndex];
-	let current = inComponentSuccessors(loopIndex)[0];
+	let current: number | undefined = inComponentSuccessors(loopIndex)[0];
 	while (current !== undefined && current !== loopIndex) {
 		ordered.push(current);
 		const next = inComponentSuccessors(current);

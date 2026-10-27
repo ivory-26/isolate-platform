@@ -78,6 +78,10 @@ export type NodeConfigMap = {
 
 export type NodeConfig = NodeConfigMap[NodeType];
 
+/** Named aliases for the two most cross-checked node configs. */
+export type AgentTaskConfig = NodeConfigMap["task.agent"];
+export type ValidateLoopConfig = NodeConfigMap["validate.loop"];
+
 export type ValidationOptions = {
 	/**
 	 * Allowed tool names for tool.call nodes. When omitted, tool.call is

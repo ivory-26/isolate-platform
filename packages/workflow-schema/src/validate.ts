@@ -5,8 +5,8 @@ import {
 	EDGE_OPERATORS,
 	NODE_TYPES,
 	type NodeConfig,
-	type ValidationOptions,
 	type ValidatedDefinition,
+	type ValidationOptions,
 	type WorkflowDefinition,
 	type WorkflowEdge,
 	type WorkflowIssue,
@@ -134,7 +134,12 @@ export function validateDefinitionParts(
 	}
 
 	// --- Edges: endpoints, `when` shape, switch branch coverage --------------
-	type IndexedEdge = { from: number; to: number; edge: WorkflowEdge; index: number };
+	type IndexedEdge = {
+		from: number;
+		to: number;
+		edge: WorkflowEdge;
+		index: number;
+	};
 	const indexedEdges: IndexedEdge[] = [];
 	for (let i = 0; i < edgesReadonly.length; i++) {
 		const edge = edgesReadonly[i];
@@ -182,7 +187,13 @@ export function validateDefinitionParts(
 		}
 		const branches = configs.get(source.id);
 		if (branches === undefined || !("branches" in branches)) continue;
-		validateSwitchEdges(ie, ie.index, branches.branches, outgoing[ie.from], issues);
+		validateSwitchEdges(
+			ie,
+			ie.index,
+			branches.branches,
+			outgoing[ie.from],
+			issues,
+		);
 	}
 
 	// --- Cycles: only simple, validate.loop-bounded cycles -------------------
@@ -203,9 +214,7 @@ export function validateDefinitionParts(
 				continue;
 			}
 			const vId = nodesReadonly[v].id;
-			const exit = indexedEdges.some(
-				(ie) => ie.from === v && ie.to !== v,
-			);
+			const exit = indexedEdges.some((ie) => ie.from === v && ie.to !== v);
 			if (!exit) {
 				issues.push({
 					path: `nodes[${v}].id`,
@@ -215,8 +224,14 @@ export function validateDefinitionParts(
 			}
 			continue;
 		}
-		if (!validateSimpleLoopComponent(component, nodesReadonly, indexedEdges, issues)) {
-			continue;
+		if (
+			!validateSimpleLoopComponent(
+				component,
+				nodesReadonly,
+				indexedEdges,
+				issues,
+			)
+		) {
 		}
 	}
 
@@ -225,7 +240,7 @@ export function validateDefinitionParts(
 		const node = nodesReadonly[i];
 		const config = configs.get(node.id);
 		if (config === undefined) continue; // already reported
-		if (node.type === "tool.call") {
+		if (node.type === "tool.call" && "tool" in config) {
 			const allowlist = options.toolAllowlist;
 			if (allowlist === undefined) {
 				issues.push({
@@ -246,10 +261,7 @@ export function validateDefinitionParts(
 			"maxAttempts" in config &&
 			options.taskBudget !== undefined
 		) {
-			if (
-				!Number.isInteger(options.taskBudget) ||
-				options.taskBudget < 1
-			) {
+			if (!Number.isInteger(options.taskBudget) || options.taskBudget < 1) {
 				issues.push({
 					path: "options.taskBudget",
 					code: "INVALID_TYPE",
@@ -361,7 +373,8 @@ function validateSwitchEdges(
 			issues.push({
 				path: `edges[${outgoingEdge.index}].when.operator`,
 				code: "INVALID_TYPE",
-				message: "condition.switch branches must use the enumerated \"eq\" operator; no free expressions",
+				message:
+					'condition.switch branches must use the enumerated "eq" operator; no free expressions',
 			});
 			invalidValue = true;
 		}
@@ -382,7 +395,8 @@ function validateSwitchEdges(
 		issues.push({
 			path: `edges[${index}].when.left`,
 			code: "INVALID_TYPE",
-			message: "all outgoing edges of a condition.switch must compare the same left variable",
+			message:
+				"all outgoing edges of a condition.switch must compare the same left variable",
 		});
 	}
 	for (const branch of branches) {
@@ -440,7 +454,10 @@ function validateSimpleLoopComponent(
 	}
 	let simple = true;
 	for (const nodeId of component) {
-		if ((outDegrees.get(nodeId) ?? 0) !== 1 || (inDegrees.get(nodeId) ?? 0) !== 1) {
+		if (
+			(outDegrees.get(nodeId) ?? 0) !== 1 ||
+			(inDegrees.get(nodeId) ?? 0) !== 1
+		) {
 			simple = false;
 			break;
 		}
@@ -454,7 +471,9 @@ function validateSimpleLoopComponent(
 		});
 		return false;
 	}
-	const loopMembers = component.filter((i) => nodes[i].type === "validate.loop");
+	const loopMembers = component.filter(
+		(i) => nodes[i].type === "validate.loop",
+	);
 	if (loopMembers.length !== 1) {
 		const label = component.map((i) => nodes[i].id).join(", ");
 		issues.push({
@@ -464,7 +483,9 @@ function validateSimpleLoopComponent(
 		});
 		return false;
 	}
-	const switchMember = component.find((i) => nodes[i].type === "condition.switch");
+	const switchMember = component.find(
+		(i) => nodes[i].type === "condition.switch",
+	);
 	if (switchMember !== undefined) {
 		issues.push({
 			path: `nodes[${switchMember}].id`,

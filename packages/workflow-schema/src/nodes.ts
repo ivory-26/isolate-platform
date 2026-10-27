@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { APPROVAL_RISK_LEVELS, NODE_TYPES, type NodeConfigMap, type NodeType, type WorkflowIssue } from "./types";
+import {
+	APPROVAL_RISK_LEVELS,
+	NODE_TYPES,
+	type NodeConfigMap,
+	type NodeType,
+	type WorkflowIssue,
+} from "./types";
 
 /** Hard cap for validate.loop attempts when no task budget is supplied. */
 export const MAX_LOOP_ATTEMPTS = 10;

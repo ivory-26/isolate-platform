@@ -28,7 +28,6 @@ export type FakeAgentRuntimeOptions = {
 	id?: string;
 	name?: string;
 	script: (input: {
-		turn: number;
 		prompt: string;
 		context: TaskContext;
 	}) => Promise<string> | string;

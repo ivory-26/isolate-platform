@@ -1,9 +1,6 @@
 import type { ApprovalId, OrganizationId, TaskId } from "@isolate/shared";
 import type { PgSql } from "../client";
 import type { ApprovalRow, ApprovalStatus } from "../schema";
-import type {
-	ApprovalRepository as ApprovalRepositoryContract,
-} from "./approval-repository";
 
 /**
  * Postgres (Neon) approval store.
@@ -58,6 +55,34 @@ export type ApproveOrFailCode =
 	| "ALREADY_DECIDED";
 
 /**
+ * Contract for the payload-bound approval store. Declared in this module so
+ * the Postgres implementation and test fakes share one in-scope symbol.
+ */
+export interface ApprovalRepository {
+	request(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		workflowRunId: string | null;
+		action: string;
+		payloadSha256: string;
+		requestedBy: string;
+		expiresInSeconds: number;
+	}): Promise<ApprovalRow>;
+	get(approvalId: ApprovalId): Promise<ApprovalRow | null>;
+	decide(input: {
+		approvalId: ApprovalId;
+		decide: "approve" | "reject";
+		payloadSha256: string;
+		decidedBy: string;
+	}): Promise<
+		{ ok: true; approval: ApprovalRow } | { ok: false; code: ApproveOrFailCode }
+	>;
+	expirePending(ms: number): Promise<number>;
+	expirePendingForTask(taskId: TaskId): Promise<number>;
+	listPending(organizationId: OrganizationId): Promise<ApprovalRow[]>;
+}
+
+/**
  * Pure decision precondition used by the driver's failure classification and
  * by contract-test fakes. Emulates the SQL WHERE + status mapping.
  */
@@ -85,7 +110,7 @@ export function evaluateDecisionOutcome(input: {
 	return { ok: true };
 }
 
-export class PostgresApprovalRepository implements ApprovalRepositoryContract {
+export class PostgresApprovalRepository implements ApprovalRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async request(input: {
@@ -100,7 +125,10 @@ export class PostgresApprovalRepository implements ApprovalRepositoryContract {
 		if (!isSha256Hex(input.payloadSha256)) {
 			throw new Error("payloadSha256 must be a 64-char lowercase hex digest");
 		}
-		if (!Number.isInteger(input.expiresInSeconds) || input.expiresInSeconds < 1) {
+		if (
+			!Number.isInteger(input.expiresInSeconds) ||
+			input.expiresInSeconds < 1
+		) {
 			throw new Error("expiresInSeconds must be a positive integer");
 		}
 		const rows = (await this.sql.unsafe(STMT.insert, [
@@ -131,8 +159,7 @@ export class PostgresApprovalRepository implements ApprovalRepositoryContract {
 		payloadSha256: string;
 		decidedBy: string;
 	}): Promise<
-		| { ok: true; approval: ApprovalRow }
-		| { ok: false; code: ApproveOrFailCode }
+		{ ok: true; approval: ApprovalRow } | { ok: false; code: ApproveOrFailCode }
 	> {
 		if (!isSha256Hex(input.payloadSha256)) {
 			throw new Error("payloadSha256 must be a 64-char lowercase hex digest");
@@ -170,7 +197,9 @@ export class PostgresApprovalRepository implements ApprovalRepositoryContract {
 
 	async expirePending(ms: number): Promise<number> {
 		if (!Number.isFinite(ms) || ms < 0) {
-			throw new Error("ms must be a non-negative age threshold in milliseconds");
+			throw new Error(
+				"ms must be a non-negative age threshold in milliseconds",
+			);
 		}
 		const rows = (await this.sql.unsafe(STMT.expireByAge, [
 			ms,

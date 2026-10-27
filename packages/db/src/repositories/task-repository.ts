@@ -1,14 +1,13 @@
 import {
-	TASK_STATE_TRANSITIONS,
-	TASK_STATUSES,
 	canTransition,
 	type OrganizationId,
+	TASK_STATE_TRANSITIONS,
+	TASK_STATUSES,
 	type TaskId,
 	type TaskStatus,
 } from "@isolate/shared";
 import type { PgSql } from "../client";
 import type { TaskRow, TaskStatusDb } from "../schema";
-import type { TaskRepository as TaskRepositoryContract } from "./task-repository";
 
 /**
  * Postgres (Neon) implementation of the task lifecycle store.
@@ -32,7 +31,9 @@ const STATUS_TOKENS = new Set<string>(TASK_STATUSES);
  * TASK_STATUSES, so the fragment can never carry arbitrary SQL.
  */
 export function buildTransitionValuesSql(
-	transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = TASK_STATE_TRANSITIONS,
+	transitions: Readonly<
+		Record<TaskStatus, readonly TaskStatus[]>
+	> = TASK_STATE_TRANSITIONS,
 ): string {
 	for (const [from, tos] of Object.entries(transitions)) {
 		if (!STATUS_TOKENS.has(from)) {
@@ -92,6 +93,40 @@ export type TaskTransitionFailureCode =
 	| "INVALID_TRANSITION"
 	| "CONFLICT";
 
+/**
+ * Contract for the task lifecycle store. Declared in this module (not
+ * imported from anywhere) so implementations and test fakes share one
+ * in-scope symbol.
+ */
+export interface TaskRepository {
+	create(input: {
+		organizationId: OrganizationId;
+		repositoryId: string;
+		branch: string;
+		idempotencyKey: string;
+		budgetLimits: {
+			maxAgentTurns: number;
+			maxRepairAttempts: number;
+			maxDurationMs: number;
+		};
+		createdBy: string;
+	}): Promise<TaskRow>;
+	get(taskId: TaskId): Promise<TaskRow | null>;
+	getByIdempotencyKey(
+		organizationId: OrganizationId,
+		idempotencyKey: string,
+	): Promise<TaskRow | null>;
+	listByStatus(status: TaskStatus, limit: number): Promise<TaskRow[]>;
+	transition(input: {
+		taskId: TaskId;
+		to: TaskStatus;
+		expectedStatus: TaskStatus;
+	}): Promise<
+		{ ok: true; task: TaskRow } | { ok: false; code: TaskTransitionFailureCode }
+	>;
+	listExpiredOverBudget(): Promise<TaskRow[]>;
+}
+
 /** Pure transition guard used by the driver path and by contract-test fakes. */
 export function guardTransition(
 	expectedStatus: TaskStatus,
@@ -107,7 +142,7 @@ export function guardTransition(
 	return { ok: true };
 }
 
-export class PostgresTaskRepository implements TaskRepositoryContract {
+export class PostgresTaskRepository implements TaskRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async create(input: {
@@ -134,12 +169,20 @@ export class PostgresTaskRepository implements TaskRepositoryContract {
 		);
 		requirePositiveInt(input.budgetLimits.maxDurationMs, "maxDurationMs");
 
+		// Row JSON keys are snake_case (mirrors the DB jsonb contract and the
+		// budget->>'max_duration_ms' scan); the TS-facing input is camelCase.
+		const budgetLimits = {
+			max_agent_turns: input.budgetLimits.maxAgentTurns,
+			max_repair_attempts: input.budgetLimits.maxRepairAttempts,
+			max_duration_ms: input.budgetLimits.maxDurationMs,
+		};
+
 		const inserted = await this.sql.unsafe(STMT.insert, [
 			input.organizationId,
 			input.repositoryId,
 			input.branch,
 			input.idempotencyKey,
-			JSON.stringify(input.budgetLimits),
+			JSON.stringify(budgetLimits),
 			input.createdBy,
 		]);
 		const insertedRows = inserted as unknown as Record<string, unknown>[];
@@ -159,10 +202,9 @@ export class PostgresTaskRepository implements TaskRepositoryContract {
 	}
 
 	async get(taskId: TaskId): Promise<TaskRow | null> {
-		const rows = (await this.sql.unsafe(STMT.get, [taskId])) as unknown as Record<
-			string,
-			unknown
-		>[];
+		const rows = (await this.sql.unsafe(STMT.get, [
+			taskId,
+		])) as unknown as Record<string, unknown>[];
 		return rows.length === 0 ? null : mapTaskRow(rows[0]);
 	}
 
@@ -192,8 +234,7 @@ export class PostgresTaskRepository implements TaskRepositoryContract {
 		to: TaskStatus;
 		expectedStatus: TaskStatus;
 	}): Promise<
-		| { ok: true; task: TaskRow }
-		| { ok: false; code: TaskTransitionFailureCode }
+		{ ok: true; task: TaskRow } | { ok: false; code: TaskTransitionFailureCode }
 	> {
 		// Fast typed rejection before touching the database.
 		const guard = guardTransition(

@@ -1,10 +1,5 @@
 import type { JobId, OrganizationId, TaskId } from "@isolate/shared";
 import type { PgSql } from "../client";
-import type {
-	QueueRepository as QueueRepositoryContract,
-	JobRow,
-	JobType,
-} from "./queue-repository";
 
 /**
  * Postgres (Neon) durable queue with atomic claiming.
@@ -18,6 +13,76 @@ import type {
  *   `max_attempts`; callers can never influence the counter or the decision.
  * - Statements are static strings; every value is a bound `$n` parameter.
  */
+
+/** Bounded job vocabulary; mirrors the jobs_type_check SQL constraint. */
+export type JobType = "run_task" | "validate_attempt" | "finalize_review";
+
+/** Bounded lifecycle status; mirrors the jobs_status_check SQL constraint. */
+export type JobStatus = "pending" | "claimed" | "done" | "dead_letter";
+
+/**
+ * Queue row as surfaced to callers (camelCase). Timestamps are ISO strings;
+ * `lease` is set only while a worker owns the row.
+ */
+export type JobRow = {
+	id: JobId;
+	organizationId: OrganizationId;
+	taskId: TaskId;
+	type: JobType;
+	payload: Record<string, unknown>;
+	status: JobStatus;
+	attempts: number;
+	maxAttempts: number;
+	lease: { ownerId: string; leaseExpiresAt: string } | null;
+	notBefore: string;
+	enqueueUuidKey: string;
+	lastError: { code: string; message: string } | null;
+	createdAt: string;
+};
+
+/**
+ * Contract for the durable queue. Declared in this module so the driver,
+ * the Postgres implementation, and test fakes share one in-scope symbol.
+ */
+export interface QueueRepository {
+	enqueue(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		type: JobType;
+		payload: Record<string, unknown>;
+		idempotencyKey: string;
+		maxAttempts: number;
+		notBefore?: string;
+	}): Promise<JobRow>;
+	claimNext(input: {
+		ownerId: string;
+		leaseSeconds: number;
+	}): Promise<JobRow | null>;
+	heartbeat(
+		jobId: JobId,
+		ownerId: string,
+		extendSeconds: number,
+	): Promise<boolean>;
+	heartbeatResult(
+		jobId: JobId,
+		ownerId: string,
+		extendSeconds: number,
+	): Promise<{ ok: true } | { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }>;
+	ackComplete(
+		jobId: JobId,
+		ownerId: string,
+	): Promise<{ ok: true } | { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }>;
+	ackFail(input: {
+		jobId: JobId;
+		ownerId: string;
+		code: string;
+		message: string;
+	}): Promise<
+		| { ok: true; requeued: boolean }
+		| { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }
+	>;
+	requeueExpiredLeases(nowMs: number): Promise<number>;
+}
 
 /** Backoff cap for redelivery: min(2^attempts, 300) seconds. */
 export const ACK_FAIL_BACKOFF_CAP_SECONDS = 300;
@@ -101,7 +166,7 @@ const STMT = {
 		RETURNING id`,
 } as const;
 
-export class PostgresQueueRepository implements QueueRepositoryContract {
+export class PostgresQueueRepository implements QueueRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async enqueue(input: {
@@ -209,9 +274,10 @@ export class PostgresQueueRepository implements QueueRepositoryContract {
 	> {
 		// The message must be sanitised upstream; this layer only truncates to
 		// the column's CHECK bound so the write cannot fail on length.
-		const message = input.message.length > 4000
-			? input.message.slice(0, 4000)
-			: input.message;
+		const message =
+			input.message.length > 4000
+				? input.message.slice(0, 4000)
+				: input.message;
 		const rows = (await this.sql.unsafe(STMT.ackFail, [
 			input.jobId,
 			input.ownerId,

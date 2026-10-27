@@ -11,9 +11,6 @@ import type {
 	WorkflowRunRow,
 	WorkflowVersionRow,
 } from "../schema";
-import type {
-	WorkflowRunRepository as WorkflowRunRepositoryContract,
-} from "./workflow-run-repository";
 
 /**
  * Workflow runs plus the append-only event timeline.
@@ -22,6 +19,29 @@ import type {
  * resolution) reads the pinned version via getVersionPin, never the latest
  * authored graph. Events are insert-only.
  */
+
+export interface WorkflowRunRepository {
+	startRun(input: {
+		taskId: TaskId;
+		organizationId: OrganizationId;
+		workflowVersionId: WorkflowVersionId;
+	}): Promise<WorkflowRunRow>;
+	get(runId: WorkflowRunId): Promise<WorkflowRunRow | null>;
+	finish(
+		runId: WorkflowRunId,
+		status: "succeeded" | "failed",
+	): Promise<WorkflowRunRow | null>;
+	suspend(runId: WorkflowRunId): Promise<WorkflowRunRow | null>;
+	getVersionPin(runId: WorkflowRunId): Promise<WorkflowVersionRow | null>;
+	appendEvent(input: {
+		taskId: TaskId;
+		workflowRunId: WorkflowRunId | null;
+		type: RunEventType;
+		actor: RunEventRow["actor"];
+		data: Record<string, unknown>;
+	}): Promise<RunEventRow>;
+	listEvents(taskId: TaskId, limit: number): Promise<RunEventRow[]>;
+}
 
 const RUN_COLUMNS = `id, task_id, organization_id, workflow_version_id, status, started_at, finished_at`;
 const EVENT_COLUMNS = `id, task_id, workflow_run_id, type, actor, data, occurred_at`;
@@ -51,9 +71,7 @@ const STMT = {
 		WHERE task_id = $1 ORDER BY occurred_at ASC LIMIT $2`,
 } as const;
 
-export class PostgresWorkflowRunRepository
-	implements WorkflowRunRepositoryContract
-{
+export class PostgresWorkflowRunRepository implements WorkflowRunRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async startRun(input: {

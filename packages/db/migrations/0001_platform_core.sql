@@ -1,7 +1,7 @@
 -- Platform core schema (ARCHITECTURE.md §5 minimal viable subset).
 --
--- Plain, idempotent SQL (no migration framework yet — same policy as 0001):
---   psql "$DATABASE_URL" -f packages/db/migrations/0002_platform_core.sql
+-- Idempotent SQL (CREATE TABLE IF NOT EXISTS everywhere):
+--   psql "$DATABASE_URL" -f packages/db/migrations/0001_platform_core.sql
 --
 -- Requirements: PostgreSQL >= 13 (gen_random_uuid() is built in; every
 -- statement below is Postgres 13+ syntax). Every tenant-owned table carries

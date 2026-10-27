@@ -1,20 +1,36 @@
 import type { OrganizationId } from "@isolate/shared";
 import type { PgSql } from "../client";
-import type {
-	AuditAction,
-	AuditEventRow,
-	ToolInvocationRow,
-} from "../schema";
-import type {
-	AuditRepository as AuditRepositoryContract,
-	ToolInvocationRepository as ToolInvocationRepositoryContract,
-} from "./audit-repository";
+import type { AuditAction, AuditEventRow, ToolInvocationRow } from "../schema";
 
 /**
  * Append-only audit trail and tool-invocation records.
  * Redaction and sanitisation are the caller's responsibility (fail-quiet,
  * typed persistence layer); this layer never mutates supplied payloads.
  */
+
+export interface AuditRepository {
+	append(input: {
+		organizationId: OrganizationId;
+		actorId: string | null;
+		actorKind: AuditEventRow["actor_kind"];
+		action: AuditAction;
+		target: string;
+		details: Record<string, unknown>;
+	}): Promise<AuditEventRow>;
+}
+
+export interface ToolInvocationRepository {
+	record(input: {
+		organizationId: OrganizationId;
+		taskId: string;
+		workflowRunId: string | null;
+		toolName: string;
+		argumentsRedacted: Record<string, unknown>;
+		decision: ToolInvocationRow["decision"];
+		denialReason: string | null;
+		durationMs: number | null;
+	}): Promise<ToolInvocationRow>;
+}
 
 const AUDIT_COLUMNS = `id, organization_id, actor_id, actor_kind, action, target, details, created_at`;
 const TOOL_COLUMNS = `id, organization_id, task_id, workflow_run_id, tool_name, arguments_redacted, decision, denial_reason, duration_ms, created_at`;
@@ -31,7 +47,7 @@ const STMT = {
 	RETURNING ${TOOL_COLUMNS}`,
 } as const;
 
-export class PostgresAuditRepository implements AuditRepositoryContract {
+export class PostgresAuditRepository implements AuditRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async append(input: {
@@ -58,7 +74,7 @@ export class PostgresAuditRepository implements AuditRepositoryContract {
 }
 
 export class PostgresToolInvocationRepository
-	implements ToolInvocationRepositoryContract
+	implements ToolInvocationRepository
 {
 	constructor(private readonly sql: PgSql) {}
 
@@ -114,9 +130,11 @@ function mapAuditRow(row: AuditDbRow): AuditEventRow {
 function mapToolRow(row: ToolDbRow): ToolInvocationRow {
 	return {
 		id: row.id as string,
-		organization_id: row.organization_id as ToolInvocationRow["organization_id"],
+		organization_id:
+			row.organization_id as ToolInvocationRow["organization_id"],
 		task_id: row.task_id as ToolInvocationRow["task_id"],
-		workflow_run_id: row.workflow_run_id as ToolInvocationRow["workflow_run_id"],
+		workflow_run_id:
+			row.workflow_run_id as ToolInvocationRow["workflow_run_id"],
 		tool_name: row.tool_name as string,
 		arguments_redacted: row.arguments_redacted as Record<string, unknown>,
 		decision: row.decision as ToolInvocationRow["decision"],

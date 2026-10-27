@@ -1,12 +1,6 @@
 import type { TaskAttemptId, TaskId } from "@isolate/shared";
 import type { PgSql } from "../client";
-import type {
-	TaskAttemptOutcome,
-	TaskAttemptRow,
-} from "../schema";
-import type {
-	TaskAttemptRepository as TaskAttemptRepositoryContract,
-} from "./task-attempt-repository";
+import type { TaskAttemptOutcome, TaskAttemptRow } from "../schema";
 
 /**
  * Bounded attempt bookkeeping over task_attempts.
@@ -16,6 +10,16 @@ import type {
  * counter. The repair budget (max_repair_attempts in the task's budget_limits)
  * is enforced against countRepairAttempts, which keeps the repair loop finite.
  */
+
+export interface TaskAttemptRepository {
+	begin(taskId: TaskId, workflowRunId: string | null): Promise<TaskAttemptRow>;
+	finish(input: {
+		attemptId: TaskAttemptId;
+		outcome: TaskAttemptOutcome;
+	}): Promise<TaskAttemptRow | null>;
+	countRepairAttempts(taskId: TaskId): Promise<number>;
+	listByTask(taskId: TaskId): Promise<TaskAttemptRow[]>;
+}
 
 const ATTEMPT_COLUMNS = `id, task_id, workflow_run_id, attempt_index, started_at, finished_at, outcome`;
 
@@ -38,9 +42,7 @@ const STMT = {
 		WHERE task_id = $1 ORDER BY attempt_index ASC`,
 } as const;
 
-export class PostgresTaskAttemptRepository
-	implements TaskAttemptRepositoryContract
-{
+export class PostgresTaskAttemptRepository implements TaskAttemptRepository {
 	constructor(private readonly sql: PgSql) {}
 
 	async begin(

@@ -21,20 +21,6 @@ import type {
  * stable or coordinate through the integrator.
  */
 
-export type AgentRunStatus = "running" | "succeeded" | "failed";
-
-// Reflects migrations/0001_agent_smoke_test_runs.sql (kept from the MVP spike).
-export type AgentRunRow = {
-	id: string;
-	prompt: string;
-	status: AgentRunStatus;
-	result: string | null;
-	error_code: string | null;
-	created_at: Date;
-	finished_at: Date | null;
-	duration_ms: number | null;
-};
-
 export type OrganizationRow = {
 	id: OrganizationId;
 	name: string;

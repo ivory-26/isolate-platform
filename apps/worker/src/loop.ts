@@ -121,11 +121,11 @@ export function createWorkerLoop(
 	const stopController = new AbortController();
 	let runPromise: Promise<void> | null = null;
 
-	const settle = async (
-		promise: Promise<unknown>,
+	const settle = async <T>(
+		promise: Promise<T>,
 		context: string,
 		jobLogger: Logger,
-	): Promise<unknown> => {
+	): Promise<T | null> => {
 		try {
 			return await promise;
 		} catch (error) {
@@ -207,7 +207,10 @@ export function createWorkerLoop(
 						verdict,
 					}),
 				)
-				.catch((error: unknown) => ({ ok: false, error }));
+				.catch((error: unknown): { ok: false; error: unknown } => ({
+					ok: false,
+					error,
+				}));
 
 			const budget = makeTimeoutTicket(jobTimeoutMs);
 			const raced = await Promise.race([attempt, budget.promise]);
@@ -262,15 +265,8 @@ export function createWorkerLoop(
 					"ackComplete",
 					jobLogger,
 				);
-				if (
-					result &&
-					typeof result === "object" &&
-					"ok" in result &&
-					result.ok === false
-				) {
-					jobLogger.warn("ackComplete rejected", {
-						queueCode: (result as { code: string }).code,
-					});
+				if (result !== null && result.ok === false) {
+					jobLogger.warn("ackComplete rejected", { queueCode: result.code });
 				}
 				return;
 			}
@@ -293,8 +289,7 @@ export function createWorkerLoop(
 				"ackFail",
 				jobLogger,
 			);
-			const requeued =
-				(result as { ok: true; requeued: boolean } | null)?.requeued ?? false;
+			const requeued = result?.ok === true ? result.requeued : false;
 			jobLogger.warn("job failed", { code, requeued });
 			onEvent({ kind: "failed", jobId: job.id, code, requeued });
 		} finally {

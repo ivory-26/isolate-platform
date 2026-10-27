@@ -8,7 +8,7 @@ import type {
 	TaskId,
 } from "@isolate/shared";
 import { PlatformError } from "@isolate/shared";
-import type { JobHandler, QueueLike } from "./contracts";
+import type { HandlerVerdict, JobHandler, QueueLike } from "./contracts";
 import { createHeartbeatTicker } from "./heartbeat";
 import { createWorkerLoop } from "./loop";
 import { clampErrorCode, sanitizeMessage, toAckError } from "./sanitize";
@@ -60,11 +60,22 @@ function makeJob(overrides: Partial<JobRow> = {}): JobRow {
  * atomic claim, ownership-checked heartbeat/ack, attempts-based
  * retry-vs-dead-letter decision inside ackFail, lease-expiry requeue.
  *
- * The clock starts at real Date.now() so the worker loop's own reaper (real
- * clock) never races tests; expiry tests advance `now` explicitly.
+ * The clock follows real time by default so jobs created by `makeJob()` after
+ * queue construction remain claimable on every tick. A test may assign `now`
+ * explicitly (reads the current value, adds a delta); the assignment freezes
+ * the clock deterministically for expiry scenarios.
  */
 class FakeQueue implements QueueLike {
-	now: number = Date.now();
+	private manualNow: number | null = null;
+
+	get now(): number {
+		return this.manualNow ?? Date.now();
+	}
+
+	set now(value: number) {
+		this.manualNow = value;
+	}
+
 	jobs: JobRow[] = [];
 	backoffMs = 0;
 
@@ -84,8 +95,7 @@ class FakeQueue implements QueueLike {
 			(job) =>
 				job.status === "pending" &&
 				Date.parse(job.notBefore) <= this.now &&
-				(job.lease == null ||
-					Date.parse(job.lease.leaseExpiresAt) <= this.now),
+				(job.lease == null || Date.parse(job.lease.leaseExpiresAt) <= this.now),
 		);
 		if (!candidate) return null;
 		candidate.status = "claimed";
@@ -107,7 +117,13 @@ class FakeQueue implements QueueLike {
 		this.heartbeats.push({ jobId, ownerId });
 		if (this.heartbeatOutcome === "throw") throw new Error("db blip (fake)");
 		const job = this.findOwned(jobId, ownerId);
-		if (!job || this.heartbeatOutcome === "lost") return false;
+		if (job && this.heartbeatOutcome === "lost") {
+			// A failed beat is lease loss: the job leaves this owner's control,
+			// so an ack submitted afterwards must be rejected (LEASE_LOST).
+			job.lease = null;
+			return false;
+		}
+		if (!job) return false;
 		job.lease = {
 			ownerId,
 			leaseExpiresAt: new Date(this.now + extendSeconds * 1000).toISOString(),
@@ -453,6 +469,13 @@ describe("worker loop — lease lifecycle", () => {
 		const queue = new FakeQueue();
 		const logs: LogRecord[] = [];
 		const job = makeJob();
+		// The ticker stops itself on a lost lease, so the fake queue must hold
+		// this job under a live lease owned by the ticker's owner.
+		job.lease = {
+			ownerId: "test-worker",
+			leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		queue.jobs.push(job);
 		const ticker = createHeartbeatTicker({
 			queue,
 			jobId: job.id,
@@ -463,9 +486,10 @@ describe("worker loop — lease lifecycle", () => {
 			leaseLost: () => {},
 			intervalMs: 15,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 75));
+		await new Promise((resolve) => setTimeout(resolve, 200));
 		const beats = queue.heartbeats.length;
 		expect(beats).toBeGreaterThanOrEqual(2);
+		expect(beats).toBeLessThanOrEqual(12);
 		ticker.stop();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(queue.heartbeats.length).toBe(beats);
@@ -484,6 +508,7 @@ describe("worker loop — lease lifecycle", () => {
 			signal: controller.signal,
 			leaseLost: () => {
 				lostCount += 1;
+				controller.abort(); // mirrors the loop wiring: the worker aborts the job on lease loss
 			},
 			intervalMs: 15,
 		});
@@ -500,6 +525,14 @@ describe("worker loop — lease lifecycle", () => {
 	test("heartbeat queue error is swallowed and bounded", async () => {
 		const queue = new FakeQueue();
 		const controller = new AbortController();
+		// The first beat must be true: give the fake queue a job currently
+		// leased by this owner (a live lease is what makes a heartbeat succeed).
+		const leased = makeJob({ id: "x" as JobId });
+		leased.lease = {
+			ownerId: "test-worker",
+			leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		queue.jobs.push(leased);
 		const ok = await createHeartbeatTicker({
 			queue,
 			jobId: "x" as JobId,

@@ -14,6 +14,23 @@ import postgres from "postgres";
  */
 export type PgSql = Sql<Record<string, unknown>>;
 
+/**
+ * Normalizes a Postgres jsonb column value into its decoded object form.
+ *
+ * Rationale (documented defect, see CHALLENGES): on the Neon pooled endpoint
+ * with `prepare: false`, postgres.js does NOT reliably decode jsonb values
+ * that passed through a parameter binding — the same column may arrive as a
+ * parsed object (literal casts) or as a raw JSON string (insert RETURNING and
+ * rows written via bound params). Every repository row mapper must pass jsonb
+ * columns through this helper so the TS contract (typed key objects) holds
+ * regardless of which decode path the driver took.
+ */
+export function parseJsonbColumn<T>(value: unknown): T | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value === "string") return JSON.parse(value) as T;
+	return value as T;
+}
+
 export type DbClientOptions = {
 	max?: number;
 	idleTimeout?: number;

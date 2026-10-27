@@ -1,5 +1,6 @@
 import type { TaskAttemptId, TaskId } from "@isolate/shared";
 import type { PgSql } from "../client";
+import { parseJsonbColumn } from "../client";
 import type { TaskAttemptOutcome, TaskAttemptRow } from "../schema";
 
 /**
@@ -95,6 +96,8 @@ function mapAttemptRow(row: AttemptDbRow): TaskAttemptRow {
 		attempt_index: row.attempt_index as number,
 		started_at: row.started_at as Date,
 		finished_at: row.finished_at as Date | null,
-		outcome: row.outcome as TaskAttemptOutcome | null,
+		outcome: parseJsonbColumn<TaskAttemptOutcome>(
+			row.outcome,
+		) as TaskAttemptOutcome | null,
 	};
 }

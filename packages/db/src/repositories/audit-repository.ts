@@ -1,5 +1,6 @@
 import type { OrganizationId } from "@isolate/shared";
 import type { PgSql } from "../client";
+import { parseJsonbColumn } from "../client";
 import type { AuditAction, AuditEventRow, ToolInvocationRow } from "../schema";
 
 /**
@@ -122,7 +123,10 @@ function mapAuditRow(row: AuditDbRow): AuditEventRow {
 		actor_kind: row.actor_kind as AuditEventRow["actor_kind"],
 		action: row.action as AuditAction,
 		target: row.target as string,
-		details: row.details as Record<string, unknown>,
+		details: parseJsonbColumn<Record<string, unknown>>(row.details) as Record<
+			string,
+			unknown
+		>,
 		created_at: row.created_at as Date,
 	};
 }

@@ -7,6 +7,7 @@ import {
 	type TaskStatus,
 } from "@isolate/shared";
 import type { PgSql } from "../client";
+import { parseJsonbColumn } from "../client";
 import type { TaskRow, TaskStatusDb } from "../schema";
 
 /**
@@ -236,15 +237,6 @@ export class PostgresTaskRepository implements TaskRepository {
 	}): Promise<
 		{ ok: true; task: TaskRow } | { ok: false; code: TaskTransitionFailureCode }
 	> {
-		// Fast typed rejection before touching the database.
-		const guard = guardTransition(
-			input.expectedStatus,
-			input.expectedStatus,
-			input.to,
-		);
-		if (!guard.ok) {
-			return guard;
-		}
 		const rows = (await this.sql.unsafe(STMT.transition, [
 			input.taskId,
 			input.to,
@@ -253,18 +245,26 @@ export class PostgresTaskRepository implements TaskRepository {
 		if (rows.length > 0) {
 			return { ok: true, task: mapTaskRow(rows[0]) };
 		}
-		// Disambiguate the failure for the caller.
+		// Disambiguate the failure using the REAL current status — never the
+		// caller's expectedStatus. (A fast guard keyed on expectedStatus alone
+		// classified stale-expectation calls as INVALID_TRANSITION, violating the
+		// "CONFLICT wins" ordering that guardTransition/fakes encode.)
 		const currentRows = (await this.sql.unsafe(STMT.get, [
 			input.taskId,
 		])) as unknown as Record<string, unknown>[];
 		if (currentRows.length === 0) {
 			return { ok: false, code: "NOT_FOUND" };
 		}
-		const current = mapTaskRow(currentRows[0]);
-		if (current.status !== input.expectedStatus) {
-			return { ok: false, code: "CONFLICT" };
+		const guard = guardTransition(
+			input.expectedStatus,
+			mapTaskRow(currentRows[0]).status,
+			input.to,
+		);
+		if (!guard.ok) {
+			return guard;
 		}
-		return { ok: false, code: "INVALID_TRANSITION" };
+		// Status changed between the UPDATE and this read (lost race).
+		return { ok: false, code: "CONFLICT" };
 	}
 
 	async listExpiredOverBudget(): Promise<TaskRow[]> {
@@ -288,7 +288,9 @@ function mapTaskRow(row: Row): TaskRow {
 		branch: row.branch as string,
 		status: row.status as TaskStatusDb,
 		idempotency_key: row.idempotency_key as string,
-		budget_limits: row.budget_limits as TaskRow["budget_limits"],
+		budget_limits: parseJsonbColumn<TaskRow["budget_limits"]>(
+			row.budget_limits,
+		) as TaskRow["budget_limits"],
 		created_by: row.created_by as TaskRow["created_by"],
 		created_at: row.created_at as Date,
 		updated_at: row.updated_at as Date,

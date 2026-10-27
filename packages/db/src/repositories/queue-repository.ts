@@ -1,5 +1,6 @@
 import type { JobId, OrganizationId, TaskId } from "@isolate/shared";
 import type { PgSql } from "../client";
+import { parseJsonbColumn } from "../client";
 
 /**
  * Postgres (Neon) durable queue with atomic claiming.
@@ -355,7 +356,10 @@ function mapJobRow(row: Record<string, unknown>): JobRow {
 		organizationId: job.organization_id as JobRow["organizationId"],
 		taskId: job.task_id as JobRow["taskId"],
 		type: job.type as JobType,
-		payload: job.payload as Record<string, unknown>,
+		payload: parseJsonbColumn<Record<string, unknown>>(job.payload) as Record<
+			string,
+			unknown
+		>,
 		status: job.status as JobRow["status"],
 		attempts: job.attempts,
 		maxAttempts: job.max_attempts,

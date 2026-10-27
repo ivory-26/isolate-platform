@@ -2,6 +2,18 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — B3: worktree transplant silently dropped a package's test suite
+- Symptom: `packages/workflow-schema/src/workflow-schema.test.ts` absent on disk post-transplant although the handoff notes referenced a defect *inside* that file (impossible for a nonexistent file).
+- Root cause: transplant copied only implementation files present at `git checkout <ref> -- <path>` time; the untracked-at-snapshot test file was lost; handoff notes were written against the old worktree state without re-verification.
+- Correction: suite recreated from the shipped sources (52 tests covering every `WorkflowIssue` code, determinism, version pinning); aliases `AgentTaskConfig`/`ValidateLoopConfig` added to `types.ts` so the intended import contract resolves.
+- Prevention: after any transplant, diff the file inventory against the source worktree before trusting notes; grep for `PLACEHOLDER`/`FIXME` tokens in the resume gate; treat handoff claims as unverified until `bun test <pkg>` returns a count.
+
+## 2026-10-27 — B3: transplanted code failed strict tsc on first gate run (3 latent errors)
+- Symptom: `TS2322` in `compiler.ts` (cycle-walk cursor `number | undefined`), `TS2399`-class `TS2339` ×2 in `validate.ts` (`config.tool` on the per-node config union).
+- Root cause: implementation committed to disk before ever running the type gate in this repo's tsconfig strictness (`noUncheckedIndexedAccess`, narrow on per-node unions).
+- Correction: `"tool" in config` narrowing; explicit `number | undefined` cursor; indexed loop replacing `forEach`-with-return (also satisfying Biome `useIterableCallbackReturn` / `noNonNullAssertion`).
+- Prevention: biome+tsc immediately after each module write, with the exact gate output recorded in the task note at creation time; never cite a sibling repo's looser tsconfig as gate evidence.
+
 ## 2026-10-27 — A1: post-migration CRLF checkout broke the Biome format gate on unchanged files
 - Symptom: after repo migration, `bunx biome check packages/shared` failed with 19 formatter-only errors; every diff was CRLF(␍) → LF on files whose content had not changed.
 - Root cause: Windows Git `core.autocrlf=true` converts LF blobs to CRLF on checkout; Biome's default lineEnding wants LF. Seed blobs are correct LF.

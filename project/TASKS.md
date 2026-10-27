@@ -33,9 +33,8 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 
 ### B3 — Workflow registry/validation/compiler (`packages/workflow-schema`)
 - Owner: agent session B3 · Worktree: `../worktrees-platform/sb3-wf-schema` · Branch: `task/sb3-wf-schema`
-- File ownership: `packages/workflow-schema/src/**`
-- Coordinator handoff notes: types/nodes/graph/validate/compiler + test suite transplanted; known defect: phantom import `AGENT_TASK_CONFIG_PLACEHOLDER` in the test file; gates not yet run.
-- Status: in progress
+- Coordinator verification: commit `ec6afde` — test suite RECREATED (transplant had silently dropped it; see CHALLENGES), biome 0 issues, tsc clean, **52 pass / 0 fail**. Supported-subset + rejection-shape reports and editor-facing integration checklist delivered.
+- Status: **done**
 
 ### B4 — GitHub connector (`packages/integrations`)
 - Owner: agent session B4 · Worktree: `../worktrees-platform/sb4-integrations` · Branch: `task/sb4-integrations`

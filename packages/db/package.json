@@ -1,0 +1,9 @@
+{
+	"name": "@isolate/db",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": { ".": "./src/index.ts" },
+	"scripts": { "test": "bun test", "typecheck": "tsc --noEmit" },
+	"dependencies": {"@isolate/shared": "workspace:*", "postgres": "^3.4.9", "zod": "^4.6.7"}
+}

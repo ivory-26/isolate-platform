@@ -1,0 +1,16 @@
+{
+	"name": "@isolate/worker",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun run src/main.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@isolate/db": "workspace:*",
+		"@isolate/shared": "workspace:*",
+		"zod": "^4.6.7"
+	}
+}

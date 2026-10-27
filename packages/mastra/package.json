@@ -1,0 +1,9 @@
+{
+	"name": "@isolate/mastra",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": { ".": "./src/index.ts" },
+	"scripts": { "test": "bun test", "typecheck": "tsc --noEmit" },
+	"dependencies": {"@isolate/shared": "workspace:*", "@mastra/core": "^1.79.0", "zod": "^4.6.7"}
+}

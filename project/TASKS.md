@@ -38,9 +38,8 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 
 ### B4 — GitHub connector (`packages/integrations`)
 - Owner: agent session B4 · Worktree: `../worktrees-platform/sb4-integrations` · Branch: `task/sb4-integrations`
-- File ownership: `packages/integrations/src/**`
-- Coordinator handoff notes: implementation transplanted (REST client, redaction, audit sink, MCP guard); known defects: 3 tsc errors (imports in rest-client + 2 test-site casts); tests not yet run.
-- Status: in progress
+- Coordinator verification: commit `9226219` — biome 0 issues, tsc clean, **26 pass / 0 fail** (redact 6 + rest-client 20). Deny-default approval gating redaction-proof + audit sink covered; contract note: failure union extended with NOT_FOUND/RATE_LIMITED (optional sanitized message), consumers switch on `code`.
+- Status: **done**
 
 ## Wave 2 — Integration & validation (coordinator)
 - Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.

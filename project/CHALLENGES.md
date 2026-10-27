@@ -2,6 +2,24 @@
 
 Symptom / root cause / correction / prevention format for meaningful failures (event build).
 
+## 2026-10-27 — B4: transplanted redaction implementation vs test contract drift
+- Symptom: `bun test packages/integrations` failed 2 redaction tests despite the stop report claiming only 3 tsc errors.
+- Root cause: transplanted `redact.ts` and `redact.test.ts` were mutually out of date revisions (impl ate keyword markers; tests expected them preserved in `"Bearer [auth-redacted]"`; homogeneous filler runs swallowed wholesale vs capped).
+- Correction: rebuilt the rule set to the test contract: keyword-kept replacement with `\s+` guard so `[token-redacted]` markers never re-match; mixed-case requirement on long runs so pure filler caps instead of vanishes; 5000-char cap preserved. Regression locked by the 6-case redact suite.
+- Prevention: run the FULL gate sequence (not tsc alone) immediately after any transplant — test/impl drift invisible to tsc is exactly what the test gate catches.
+
+## 2026-10-27 — B4: REST-path tests predated the deny-default approval gate
+- Symptom: 14/20 rest-client tests returned `APPROVAL_REQUIRED` while asserting network-path outcomes (success paths without approval payloads).
+- Root cause: deny-default sensitivity (`isSensitive` omitted ⇒ everything sensitive) landed mid-sprint; the test file was internally inconsistent (same call both needed and didn't need approval depending on the test).
+- Correction: re-aligned tests to the security contract: approval-carrying helper computes `approvalPayloadSha256` via exported `sha256Hex(canonicalPullRequestPayload(spec))`; pure REST-path tests declare a trusted `isSensitive: () => false`; deny-default covered by dedicated tests asserting zero network calls.
+- Prevention: when a security default changes mid-sprint, re-run the whole affected suite before parking; treat tsc-only stop reports as unverifiable.
+
+## 2026-10-27 — B4: repo migration normalized "already-fixed" assumptions
+- Symptom: resume checklist expected exactly 3 tsc errors, found 2; full test gate reclassified the task from "compile-fix" to "test-contract reconciliation".
+- Root cause: cross-repo transplant normalizes state; EOL-only "modified" diffs mask real revision drift.
+- Correction: verified per-file (not aggregate) test counts, committed the transplanted state + fixes as one feat commit on the migrated branch.
+- Prevention: after workspace migration, treat stop reports as hypotheses — re-run biome → tsc → test from scratch before classifying work; record per-file counts.
+
 ## 2026-10-27 — B3: worktree transplant silently dropped a package's test suite
 - Symptom: `packages/workflow-schema/src/workflow-schema.test.ts` absent on disk post-transplant although the handoff notes referenced a defect *inside* that file (impossible for a nonexistent file).
 - Root cause: transplant copied only implementation files present at `git checkout <ref> -- <path>` time; the untracked-at-snapshot test file was lost; handoff notes were written against the old worktree state without re-verification.

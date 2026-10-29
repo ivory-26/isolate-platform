@@ -28,8 +28,6 @@ import { clampErrorCode, sanitizeMessage, toAckError } from "./sanitize";
  * - stop() resolves within STOP_DRAIN_TIMEOUT_MS even if a handler hangs
  */
 
-/** Hard per-job execution budget; handlers honour it via the abort signal. */
-const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000;
 /** Max wait for stop() resolution when a handler refuses to settle. */
 const STOP_DRAIN_TIMEOUT_MS = 10_000;
 
@@ -98,14 +96,18 @@ export function createUnavailableQueue(reason: string): WorkerDeps["queue"] {
 
 export function createWorkerLoop(
 	deps: WorkerDeps & {
-		/** Test seam: hard per-job budget override. */
+		/**
+		 * Test seam: hard per-job budget override. Retained only for tests that
+		 * need sub-bound determinism (e.g. 60ms, below the config min of 1000ms);
+		 * it takes precedence over the parsed config budget.
+		 */
 		jobTimeoutMs?: number;
 		/** Optional structured event sink for integration/test observability. */
 		onEvent?: EventSink;
 	},
 ): WorkerLoop {
 	const { config, logger, handlers, queue } = deps;
-	const jobTimeoutMs = deps.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+	const jobTimeoutMs = deps.jobTimeoutMs ?? config.jobTimeoutMs;
 	const onEvent: EventSink = deps.onEvent ?? (() => {});
 
 	const handlersByType = new Map<JobRow["type"], JobHandler>();

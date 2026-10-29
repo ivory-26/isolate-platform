@@ -1,3 +1,4 @@
+import { workerConfigSchema as sharedWorkerConfigSchema } from "@isolate/shared";
 import { z } from "zod";
 
 /**
@@ -15,6 +16,11 @@ export const workerConfigSchema = z.object({
 	maxAttemptsDefault: z.coerce.number().int().min(1).max(50).default(5),
 	// Bounded drift guard for expired leases and approval expiry timers.
 	reaperIntervalMs: z.coerce.number().int().min(250).default(5000),
+	// Coerce env strings while retaining the shared timeout bounds and default.
+	jobTimeoutMs: z.preprocess(
+		(value) => (typeof value === "string" ? Number(value) : value),
+		sharedWorkerConfigSchema.shape.jobTimeoutMs,
+	),
 	databaseUrl: z.string().min(1).optional(),
 });
 
@@ -39,6 +45,9 @@ export function loadWorkerConfig(
 		...(env.WORKER_MAX_ATTEMPTS === undefined
 			? {}
 			: { maxAttemptsDefault: env.WORKER_MAX_ATTEMPTS }),
+		...(env.WORKER_JOB_TIMEOUT_MS === undefined
+			? {}
+			: { jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS }),
 		...(env.DATABASE_URL === undefined
 			? {}
 			: { databaseUrl: env.DATABASE_URL }),

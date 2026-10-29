@@ -8,6 +8,7 @@ import type {
 	TaskId,
 } from "@isolate/shared";
 import { PlatformError } from "@isolate/shared";
+import { loadWorkerConfig, workerConfigSchema } from "./config";
 import type { HandlerVerdict, JobHandler, QueueLike } from "./contracts";
 import { createHeartbeatTicker } from "./heartbeat";
 import { createWorkerLoop } from "./loop";
@@ -212,7 +213,10 @@ function makeHarness(
 		pollIntervalMs?: number;
 		leaseSeconds?: number;
 		reaperIntervalMs?: number;
+		/** Dep-level test seam: hard override of the parsed budget. */
 		jobTimeoutMs?: number;
+		/** Parsed WorkerConfig value: the production precedence path. */
+		configJobTimeoutMs?: number;
 		maxAttemptsDefault?: number;
 	} = {},
 ): Harness {
@@ -222,13 +226,14 @@ function makeHarness(
 	const workerPollIntervalMs = options.pollIntervalMs ?? 50;
 	const leaseSeconds = options.leaseSeconds ?? 5;
 	const loop = createWorkerLoop({
-		config: {
+		config: workerConfigSchema.parse({
 			workerId: "test-worker",
 			pollIntervalMs: workerPollIntervalMs,
 			leaseSeconds,
 			maxAttemptsDefault: options.maxAttemptsDefault ?? 5,
 			reaperIntervalMs: options.reaperIntervalMs ?? 10_000, // off by default
-		},
+			jobTimeoutMs: options.configJobTimeoutMs,
+		}),
 		logger: makeFakingLogger(logs),
 		handlers,
 		queue,
@@ -581,6 +586,9 @@ describe("worker loop — bounds and unavailable queue", () => {
 		harness.queue.jobs.push(makeJob({ maxAttempts: 1 }));
 		await eventually(() => harness.queue.ackFails.length === 1);
 		expect(harness.queue.ackFails[0]?.code).toBe("BUDGET_EXCEEDED");
+		expect(harness.queue.ackFails[0]?.message).toBe(
+			"handler exceeded the 60ms execution budget",
+		);
 		expect(harness.queue.jobs[0]?.status).toBe("dead_letter");
 		await harness.stop("done");
 	});
@@ -588,13 +596,13 @@ describe("worker loop — bounds and unavailable queue", () => {
 	test("loop with unavailable queue reports QUEUE_UNAVAILABLE per tick and stops bounded", async () => {
 		const logs: LogRecord[] = [];
 		const loop = createWorkerLoop({
-			config: {
+			config: workerConfigSchema.parse({
 				workerId: "test-worker",
 				pollIntervalMs: 50,
 				leaseSeconds: 5,
 				maxAttemptsDefault: 5,
 				reaperIntervalMs: 10_000,
-			},
+			}),
 			logger: makeFakingLogger(logs),
 			handlers: [],
 			queue: {
@@ -624,6 +632,115 @@ describe("worker loop — bounds and unavailable queue", () => {
 		});
 		await eventually(() => stopped);
 		await expect(started.then(() => "ok")).resolves.toBe("ok");
+	});
+});
+
+describe("worker loop — per-job timeout sourcing", () => {
+	const hangingHandler = (signals: AbortSignal[] = []): JobHandler => ({
+		jobType: "run_task",
+		supports: () => true,
+		handle: async (_job, ctx) => {
+			signals.push(ctx.signal);
+			return new Promise<HandlerVerdict>(() => undefined);
+		},
+	});
+
+	test("config-supplied jobTimeoutMs is honored end-to-end via BUDGET_EXCEEDED", async () => {
+		const signals: AbortSignal[] = [];
+		const harness = makeHarness([hangingHandler(signals)], {
+			configJobTimeoutMs: 1500,
+		});
+		const job = makeJob({ maxAttempts: 1 });
+		try {
+			harness.queue.jobs.push(job);
+			await eventually(() => harness.queue.ackFails.length === 1, 4000);
+			expect(harness.queue.ackFails).toEqual([
+				{
+					jobId: job.id,
+					code: "BUDGET_EXCEEDED",
+					message: "handler exceeded the 1500ms execution budget",
+				},
+			]);
+			expect(signals).toHaveLength(1);
+			expect(signals[0]?.aborted).toBe(true);
+			expect(harness.queue.ackCompletes).toEqual([]);
+			expect(job.status).toBe("dead_letter");
+			expect(
+				harness.logs.some(
+					(log) =>
+						log.message === "job exceeded execution budget; failing" &&
+						log.fields.jobTimeoutMs === 1500,
+				),
+			).toBe(true);
+		} finally {
+			await harness.stop("done");
+		}
+	});
+
+	test("dep-level test seam takes precedence over the config value", async () => {
+		// Sub-bound budgets remain a test seam, never a production config value.
+		const harness = makeHarness([hangingHandler()], {
+			configJobTimeoutMs: 1500,
+			jobTimeoutMs: 60,
+		});
+		try {
+			harness.queue.jobs.push(makeJob({ maxAttempts: 1 }));
+			await eventually(() => harness.queue.ackFails.length === 1);
+			expect(harness.queue.ackFails[0]?.code).toBe("BUDGET_EXCEEDED");
+			expect(harness.queue.ackFails[0]?.message).toBe(
+				"handler exceeded the 60ms execution budget",
+			);
+		} finally {
+			await harness.stop("done");
+		}
+	});
+
+	test("env-parsed config (WORKER_JOB_TIMEOUT_MS) flows through loadWorkerConfig into the loop", async () => {
+		const config = loadWorkerConfig({ WORKER_JOB_TIMEOUT_MS: "1500" });
+		expect(config.jobTimeoutMs).toBe(1500);
+		const queue = new FakeQueue();
+		const logs: LogRecord[] = [];
+		const loop = createWorkerLoop({
+			config,
+			logger: makeFakingLogger(logs),
+			handlers: [hangingHandler()],
+			queue,
+		});
+		queue.jobs.push(makeJob({ maxAttempts: 1 }));
+		const started = loop.start();
+		try {
+			await eventually(() => queue.ackFails.length === 1, 4000);
+			expect(queue.ackFails[0]?.code).toBe("BUDGET_EXCEEDED");
+			expect(queue.ackFails[0]?.message).toBe(
+				"handler exceeded the 1500ms execution budget",
+			);
+			expect(queue.jobs[0]?.status).toBe("dead_letter");
+			expect(queue.ackCompletes).toEqual([]);
+		} finally {
+			await loop.stop("done");
+			await expect(started.then(() => "ok")).resolves.toBe("ok");
+		}
+	});
+
+	test("parsed default jobTimeoutMs allows a handler to complete within budget", async () => {
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async () => ({ outcome: "complete", note: "fast" }),
+		};
+		const harness = makeHarness([handler]);
+		try {
+			harness.queue.jobs.push(makeJob());
+			await eventually(() => harness.queue.ackCompletes.length === 1);
+			expect(harness.queue.ackFails).toEqual([]);
+			expect(
+				harness.logs.some((log) =>
+					log.message.includes("job exceeded execution budget"),
+				),
+			).toBe(false);
+		} finally {
+			await harness.stop("done");
+		}
 	});
 });
 

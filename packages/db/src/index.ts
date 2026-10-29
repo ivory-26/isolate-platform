@@ -5,6 +5,7 @@ export * from "./repositories/compiled-plan-repository";
 export * from "./repositories/queue-repository";
 export * from "./repositories/task-attempt-repository";
 export * from "./repositories/task-repository";
+export * from "./repositories/usage-repository";
 export * from "./repositories/workflow-compilation";
 export * from "./repositories/workflow-rejection-repository";
 export * from "./repositories/workflow-run-repository";

@@ -65,7 +65,7 @@ const STMT = {
 		WHERE r.id = $1`,
 	appendEvent: `INSERT INTO run_events (
 		task_id, workflow_run_id, type, actor, data, occurred_at
-	) VALUES ($1, $2::uuid, $3, $4, $5::jsonb, now())
+	) VALUES ($1, $2::uuid, $3, $4, $5::text::jsonb, now())
 	RETURNING ${EVENT_COLUMNS}`,
 	listEvents: `SELECT ${EVENT_COLUMNS} FROM run_events
 		WHERE task_id = $1 ORDER BY occurred_at ASC LIMIT $2`,

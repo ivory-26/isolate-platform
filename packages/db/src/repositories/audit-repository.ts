@@ -39,12 +39,12 @@ const TOOL_COLUMNS = `id, organization_id, task_id, workflow_run_id, tool_name, 
 const STMT = {
 	appendAudit: `INSERT INTO audit_events (
 		organization_id, actor_id, actor_kind, action, target, details, created_at
-	) VALUES ($1, $2, $3, $4, $5, $6::jsonb, now())
+	) VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, now())
 	RETURNING ${AUDIT_COLUMNS}`,
 	insertToolInvocation: `INSERT INTO tool_invocations (
 		organization_id, task_id, workflow_run_id, tool_name,
 		arguments_redacted, decision, denial_reason, duration_ms, created_at
-	) VALUES ($1, $2, $3::uuid, $4, $5::jsonb, $6, $7, $8, now())
+	) VALUES ($1, $2, $3::uuid, $4, $5::text::jsonb, $6, $7, $8, now())
 	RETURNING ${TOOL_COLUMNS}`,
 } as const;
 

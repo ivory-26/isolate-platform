@@ -188,6 +188,9 @@ test("production barrel has no reachable host-execution or fixture adapter depen
 	const build = await Bun.build({
 		entrypoints: [`${import.meta.dir}/index.ts`],
 		target: "bun",
+		// The server-only Modal SDK is a runtime dependency of the adapter; it is
+		// externalized so this assertion covers first-party sandbox code only.
+		external: ["modal"],
 	});
 	expect(build.success).toBe(true);
 	const source = await build.outputs[0].text();

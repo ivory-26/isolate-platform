@@ -6,6 +6,8 @@ export interface SandboxSpec {
 	readonly memoryMb: number;
 	readonly cpuCount: number;
 	readonly egress: EgressPolicy;
+	/** Optional provider idle-reap window; defaults to 300_000 ms in the Modal adapter. */
+	readonly idleTimeoutMs?: number;
 }
 
 /** Opaque provider-issued identity; paths refer ONLY to the isolated execution plane. */

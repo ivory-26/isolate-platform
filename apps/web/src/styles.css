@@ -2,9 +2,19 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 header, main, footer { max-width: 1120px; padding: 24px; margin: auto; }
-header { display: flex; gap: 32px; align-items: center; border-bottom: 1px solid #394458; }
+header { display: flex; gap: 32px; align-items: center; border-bottom: 1px solid #394458; flex-wrap: wrap; }
 header strong { font-size: 1.4rem; }
 nav { display: flex; gap: 24px; }
+.session-controls { display: flex; gap: 24px; align-items: center; margin-left: auto; }
+.session-controls label { margin: 0 8px 0 0; }
+.session-controls select { padding: 8px; border: 1px solid #56637b; border-radius: 4px; background: #101520; color: inherit; font: inherit; }
+.user-menu { display: flex; gap: 12px; align-items: center; }
+.user-menu__name { font-weight: 600; }
+.user-menu__email { color: #abb8cb; font-size: .85rem; }
+.role-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; border: 1px solid #56637b; color: #a4c3ff; }
+.role-badge[data-role="owner"] { border-color: #7bd88f; color: #7bd88f; }
+.role-badge[data-role="admin"] { border-color: #a4c3ff; color: #a4c3ff; }
+.form-error { margin-top: 12px; }
 a { color: #a4c3ff; }
 a[aria-current="page"] { color: #fff; text-decoration-thickness: 3px; }
 h1 { line-height: 1.2; }

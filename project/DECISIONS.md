@@ -104,3 +104,42 @@ Verified against the published `modal@0.11.1` tarball `dist/index.d.ts`, Baseten
 5. `destroy` is observed exactly once on success, thrown handler error, and abort;
 6. the job ends in the expected ack state (complete / retry / dead_letter) and the queue shows no in-flight lease.
 No provider SDK is imported and no network call is made; the script exits non-zero on any assertion.
+
+## 2026-10-29 — W5-AUTH: Neon Managed Better Auth is the identity provider; the id is the tenancy bridge
+
+Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep-poetry-ar5iwdkb`) with the Neon MCP: `auth_provider = "better_auth"`, `owned_by = "neon"`, base URL `https://ep-lucky-night-arkvt9aj.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth`, JWKS at `…/auth/.well-known/jwks.json`. The Neon-managed `neon_auth` schema holds `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`, `jwks`, `project_config`; `user.id` is a `uuid` with `gen_random_uuid()` default.
+
+- Decision: use `@neondatabase/auth@0.7.0-beta` **server-side only**. The app proxies `/api/auth/*` upstream through a server-only TanStack route and rewrites the `__Secure-neon-auth.*` cookies onto its own origin. The browser never contacts the auth host, so no third-party cookie is involved and the SDK cannot reach the client bundle.
+- Decision: **the user id is the identity bridge.** `public.users.id` is a `uuid` and Neon Auth issues `uuid` ids, so the authenticated id *is* the platform user id — `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep pointing at the session's owner. No second mapping table, no id translation table.
+- Decision: **tenancy stays in `public.organizations` + `public.memberships`.** Better Auth's organization plugin is not used for tenancy — Neon runs it server-side for its own console, and it cannot express the platform's `viewer` role. Neon Auth answers *who*; the platform tables answer *what*.
+- Rationale: the user asked for "proper user access instead of everyone seeing everything". A single source of tenancy truth keeps the role model (`owner|admin|member|viewer`) and the capability matrix in this repo, and avoids a dual-write between two organization models.
+- Alternatives rejected: mapping table between `neon_auth.user` and `public.users` (a second source of identity that must be kept in sync and can drift); Better Auth organizations as the tenancy model (loses `viewer`, splits tenancy across two schemas); self-hosted Better Auth (re-adds credential storage, email verification, and password-reset flows that the managed product already runs).
+
+## 2026-10-29 — W5-AUTH: identity is server-derived, the role is the only authorization input
+
+- Decision: request data is **never** an identity or authorization input. Headers, cookies, query parameters and form fields are ignored for identity. A `SessionResolver` may only answer "who is calling"; a separate `MembershipReader` may only answer "which organization is active". Both fail closed — an unreadable session is `AUTH_REQUIRED`, an unreadable membership is `FORBIDDEN`.
+- Decision: the **membership role** is the sole authorization input, and it is read from the membership row. `packages/db` maps roles to capabilities (`task:read`, `task:submit`, `organization:read`, `member:manage`): `viewer` may read but never submit. A capability failure is `FORBIDDEN` and must fire **before** any storage read or write.
+- Decision: the **remembered organization is a preference, not authorization**. It is honoured only when the caller really holds that membership and is otherwise ignored, so a stale cookie can neither widen access nor lock the caller out. A *requested* foreign organization is `FORBIDDEN`.
+- Decision: the compilation service's `authorizeMembership` dependency became **mandatory**. It previously defaulted to `async () => true` — the scope alone opened the gate. It is now re-checked against `memberships` **inside the submit transaction**, so the task insert, the queue insert and the compiled plan are all guarded by the same live membership read.
+- Rationale: "everyone seeing everything" is a failure of the *read path*, not of the write path. Binding authorization to a server-derived role, and re-checking it in the transaction that performs the write, removes the class of bug where a trusted-but-stale scope outlives the membership that justified it.
+- Alternatives rejected: RLS policies (the platform's tenancy predicates live in the service layer and the schema does not carry an RLS setup; adding RLS now would be a second authorization model with two failure modes); request-supplied organization ids (the original "everyone sees everything" defect); cookie-only authorization (a cookie is an attacker-controlled preference, never a grant).
+
+## 2026-10-29 — W5-AUTH: a database without a usable auth host fails closed
+
+- Decision: when `DATABASE_URL` is present but the Neon Auth configuration is missing or unusable, the auth state is `unavailable` and **every tenant route redirects to `/login` with 307**. The local demo fallback is reachable only when `NODE_ENV` is `development`/`test`, `WEB_LOCAL_DEMO=true`, **and** `DATABASE_URL` is absent — a demo identity must never point at a real database.
+- Decision: `scripts/smoke-build.ts` asserts this against the production build: `/`, `/runs` and `/organizations` must answer 307 with a `/login` location even when spoofed `x-organization-id` / `x-user-id` headers are present, and `/login` must answer 200 with `cache-control: no-store`.
+- Decision: the client-bundle sweep (`scripts/check-client.ts`) gained the forbidden tokens `@neondatabase/auth`, `better-auth`, `neonauth` and `__Secure-neon-auth`, on top of the existing provider-key and DB-URL patterns.
+- Rationale: a control plane that serves tenant data when its identity provider is down is worse than one that serves nothing. Failing closed converts a security defect into an outage.
+- Alternatives rejected: falling back to the demo tenant in production (would expose a shared tenant to every unauthenticated visitor); serving a cached page from before the outage (still tenant data).
+
+## 2026-10-29 — W5-AUTH: the `neon_auth` schema is Neon-owned and is never migrated by this repo
+
+- Decision: `packages/db/migrations/0003_auth_identity.sql` contains **only** `CREATE INDEX IF NOT EXISTS memberships_user_id_idx ON memberships (user_id)`. The `neon_auth` schema is created and owned by Neon; this repo never writes to it and never alters it.
+- Rationale: `memberships` PK is `(organization_id, user_id)` and cannot serve the reverse "which organizations may this caller see?" lookup, which the membership reader performs on every request. The index is the only schema change the feature needs.
+- Alternatives rejected: replicating Neon Auth's tables into `public` (two identity stores that can disagree); writing to `neon_auth` from application code (Neon owns its schema and may re-create it).
+
+## 2026-10-29 — W5-AUTH: the shared root `bun.lock` is the only cross-agent conflict point
+
+- Decision: `apps/web` gained a runtime dependency (`@neondatabase/auth@0.7.0-beta`), so the root `bun.lock` is updated on `task/w5-auth`. CI installs with `--frozen-lockfile`, so the lockfile **must** be committed for the pipeline to pass.
+- Rationale: `bun.lock` is a single root file shared by every worktree — the one file class AGENTS.md reserves for the coordinator. W4-SBX and W4-WRK also carry uncommitted `bun.lock` changes (Modal / Mastra dependencies), so the coordinator must reconcile the three lockfile deltas rather than let the last merge win.
+- Alternatives rejected: committing the app change without the lockfile (CI's `--frozen-lockfile` install fails, so the branch would be unmergeable); vendoring the SDK (the dependency is already published and version-pinned).

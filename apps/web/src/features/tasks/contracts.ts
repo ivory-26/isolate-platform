@@ -88,9 +88,8 @@ export type SubmissionReceipt = {
 export const failureMessages: Record<FailureCode, string> = {
 	INVALID_INPUT: "Check the request fields and execution budget.",
 	AUTH_REQUIRED:
-		"Task access is disabled until trusted authentication is configured. Local demo requires explicit development/test mode.",
-	FORBIDDEN:
-		"The repository or workflow version is not available in this organization.",
+		"Sign in to access this organization. Task access stays disabled until trusted authentication is configured.",
+	FORBIDDEN: "This action is not available in your role for this organization.",
 	CONFLICT:
 		"This request key was already used for a different task, or the pinned workflow version is already compiled. Start a new request or publish a new version.",
 	WORKFLOW_REJECTED:

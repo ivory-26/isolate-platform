@@ -1,6 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { useSession } from "../components/auth/SessionProvider";
+import { activeRole, requireSession } from "../features/auth/guard";
+import { authStateOptions } from "../features/auth/queries";
 import {
 	type SubmitTaskInput,
 	submitTaskSchema,
@@ -8,11 +11,20 @@ import {
 import { taskKeys } from "../features/tasks/queries";
 import { submitTask } from "../features/tasks/tasks.functions";
 
-export const Route = createFileRoute("/")({ component: SubmitPage });
+export const Route = createFileRoute("/")({
+	loader: async ({ context }) => {
+		const state = await context.queryClient.ensureQueryData(authStateOptions());
+		return requireSession(state);
+	},
+	component: SubmitPage,
+});
 function SubmitPage() {
 	const queryClient = useQueryClient();
 	const request = useRef<SubmitTaskInput | null>(null);
 	const [validationError, setValidationError] = useState<string | null>(null);
+	const state = useSession();
+	// A viewer may read the tenant's tasks but never queue one.
+	const readOnly = activeRole(state) === "viewer";
 	const mutation = useMutation({
 		mutationFn: (data: SubmitTaskInput) => submitTask({ data }),
 		onSuccess: async (result) => {
@@ -26,8 +38,14 @@ function SubmitPage() {
 			<h1>Queue a bounded task</h1>
 			<p>
 				Organization and actor are resolved on the server, never from this form.
-				Production is locked until trusted authentication is integrated.
+				Your role in the active organization decides what you may queue.
 			</p>
+			{readOnly && (
+				<p role="alert">
+					Your role in this organization is read-only. Ask an owner or admin for
+					submit access.
+				</p>
+			)}
 			<aside>
 				Local demo requires explicit development/test mode, WEB_LOCAL_DEMO=true
 				and no database configuration. Demo repository:{" "}
@@ -69,7 +87,9 @@ function SubmitPage() {
 					mutation.mutate(parsed.data);
 				}}
 			>
-				<fieldset disabled={mutation.isPending || request.current !== null}>
+				<fieldset
+					disabled={mutation.isPending || request.current !== null || readOnly}
+				>
 					<legend>Repository and execution limits</legend>
 					<label htmlFor="repositoryId">Repository ID</label>
 					<input
@@ -138,7 +158,9 @@ function SubmitPage() {
 				<button
 					type="submit"
 					disabled={
-						mutation.isPending || (mutation.isSuccess && mutation.data.ok)
+						readOnly ||
+						mutation.isPending ||
+						(mutation.isSuccess && mutation.data.ok)
 					}
 				>
 					{mutation.isPending

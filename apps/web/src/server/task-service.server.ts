@@ -1,4 +1,9 @@
 import "@tanstack/react-start/server-only";
+import {
+	hasCapability,
+	type PlatformCapability,
+	type UserRole,
+} from "@isolate/db";
 import type { OrganizationId, UserId } from "@isolate/shared";
 import { z } from "zod";
 import {
@@ -14,7 +19,12 @@ import {
 	workflowRejectionIssuesSchema,
 } from "../features/tasks/contracts";
 
-export type CallerScope = { organizationId: OrganizationId; userId: UserId };
+export type CallerScope = {
+	organizationId: OrganizationId;
+	userId: UserId;
+	/** The role the caller holds in `organizationId`; never supplied by a request. */
+	role: UserRole;
+};
 export interface TaskStore {
 	submit(
 		scope: CallerScope,
@@ -34,6 +44,7 @@ export class ControlPlaneError extends Error {
 const scopeSchema = z.strictObject({
 	organizationId: z.uuid(),
 	userId: z.uuid(),
+	role: z.enum(["owner", "admin", "member", "viewer"]),
 });
 function boundedIssues(
 	error: ControlPlaneError,
@@ -49,11 +60,15 @@ export function createTaskService(deps: {
 }) {
 	async function scoped<T>(
 		action: (store: TaskStore, scope: CallerScope) => Promise<T>,
+		capability: PlatformCapability,
 	): Promise<ServiceResult<T>> {
 		try {
 			const scope = await deps.resolveScope();
 			if (!scopeSchema.safeParse(scope).success)
 				throw new ControlPlaneError("AUTH_REQUIRED");
+			// A viewer may read but never submit; the role is the only input.
+			if (!hasCapability(scope.role, capability))
+				throw new ControlPlaneError("FORBIDDEN");
 			return { ok: true, value: await action(await deps.getStore(), scope) };
 		} catch (error) {
 			const code =
@@ -82,7 +97,10 @@ export function createTaskService(deps: {
 						message: failureMessages.INVALID_INPUT,
 					},
 				});
-			return scoped((store, scope) => store.submit(scope, parsed.data));
+			return scoped(
+				(store, scope) => store.submit(scope, parsed.data),
+				"task:submit",
+			);
 		},
 		list(input: unknown): Promise<ServiceResult<TaskSummary[]>> {
 			const parsed = listTasksSchema.safeParse(input);
@@ -94,8 +112,9 @@ export function createTaskService(deps: {
 						message: failureMessages.INVALID_INPUT,
 					},
 				});
-			return scoped((store, scope) =>
-				store.listLatest(scope, parsed.data.limit),
+			return scoped(
+				(store, scope) => store.listLatest(scope, parsed.data.limit),
+				"task:read",
 			);
 		},
 	};

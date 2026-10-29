@@ -8,6 +8,10 @@ import {
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import "../styles.css";
+import { OrganizationSwitcher } from "../components/auth/OrganizationSwitcher";
+import { SessionProvider } from "../components/auth/SessionProvider";
+import { UserMenu } from "../components/auth/UserMenu";
+import { authStateOptions } from "../features/auth/queries";
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 	{
@@ -19,7 +23,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 			],
 		}),
 		headers: () => ({ "Cache-Control": "private, no-store" }),
-		component: Outlet,
+		loader: ({ context }) =>
+			context.queryClient.ensureQueryData(authStateOptions()),
+		component: RootLayout,
 		shellComponent: Document,
 		errorComponent: () => (
 			<main>
@@ -36,6 +42,30 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 		),
 	},
 );
+function RootLayout() {
+	return (
+		<SessionProvider>
+			<header>
+				<strong>Isolate</strong>
+				<nav aria-label="Main navigation">
+					<Link to="/" activeOptions={{ exact: true }}>
+						Submit task
+					</Link>
+					<Link to="/runs">Tasks &amp; runs</Link>
+					<Link to="/organizations">Organizations</Link>
+				</nav>
+				<div className="session-controls">
+					<OrganizationSwitcher />
+					<UserMenu />
+				</div>
+			</header>
+			<Outlet />
+			<footer>
+				Control plane only. Workers execute tasks in isolated environments.
+			</footer>
+		</SessionProvider>
+	);
+}
 function Document({ children }: { children: ReactNode }) {
 	return (
 		<html lang="en">
@@ -43,19 +73,7 @@ function Document({ children }: { children: ReactNode }) {
 				<HeadContent />
 			</head>
 			<body>
-				<header>
-					<strong>Isolate</strong>
-					<nav aria-label="Main navigation">
-						<Link to="/" activeOptions={{ exact: true }}>
-							Submit task
-						</Link>
-						<Link to="/runs">Tasks &amp; runs</Link>
-					</nav>
-				</header>
 				{children}
-				<footer>
-					Control plane only. Workers execute tasks in isolated environments.
-				</footer>
 				<Scripts />
 			</body>
 		</html>

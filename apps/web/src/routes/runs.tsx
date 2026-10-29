@@ -1,10 +1,16 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { requireSession } from "../features/auth/guard";
+import { authStateOptions } from "../features/auth/queries";
 import { latestTasksOptions } from "../features/tasks/queries";
 
 export const Route = createFileRoute("/runs")({
-	loader: ({ context }) =>
-		context.queryClient.ensureQueryData(latestTasksOptions()),
+	loader: async ({ context }) => {
+		// The list is organization-scoped, so a trusted session comes first.
+		const state = await context.queryClient.ensureQueryData(authStateOptions());
+		requireSession(state);
+		return context.queryClient.ensureQueryData(latestTasksOptions());
+	},
 	pendingComponent: () => (
 		<main>
 			<output>Loading tasks...</output>

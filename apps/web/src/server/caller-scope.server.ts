@@ -36,6 +36,13 @@ export type CallerScopeDependencies = {
 	memberships: MembershipReader;
 	/** Optional organization selected by a future route; must be an active membership. */
 	requestedOrganizationId?: OrganizationId;
+	/**
+	 * Remembered organization. It is a preference, not an authorization input:
+	 * it is honoured only when the caller really is a member, and otherwise
+	 * ignored, so a stale preference can neither widen access nor lock the
+	 * caller out.
+	 */
+	preferredOrganizationId?: OrganizationId;
 };
 
 const uuidSchema = z.uuid();
@@ -47,10 +54,9 @@ const membershipSchema = z.strictObject({
 function normalizeUuid(value: string): string {
 	return value.toLowerCase();
 }
-function selectedMembership(
+function candidateMemberships(
 	value: ActiveMembership | ActiveMembership[] | null,
-	requestedOrganizationId: string | undefined,
-): ActiveMembership | null {
+): ActiveMembership[] {
 	const entries = value === null ? [] : Array.isArray(value) ? value : [value];
 	const candidates: ActiveMembership[] = [];
 	for (const entry of entries) {
@@ -63,25 +69,35 @@ function selectedMembership(
 			role: parsed.data.role,
 		});
 	}
+	// Deterministic when a user belongs to multiple organizations: no request
+	// preference means the lexicographically first active membership.
+	return candidates.sort((a, b) =>
+		a.organizationId < b.organizationId
+			? -1
+			: a.organizationId > b.organizationId
+				? 1
+				: 0,
+	);
+}
+function selectMembership(
+	candidates: ActiveMembership[],
+	requestedOrganizationId: string | undefined,
+	preferredOrganizationId: string | undefined,
+): ActiveMembership | null {
 	if (requestedOrganizationId !== undefined) {
-		const requested = normalizeUuid(requestedOrganizationId);
 		return (
 			candidates.find(
-				(entry) => normalizeUuid(entry.organizationId) === requested,
+				(entry) => entry.organizationId === requestedOrganizationId,
 			) ?? null
 		);
 	}
-	// Deterministic when a user belongs to multiple organizations: no request
-	// preference means the lexicographically first active membership.
-	return (
-		candidates.sort((a, b) =>
-			a.organizationId < b.organizationId
-				? -1
-				: a.organizationId > b.organizationId
-					? 1
-					: 0,
-		)[0] ?? null
-	);
+	if (preferredOrganizationId !== undefined) {
+		const preferred = candidates.find(
+			(entry) => entry.organizationId === preferredOrganizationId,
+		);
+		if (preferred) return preferred;
+	}
+	return candidates[0] ?? null;
 }
 
 /** Resolve the trusted tenant/actor pair or fail closed. */
@@ -109,6 +125,12 @@ export async function resolveCallerScope(
 		if (!requested.success) throw new ControlPlaneError("FORBIDDEN");
 		requestedOrganizationId = requested.data;
 	}
+	let preferredOrganizationId: string | undefined;
+	if (deps.preferredOrganizationId !== undefined) {
+		const preferred = uuidSchema.safeParse(deps.preferredOrganizationId);
+		if (!preferred.success) throw new ControlPlaneError("FORBIDDEN");
+		preferredOrganizationId = preferred.data;
+	}
 
 	let memberships: ActiveMembership | ActiveMembership[] | null;
 	try {
@@ -121,11 +143,20 @@ export async function resolveCallerScope(
 	} catch {
 		throw new ControlPlaneError("FORBIDDEN");
 	}
-	const membership = selectedMembership(memberships, requestedOrganizationId);
+	const membership = selectMembership(
+		candidateMemberships(memberships),
+		requestedOrganizationId === undefined
+			? undefined
+			: normalizeUuid(requestedOrganizationId),
+		preferredOrganizationId === undefined
+			? undefined
+			: normalizeUuid(preferredOrganizationId),
+	);
 	if (membership === null) throw new ControlPlaneError("FORBIDDEN");
 	return {
 		organizationId: membership.organizationId,
 		userId: asUserId(normalizeUuid(userId.data)),
+		role: membership.role,
 	};
 }
 
@@ -146,7 +177,7 @@ export const localDemo = {
 	workflowVersionId: "10000000-0000-4000-8000-000000000005",
 } as const;
 
-function localDemoEnabled(config: RuntimeConfig): boolean {
+export function localDemoEnabled(config: RuntimeConfig): boolean {
 	return (
 		(config.nodeEnv === "development" || config.nodeEnv === "test") &&
 		config.localDemo === "true" &&
@@ -193,5 +224,6 @@ export function resolveLocalScope(config: RuntimeConfig): CallerScope {
 	return {
 		organizationId: localDemo.organizationId,
 		userId: localDemo.userId,
+		role: "owner",
 	};
 }

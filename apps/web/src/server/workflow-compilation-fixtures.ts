@@ -26,6 +26,7 @@ import {
 export const compilationScope: CallerScope = {
 	organizationId: asOrganizationId("a1000000-0000-4000-8000-000000000001"),
 	userId: asUserId("a1000000-0000-4000-8000-000000000002"),
+	role: "owner",
 };
 export const compilationPin: WorkflowVersionPin = {
 	organizationId: compilationScope.organizationId,

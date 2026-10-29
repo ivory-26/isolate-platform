@@ -1,8 +1,25 @@
 # Status
 
-Last updated: 2026-10-29 (wave 3 fully integrated, live-verified; wave 4 handover below)
+Last updated: 2026-10-29 (wave 5 — authentication & tenant access — implemented on `task/w5-auth`, committed, **not pushed**)
 
-## Current: wave 3 complete — merged, migrated, validated
+## Current: wave 5 complete — Neon Managed Better Auth wired in, tenant isolation enforced
+
+- **Identity**: Neon Managed Better Auth (`@neondatabase/auth@0.7.0-beta`) is the web app's identity provider. The browser never talks to the auth host: a server-only route proxies `/api/auth/*` and rewrites the `__Secure-neon-auth.*` cookies onto our origin, so the SDK and the cookie secret stay server-side and no third-party cookie is involved.
+- **The id is the tenancy bridge**: Neon Auth issues `uuid` user ids and `public.users.id` is a `uuid`, so the authenticated id *is* the platform user id. `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep pointing at the session's owner — no second mapping table.
+- **Tenancy stays in `public.organizations` + `public.memberships`** (Neon's Better Auth organization plugin is not used for tenancy — it cannot express the platform's `viewer` role).
+- **Nobody sees everything**: identity is server-derived only — headers, cookies, query params and form fields are never identity inputs. The **membership role** is the sole authorization input; capabilities (`task:read`, `task:submit`, `organization:read`, `member:manage`) are checked **before** any storage access, and `viewer` may read but never submit. Membership is re-checked **inside the submit transaction** (the compile gate was `async () => true` before — now mandatory).
+- **Fails closed**: a deployment with a database but no usable auth host reports `unavailable`; `/`, `/runs` and `/organizations` answer **307 → `/login`** and the local demo fallback requires `NODE_ENV=development|test` + `WEB_LOCAL_DEMO=true` + **no** `DATABASE_URL`.
+- **New pages/components**: `/login`, `/signup`, `/organizations`, `/organizations/new`; `SessionProvider`, `UserMenu`, `OrganizationSwitcher`, `RoleBadge`, `AuthForm`.
+- Migration `0003_auth_identity.sql` (`memberships_user_id_idx`) **applied to Neon `isolate-platform`** and verified via `pg_indexes`. The Neon-owned `neon_auth` schema is never written by this repo.
+- Gates on `task/w5-auth`: biome **0 errors** repo-wide (10 pre-existing `noNonNullAssertion` warnings in `packages/db` test files) · typecheck **8/8 projects** · **903 pass / 0 fail / 4 skip across 53 files**, twice, identical · web production build green · client secret sweep green (26 checks over 17 client files) · production smoke green (307 → `/login` for the three tenant routes, 200 + `no-store` for `/login`).
+
+### Wave 5 open items (need the user)
+
+1. **Add the deployment origin to the Neon trusted-domain list.** `neon auth` reports `trusted_domains: []` and `allow_localhost: true`. Better Auth's CSRF origin check will reject sign-in from any non-localhost origin. The domain must be registered via the Neon MCP (`add_auth_trusted_domain`) before hosting.
+2. **Social login cannot complete yet** — the shared `google` OAuth provider has `client_id: null`, so it was never configured for our origin. Email/password sign-up works (`allow_sign_up: true`, no email verification required).
+3. **Reconcile the shared root `bun.lock`.** W5 adds `@neondatabase/auth`; W4-SBX and W4-WRK also carry uncommitted lockfile deltas. CI installs with `--frozen-lockfile`, so the lockfile must merge cleanly.
+
+## Previous: wave 3 complete — merged, migrated, validated
 
 - All five `task/w3-*` branches committed by the coordinator and merged into `main` with **zero conflicts** (`--no-ff`, one merge commit per branch). Worktree copies were reconciled by content hash before merging (see CHALLENGES: duplicated W3-D/W3-F work inside `w3-web`).
 - Root lockfile regenerated centrally (`bun install`); `apps/web` dependencies and `packages/sandbox` workspace are locked.
@@ -46,7 +63,7 @@ Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mast
 - **W4-OPS:** client sweep patterns (`BASETEN_`, `MODAL_`), full offline validate, docs, push on approval. CI never receives provider keys.
 - **Phase D–E (only after A–C green):** user adds keys → one `GET /v1/models` → exactly one Baseten completion (`max_tokens <= 16`) and one Modal sandbox (`echo`, ≤60 s) → measure `usage_records`, verify zero sandboxes, report spend.
 
-Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline. W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic. Nothing in wave 4 has been started yet.
+Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline — plus **W5-AUTH** (authentication & tenant access, delivered on `task/w5-auth`, see above). W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic. Wave 4's code lanes are merged into `main` (`4e0a914`); the keyed Phase D–E acceptance has **not** run.
 
 ## Repository
 - This repo (`isolate-platform`) contains ONLY event-week work (started Oct 27, 2026), fresh git history. The pre-event spike/compatibility MVP lives in a separate private repo and stays out of this history.
@@ -55,7 +72,8 @@ Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, 
 
 ## Data plane
 - Neon project `isolate-platform` (`divine-butterfly-60669535`, Pg 17, aws-us-west-2) is the system of record.
-- Migrations `0001_platform_core.sql` + `0002_workflow_compilation.sql` applied; 20 tables verified. Runner verifies the full table set and never prints environment values.
+- Migrations `0001_platform_core.sql` + `0002_workflow_compilation.sql` + `0003_auth_identity.sql` applied; 20 tables verified. Runner verifies the full table set and never prints environment values.
+- **Authentication**: Neon Managed Better Auth is enabled on branch `br-steep-poetry-ar5iwdkb` (`auth_provider = "better_auth"`, `owned_by = "neon"`). The Neon-owned `neon_auth` schema (9 tables) holds credentials/sessions and is never written by this repo; `public.users` / `public.memberships` / `public.organizations` remain the tenancy source of truth.
 - Old MVP project (`isolate-mvp`) remains deleted; nothing pre-event is referenced by this repo.
 
 ## Wave 2 (history — verified)

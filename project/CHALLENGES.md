@@ -205,3 +205,46 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: a packaging defect in 1.3.10's dependency layout; separately, Windows `npx` cold start can exceed the MCP client's init timeout.
 - Correction: installed pinned local copies (`~/.qoder/mcp-servers/{context7,mastra-docs}`, mastra-docs pinned 1.3.9) and launch them with `node <dist/index.js>` instead of `npx`. Neon uses the hosted streamable-HTTP MCP with OAuth.
 - Prevention: pin MCP server versions and pre-install them locally on Windows; a local `node` entrypoint removes `npx` from the startup path entirely. Zed's config still uses `@latest` and is tracked as W4-H (user declined to change it).
+
+## 2026-10-29 — W5-AUTH: a new statement in the submit transaction silently broke every write-path test
+- Symptom: three `apps/web` Postgres-store tests failed — "ownership, compile, task and queue writes share one transaction", "enqueue error rolls back transaction and returns a safe error", and "rejection commits sanitized history but writes no task or job". All three returned `FORBIDDEN` where a success / `UNAVAILABLE` / `WORKFLOW_REJECTED` outcome was expected.
+- Root cause: the new `activeMembershipSql` membership check was added to the submit transaction, but the SQL fixture's `execute()` dispatcher has no branch for it. The fixture threw "Unexpected fixture statement", which the store caught and turned into "not a member" — i.e. a *fixture* gap presented as an *authorization* failure.
+- Correction: added the missing branch and re-indexed the call assertions (the success path is now 7 calls: ownership → compiled-plans read → membership → workflow-version read → compiled-plan insert → task insert → job insert; the rejection path is 5).
+- Prevention: when a transaction gains a statement, update the fixture dispatcher **and** the positional call assertions in the same edit. A sanitizer that collapses "unexpected statement" into a domain error will make every fixture gap look like a policy decision.
+
+## 2026-10-29 — W5-AUTH: the compile-at-submit gate was open (`authorizeMembership: async () => true`)
+- Symptom: reviewing the W4-WEB compilation service against the new auth model showed that the membership gate was hard-coded open. The comment claimed "resolveCallerScope proved an active membership", so the compile step trusted the scope without re-checking it.
+- Root cause: the scope resolution and the compile step are separate service calls; a scope resolved at the start of a request can outlive the membership that justified it, and the compile path had no independent check.
+- Correction: `authorizeMembership` became a **required** dependency of `createSubmissionCompiler`, backed by `activeMembershipSql` executed **inside** the submit transaction — the same transaction that inserts the compiled plan, the task and the job.
+- Prevention: an authorization dependency must never have a permissive default. A default of `true` is indistinguishable from an absent check at the call site, and it silently disables the gate the moment a caller forgets to pass one.
+
+## 2026-10-29 — W5-AUTH: TanStack Start route file was one directory too deep
+- Symptom: the production build failed with `Could not resolve '../../server/neon-auth.server' in src/routes/api.auth.$.tsx`.
+- Root cause: the import path was written for a `src/routes/<subdir>/` file, but `api.auth.$.tsx` sits directly in `src/routes/`, so the server modules are one level up (`../server/...`).
+- Correction: corrected the relative imports; the build then succeeded.
+- Prevention: file-based routes nest their path segment in the *filename* (`api.auth.$.tsx`), not in the directory depth — the relative depth to `src/server/` is the same for `src/routes/x.tsx` and `src/routes/organizations/x.tsx`.
+
+## 2026-10-29 — W5-AUTH: the demo fixture's repository-ownership check defaulted to "allowed"
+- Symptom: the new test "the role never widens the organization boundary" failed — a caller from org A could submit against org B's repository.
+- Root cause: the harness's `repositoryBelongsToOrganization` returns `true` when no ownership map has been seeded, so the cross-tenant case was vacuously passing ownership and the test proved nothing.
+- Correction: the test now seeds ownership explicitly (`h.ownRepository(input().repositoryId, scope.organizationId)`) before asserting that the foreign organization is refused.
+- Prevention: a fake whose default is permissive will silently absorb the very assertion it exists to make. Fakes that mirror a database constraint must default to the *rejecting* side and be seeded explicitly.
+
+## 2026-10-29 — W5-AUTH: `bun --no-env-file ../../node_modules/.bin/tsc` failed on a corrupted bin metadata file
+- Symptom: `bun --no-env-file ../../node_modules/.bin/tsc` aborted with "could not open bin metadata file" on the Windows worktree.
+- Root cause: a Bun shim-resolution failure on the shared `node_modules` layout, not a TypeScript error.
+- Correction: invoked the compiler entrypoint directly — `node ../../node_modules/typescript/bin/tsc --noEmit` — which produces the identical result.
+- Prevention: on Windows worktrees prefer `node <package>/bin/<cli>` over the `.bin` shim when the shim fails to resolve; the failure is in the launcher, not the tool.
+
+## 2026-10-29 — W5-AUTH: the Neon Auth trusted-origin list is empty, so a deployed origin cannot sign in
+- Symptom: `neon auth` reports `trusted_domains: []` and `allow_localhost: true` on branch `br-steep-poetry-ar5iwdkb`.
+- Root cause: the managed auth host was provisioned for local development only; no deployment origin was registered.
+- Consequence: Better Auth's CSRF origin check will reject state-changing calls (sign-in, sign-up) from a non-localhost origin, and social login cannot complete at all — the shared `google` OAuth provider has `client_id: null`, so it was never configured for our origin.
+- Status: **open, needs the user**. The deployment domain must be added via the Neon MCP (`add_auth_trusted_domain`) before any hosted deployment. Until then, only localhost sign-in works.
+- Prevention: treat the auth host's trusted-origin list as part of the deployment checklist, exactly like an env var. It is invisible in the repo and fails only at the first real login attempt.
+
+## 2026-10-29 — W5-AUTH: the shared root `bun.lock` is contended by three lanes
+- Symptom: `task/w5-auth` (adds `@neondatabase/auth`), `task/w4-sbx` and `task/w4-wrk` all carry uncommitted changes to the single root `bun.lock`.
+- Root cause: `bun.lock` is a root file that every worktree writes; AGENTS.md reserves it for the coordinator, but a new runtime dependency forces a lockfile update on the owning lane.
+- Correction: the lockfile update is committed on `task/w5-auth` because CI installs with `--frozen-lockfile` — a branch that ships a dependency without its lockfile entry cannot pass the pipeline. The coordinator must reconcile the three deltas.
+- Prevention: when a lane legitimately owns a root-file change, commit it on that lane and say so explicitly in the report, so the coordinator reconciles instead of assuming the lane broke the lockfile.

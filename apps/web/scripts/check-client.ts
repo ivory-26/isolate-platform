@@ -23,6 +23,10 @@ const forbidden = [
 	"PostgresTaskRepository",
 	"InMemoryTaskRepository",
 	"createDb(",
+	"@neondatabase/auth",
+	"better-auth",
+	"neonauth",
+	"__Secure-neon-auth",
 	"-----BEGIN PRIVATE KEY-----",
 	"-----BEGIN RSA PRIVATE KEY-----",
 ];

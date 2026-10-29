@@ -10,11 +10,27 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as OrganizationsRouteRouteImport } from './routes/organizations/route'
 import { Route as RunsRouteImport } from './routes/runs'
+import { Route as SignupRouteImport } from './routes/signup'
+import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
+import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
+import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrganizationsRouteRoute = OrganizationsRouteRouteImport.update({
+  id: '/organizations',
+  path: '/organizations',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RunsRoute = RunsRouteImport.update({
@@ -22,31 +38,96 @@ const RunsRoute = RunsRouteImport.update({
   path: '/runs',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrganizationsIndexRoute = OrganizationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OrganizationsRouteRoute,
+} as any)
+const OrganizationsNewRoute = OrganizationsNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => OrganizationsRouteRoute,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/organizations': typeof OrganizationsRouteRouteWithChildren
+  '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
+  '/signup': typeof SignupRoute
+  '/organizations/new': typeof OrganizationsNewRoute
+  '/organizations/': typeof OrganizationsIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
+  '/signup': typeof SignupRoute
+  '/organizations/new': typeof OrganizationsNewRoute
+  '/organizations': typeof OrganizationsIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/organizations': typeof OrganizationsRouteRouteWithChildren
+  '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
+  '/signup': typeof SignupRoute
+  '/organizations/new': typeof OrganizationsNewRoute
+  '/organizations/': typeof OrganizationsIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/runs'
+  fullPaths:
+    | '/'
+    | '/organizations'
+    | '/login'
+    | '/runs'
+    | '/signup'
+    | '/organizations/new'
+    | '/organizations/'
+    | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/runs'
-  id: '__root__' | '/' | '/runs'
+  to:
+    | '/'
+    | '/login'
+    | '/runs'
+    | '/signup'
+    | '/organizations/new'
+    | '/organizations'
+    | '/api/auth/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/organizations'
+    | '/login'
+    | '/runs'
+    | '/signup'
+    | '/organizations/new'
+    | '/organizations/'
+    | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OrganizationsRouteRoute: typeof OrganizationsRouteRouteWithChildren
+  LoginRoute: typeof LoginRoute
   RunsRoute: typeof RunsRoute
+  SignupRoute: typeof SignupRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -58,6 +139,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/organizations': {
+      id: '/organizations'
+      path: '/organizations'
+      fullPath: '/organizations'
+      preLoaderRoute: typeof OrganizationsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/runs': {
       id: '/runs'
       path: '/runs'
@@ -65,12 +160,57 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RunsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/organizations/': {
+      id: '/organizations/'
+      path: '/'
+      fullPath: '/organizations/'
+      preLoaderRoute: typeof OrganizationsIndexRouteImport
+      parentRoute: typeof OrganizationsRouteRoute
+    }
+    '/organizations/new': {
+      id: '/organizations/new'
+      path: '/new'
+      fullPath: '/organizations/new'
+      preLoaderRoute: typeof OrganizationsNewRouteImport
+      parentRoute: typeof OrganizationsRouteRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
+interface OrganizationsRouteRouteChildren {
+  OrganizationsNewRoute: typeof OrganizationsNewRoute
+  OrganizationsIndexRoute: typeof OrganizationsIndexRoute
+}
+
+const OrganizationsRouteRouteChildren: OrganizationsRouteRouteChildren = {
+  OrganizationsNewRoute: OrganizationsNewRoute,
+  OrganizationsIndexRoute: OrganizationsIndexRoute,
+}
+
+const OrganizationsRouteRouteWithChildren =
+  OrganizationsRouteRoute._addFileChildren(OrganizationsRouteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OrganizationsRouteRoute: OrganizationsRouteRouteWithChildren,
+  LoginRoute: LoginRoute,
   RunsRoute: RunsRoute,
+  SignupRoute: SignupRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

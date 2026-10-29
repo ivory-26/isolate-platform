@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { PgSql } from "@isolate/db";
 import { submitTaskSchema } from "../features/tasks/contracts";
 import {
+	activeMembershipSql,
 	createPostgresStore,
 	latestTasksSql,
 	repositoryOwnershipSql,
@@ -20,6 +21,7 @@ function sqlFixture(
 	options: {
 		queueFailure?: boolean;
 		repositoryDenied?: boolean;
+		membershipDenied?: boolean;
 		badTimestamp?: boolean;
 		malformedGraph?: boolean;
 		missingAuthoredVersion?: boolean;
@@ -94,6 +96,10 @@ function sqlFixture(
 		calls.push({ statement, parameters, transaction });
 		if (statement === repositoryOwnershipSql)
 			return options.repositoryDenied ? [] : [{ id: request.repositoryId }];
+		if (statement === activeMembershipSql)
+			return options.membershipDenied
+				? []
+				: [{ organization_id: scope.organizationId, user_id: scope.userId }];
 		if (statement.includes("FROM compiled_plans")) return [];
 		if (statement.includes("FROM workflow_versions")) {
 			if (options.missingAuthoredVersion) return [];
@@ -190,7 +196,7 @@ describe("offline PostgreSQL adapter", () => {
 		expect(result.ok).toBe(true);
 		expect(h.committed()).toBe(true);
 		expect(h.rolledBack()).toBe(false);
-		expect(h.calls).toHaveLength(6);
+		expect(h.calls).toHaveLength(7);
 		expect(h.calls.every((call) => call.transaction)).toBe(true);
 		expect(h.calls[0].parameters).toEqual([
 			scope.organizationId,
@@ -201,19 +207,21 @@ describe("offline PostgreSQL adapter", () => {
 			h.request.workflowDefinitionId,
 			h.request.workflowVersion,
 		]);
-		expect(h.calls[2].parameters).toEqual([
-			scope.organizationId,
-			h.request.workflowDefinitionId,
-			h.request.workflowVersion,
-		]);
+		expect(h.calls[2].statement).toBe(activeMembershipSql);
+		expect(h.calls[2].parameters).toEqual([scope.organizationId, scope.userId]);
 		expect(h.calls[3].parameters.slice(0, 3)).toEqual([
 			scope.organizationId,
 			h.request.workflowDefinitionId,
 			h.request.workflowVersion,
 		]);
-		expect(h.calls[4].parameters[0]).toBe(scope.organizationId);
-		expect(h.calls[4].parameters[5]).toBe(scope.userId);
-		expect(h.calls[5].parameters.slice(0, 3)).toEqual([
+		expect(h.calls[4].parameters.slice(0, 3)).toEqual([
+			scope.organizationId,
+			h.request.workflowDefinitionId,
+			h.request.workflowVersion,
+		]);
+		expect(h.calls[5].parameters[0]).toBe(scope.organizationId);
+		expect(h.calls[5].parameters[5]).toBe(scope.userId);
+		expect(h.calls[6].parameters.slice(0, 3)).toEqual([
 			scope.organizationId,
 			taskId,
 			"run_task",
@@ -241,6 +249,21 @@ describe("offline PostgreSQL adapter", () => {
 		expect(h.calls).toHaveLength(1);
 		expect(h.rolledBack()).toBe(true);
 	});
+	test("caller without an active membership is FORBIDDEN before any write", async () => {
+		const h = sqlFixture({ membershipDenied: true });
+		expect(await h.service.submit(h.request)).toMatchObject({
+			ok: false,
+			error: { code: "FORBIDDEN" },
+		});
+		expect(h.rolledBack()).toBe(true);
+		expect(h.committed()).toBe(false);
+		expect(
+			h.calls.some((call) => call.statement.startsWith("INSERT INTO tasks")),
+		).toBe(false);
+		expect(
+			h.calls.some((call) => call.statement.startsWith("INSERT INTO jobs")),
+		).toBe(false);
+	});
 	test("rejection commits sanitized history but writes no task or job", async () => {
 		const h = sqlFixture({ malformedGraph: true });
 		const result = await h.service.submit(h.request);
@@ -253,8 +276,8 @@ describe("offline PostgreSQL adapter", () => {
 		});
 		expect(h.committed()).toBe(true);
 		expect(h.rolledBack()).toBe(false);
-		expect(h.calls).toHaveLength(4);
-		expect(h.calls[3].statement).toContain("INSERT INTO rejection_issues");
+		expect(h.calls).toHaveLength(5);
+		expect(h.calls[4].statement).toContain("INSERT INTO rejection_issues");
 		expect(
 			h.calls.some((call) => call.statement.startsWith("INSERT INTO tasks")),
 		).toBe(false);

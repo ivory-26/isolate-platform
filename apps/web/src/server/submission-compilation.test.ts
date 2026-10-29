@@ -32,7 +32,11 @@ const version = 1;
 const versionRowId = asWorkflowVersionId(
 	"50000000-0000-4000-8000-000000000007",
 );
-const scopeA: CallerScope = { organizationId: orgA, userId: userA };
+const scopeA: CallerScope = {
+	organizationId: orgA,
+	userId: userA,
+	role: "owner",
+};
 
 function graph(
 	id: WorkflowDefinitionId,
@@ -124,6 +128,8 @@ function compilationHarness(
 			compiledPlans,
 			rejections,
 		}),
+		authorizeMembership: async (caller) =>
+			caller.organizationId === orgA && caller.userId === userA,
 	});
 	const tasks = new InMemoryTaskRepository();
 	const queue = new InMemoryQueueRepository();

@@ -62,6 +62,12 @@ function reusablePlanId(
  */
 export function createSubmissionCompiler(deps: {
 	getRepositories(scope: CallerScope): Promise<WorkflowCompilationRepositories>;
+	/**
+	 * Must confirm the caller still holds a membership in the scope's
+	 * organization. It is mandatory and fails closed: the compilation service
+	 * owns its own authorization gate and must never be opened unconditionally.
+	 */
+	authorizeMembership: (scope: CallerScope) => Promise<boolean>;
 	policy?: WorkflowCompilationPolicy;
 }): CompileSubmission {
 	const policy = deps.policy ?? SUBMISSION_COMPILATION_POLICY;
@@ -98,8 +104,10 @@ export function createSubmissionCompiler(deps: {
 			};
 		const service = createWorkflowCompilationService({
 			resolveScope: async () => scope,
-			// resolveCallerScope proved an active membership for this scope.
-			authorizeMembership: async () => true,
+			// Membership is re-checked against the database inside the submit
+			// transaction; the trusted scope alone never opens this gate.
+			authorizeMembership: async (caller) =>
+				(await deps.authorizeMembership(caller)) === true,
 			resolvePolicy: async () => policy,
 			getRepositories: async () => repositories,
 		});

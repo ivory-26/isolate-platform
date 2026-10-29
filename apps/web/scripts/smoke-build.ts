@@ -26,33 +26,34 @@ if (!Bun.argv.includes("--isolated")) {
 	// Only the isolated child imports the server; host secrets are never inherited.
 	const entry = new URL("../dist/server/server.js", import.meta.url).href;
 	const { default: server } = await import(entry);
-	for (const path of ["/", "/runs"]) {
+	for (const path of ["/", "/runs", "/organizations"]) {
 		const response: Response = await server.fetch(
 			new Request(`http://localhost:3000${path}`, {
+				redirect: "manual",
 				headers: {
 					"x-organization-id": "20000000-0000-4000-8000-000000000001",
 					"x-user-id": "20000000-0000-4000-8000-000000000002",
 				},
 			}),
 		);
-		assert.equal(response.status, 200, `SSR status for ${path}`);
+		// Spoofed caller headers are never identity. Without a trusted session
+		// the tenant routes must not render another tenant's data at all.
+		assert.equal(response.status, 307, `SSR redirect for ${path}`);
 		assert(
-			response.headers.get("cache-control")?.includes("no-store"),
-			"SSR must not enter shared caches",
+			response.headers.get("location")?.includes("/login"),
+			`Expected a sign-in redirect for ${path}`,
 		);
-		const html = await response.text();
-		assert(
-			html.includes("Task control plane") || html.includes("Latest tasks"),
-			"Expected route content",
-		);
-		if (path === "/runs") {
-			assert(
-				html.includes(
-					"Task access is disabled until trusted authentication is configured",
-				),
-				"Production must ignore spoofed caller headers and local demo flag",
-			);
-		}
-		console.log("Production SSR passed:", path);
+		console.log("Production SSR refused anonymous access:", path);
 	}
+	const login: Response = await server.fetch(
+		new Request("http://localhost:3000/login", { redirect: "manual" }),
+	);
+	assert.equal(login.status, 200, "SSR status for /login");
+	assert(
+		login.headers.get("cache-control")?.includes("no-store"),
+		"SSR must not enter shared caches",
+	);
+	const html = await login.text();
+	assert(html.includes("Sign in"), "Expected the sign-in page");
+	console.log("Production SSR passed: /login");
 }

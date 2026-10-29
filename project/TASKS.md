@@ -120,6 +120,46 @@ Policy of record: [`AGENTS.md`](../AGENTS.md) §Provider credits. Keys exist onl
 ### Deferred to wave 5
 - Visual workflow editor (React Flow) + approval queue UI; GitHub App / scoped token broker for clone+PR; Mastra `Workspace`/LSP evaluation (native workspace sandbox package is not published: `@mastra/workspace-sandbox-computesdk` returns 404 as of 2026-10-29); deploy pipeline.
 
+## Wave 5 — Authentication & tenant access: Neon Managed Better Auth (branch `task/w5-auth`, worktree `../worktrees-platform/w5-auth`)
+
+Started 2026-10-29. Goal: a signed-in caller sees only their own organization's work, and no request can widen that boundary. Driven by the user's report that "Better Auth is enabled in NeonDB" and the requirement that people must not "see everything".
+
+### W5-0 — Verify the provisioned auth host (Neon MCP, read-only)
+- Confirmed on project `divine-butterfly-60669535`, branch `br-steep-poetry-ar5iwdkb`: `auth_provider = "better_auth"`, `owned_by = "neon"`, base URL `https://ep-lucky-night-arkvt9aj.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth`.
+- The Neon-managed `neon_auth` schema holds `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`, `jwks`, `project_config`; `user.id` is `uuid DEFAULT gen_random_uuid()`.
+- Live config: `trusted_origins: []`, `allow_localhost: true`, email/password with `allow_sign_up: true` and no email verification, one shared `google` OAuth provider with `client_id: null`, shared SMTP sender `auth@mail.myneon.app`.
+- **Open, needs the user:** add the deployment origin as a trusted domain before hosting (`add_auth_trusted_domain`). Until then only localhost can sign in.
+
+### W5-DB — `packages/db` tenancy access (owner: this lane)
+- `UserRepository`, `MembershipRepository`, `OrganizationRepository` with Postgres drivers and in-memory fakes that mirror the unique constraints (one user per email, one organization per slug, one membership per org/user pair).
+- `packages/db/src/roles.ts` — capability matrix: `owner|admin` → all, `member` → read/submit/organization-read, `viewer` → read/organization-read only.
+- Migration `0003_auth_identity.sql` — `memberships_user_id_idx (user_id)` only. **Applied to Neon** and verified via `pg_indexes`. The `neon_auth` schema is Neon-owned and is never written by this repo.
+
+### W5-AUTH — `apps/web` identity bridge and authorization (owner: this lane)
+- Server-only Neon Auth adapter (`src/server/neon-auth.server.ts`): reads `NEON_AUTH_BASE_URL` / `NEON_AUTH_COOKIE_SECRET` (≥32 chars) / optional domain, same-site and TTL; proxies `/api/auth/*` and rewrites `__Secure-neon-auth.*` cookies onto this origin. The SDK never enters the client bundle.
+- `src/server/auth-session.server.ts` — the id bridge: the Neon Auth user id **is** `public.users.id`; the first authenticated request mirrors the identity into `public.users` and gives it a personal organization, so a fresh signup is never a caller without a tenant.
+- `src/server/caller-scope.server.ts` — identity is server-derived. `SessionResolver` answers only "who"; `MembershipReader` answers only "which organization". The remembered organization is a preference, honoured only when the membership really exists.
+- `src/server/submission-compilation.server.ts` — `authorizeMembership` is now a **required** dependency, re-checked inside the submit transaction (it was `async () => true`).
+- `src/server/task-service.server.ts` — the role gates the capability before any storage access; `viewer` may read but never submit.
+
+### W5-UI — Auth components and pages (owner: this lane)
+- Components: `SessionProvider`, `UserMenu`, `OrganizationSwitcher`, `RoleBadge`, `AuthForm`.
+- Pages: `/login`, `/signup`, `/organizations` (membership list with role badges), `/organizations/new` (create an organization — the caller becomes its owner).
+- `/`, `/runs` and `/organizations` are session-guarded; the submit form is disabled for a `viewer`.
+- `scripts/check-client.ts` forbids `@neondatabase/auth`, `better-auth`, `neonauth` and `__Secure-neon-auth` in the browser bundle; `scripts/smoke-build.ts` asserts 307 → `/login` for every tenant route when no trusted auth is configured.
+
+### W5-OPS — Coordinator integration (after this lane reports)
+- Reconcile the shared root `bun.lock` delta against W4-SBX / W4-WRK — CI installs with `--frozen-lockfile`, so the lockfile entry must ship with the dependency.
+- Merge `task/w5-auth` → `main`; re-run the full offline validate; add the deployment origin to the Neon trusted-domain list; update `.env.example` and `ARCHITECTURE.md` (done on this lane).
+
+### Gates (this lane, 2026-10-29)
+- `biome check` — 0 errors repo-wide (10 pre-existing `noNonNullAssertion` warnings in `packages/db/src/live.test.ts` and `packages/db/src/testing/fakes.test.ts`; not touched).
+- `bun scripts/typecheck-all.ts` — all 8 projects pass.
+- `bun test --no-env-file` — **903 pass / 0 fail / 4 skip**, twice, identical (the 4 skips are the Neon live suites, which need `DATABASE_URL`).
+- `apps/web` — `vite build` green; client sweep green (26 checks over 17 client files); production smoke green (307 → `/login` for `/`, `/runs`, `/organizations`; 200 + `no-store` for `/login`).
+
+### Status: **done — committed on `task/w5-auth`, not pushed**
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

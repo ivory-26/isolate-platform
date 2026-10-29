@@ -24,10 +24,12 @@ import type { WorkflowCompilationResult } from "./workflow-compilation.server";
 export const scope: CallerScope = {
 	organizationId: localDemo.organizationId,
 	userId: localDemo.userId,
+	role: "owner",
 };
 export const otherScope: CallerScope = {
 	organizationId: asOrganizationId("20000000-0000-4000-8000-000000000001"),
 	userId: asUserId("20000000-0000-4000-8000-000000000002"),
+	role: "owner",
 };
 export const workflowPin = {
 	workflowDefinitionId: localDemo.workflowDefinitionId,

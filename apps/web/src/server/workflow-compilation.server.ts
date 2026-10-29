@@ -88,6 +88,7 @@ function failure(
 const scopeSchema = z.strictObject({
 	organizationId: z.uuid(),
 	userId: z.uuid(),
+	role: z.enum(["owner", "admin", "member", "viewer"]),
 });
 function matchesPersistedPin(
 	row: {
@@ -129,6 +130,7 @@ export function createWorkflowCompilationService(
 						resolved.data.organizationId.toLowerCase(),
 					),
 					userId: asUserId(resolved.data.userId.toLowerCase()),
+					role: resolved.data.role,
 				};
 			} catch {
 				return failure("AUTH_REQUIRED");

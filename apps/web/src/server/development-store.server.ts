@@ -45,6 +45,10 @@ export function createDevelopmentStore(config: RuntimeConfig): TaskStore {
 			compiledPlans,
 			rejections,
 		}),
+		// The local demo has exactly one organization and one owner.
+		authorizeMembership: async (scope) =>
+			scope.organizationId === localDemo.organizationId &&
+			scope.userId === localDemo.userId,
 	});
 	return createRepositoryStore({
 		tasks,

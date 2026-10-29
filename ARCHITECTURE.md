@@ -70,7 +70,9 @@ Use Bun and TanStack Start with React, TanStack Router, and TanStack Query. The 
 
 TanStack server handlers/functions are the control-plane boundary. They validate requests, authenticate the caller, enforce tenant access, persist task metadata, and enqueue work. They must not run arbitrary repository code or hold open an HTTP request for the full agent execution.
 
-Implemented in wave 3 (`apps/web`): TanStack Start + Router + Query with two routes — task submission and runs/tasks list. Server functions use `createServerFn` with `@isolate/shared` validation and `Cache-Control: private, no-store`; DB access is server-only (`@isolate/db` in Postgres mode, `@isolate/db/testing` fakes in local mode when `DATABASE_URL` is absent). A production build plus a client-bundle secret sweep (`scripts/check-client.ts`, 22 checks) run in CI to keep provider keys and DB URLs out of the browser. Session→tenant resolution and the authored-version reader are explicit seams for wave 4 (W4-A).
+Implemented in wave 3 (`apps/web`): TanStack Start + Router + Query with two routes — task submission and runs/tasks list. Server functions use `createServerFn` with `@isolate/shared` validation and `Cache-Control: private, no-store`; DB access is server-only (`@isolate/db` in Postgres mode, `@isolate/db/testing` fakes in local mode when `DATABASE_URL` is absent). A production build plus a client-bundle secret sweep (`scripts/check-client.ts`, 26 checks) run in CI to keep provider keys and DB URLs out of the browser.
+
+Authentication (wave 5): the web app uses **Neon Managed Better Auth** (`@neondatabase/auth`) as its identity provider. The browser never contacts the auth host. A server-only route (`routes/api.auth.$.tsx`) proxies `/api/auth/*` upstream and rewrites the session cookies onto this origin (`__Secure-neon-auth.*`), so the Better Auth SDK and the cookie secret stay server-side and no third-party cookie is involved. The route file declares only `server.handlers`, which prunes it from the client route tree, and server functions are compiled to RPC stubs — the client-bundle sweep asserts that `@neondatabase/auth`, `better-auth`, `neonauth` and `__Secure-neon-auth` never appear in the browser build.
 
 ### Worker
 Run a separate TypeScript process. It claims jobs, applies idempotency, starts and monitors executions, invokes Mastra workflows, persists status/events, handles cancellation/timeouts, and cleans up sandboxes. Use a durable queue or a database-backed queue with atomic claiming, retries, dead-letter handling, and duplicate protection. Select the concrete queue implementation in an ADR before relying on it.
@@ -160,6 +162,13 @@ Implemented data-plane notes (wave 3):
 - JSON writes bind `$n::text::jsonb`, never `$n::jsonb`: postgres.js stringifies a JS string parameter before the cast, which would store a JSON *string scalar* (`jsonb_typeof = 'string'`). This was latent under `0001` and became a hard failure once `0002` added `jsonb_typeof` CHECKs (W4-B tracks the remaining `0001` write paths).
 - Compilation artifacts are insert-only and tenant/version-scoped; composite foreign keys `(organization_id, workflow_definition_id)` and `(workflow_definition_id, workflow_version)` prevent cross-tenant and nonexistent-version references.
 
+Identity and tenancy (wave 5):
+- Credentials, sessions, and OAuth live in the Neon-managed `neon_auth` schema (`user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`, `jwks`, `project_config`). That schema is owned by Neon, not by this repository: never migrate or write to it directly.
+- **The id is the identity bridge.** Neon Auth issues `uuid` user ids and `public.users.id` is a `uuid`, so the authenticated user id *is* the platform user id. `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep pointing at the same person the session belongs to. No second mapping table exists.
+- `public.organizations` + `public.memberships` remain the source of truth for tenancy. Better Auth's organization plugin is **not** used for tenancy: Neon runs it server-side for its own UI, and it cannot express the platform's `viewer` role.
+- `memberships` PK is `(organization_id, user_id)`, which cannot serve the reverse "which organizations may this caller see?" lookup. `0003_auth_identity.sql` adds `memberships_user_id_idx (user_id)`.
+- Tenancy is enforced in application code via `organization_id = $1` on every read and write; **there is no row-level security**. Isolation is therefore a property of the service layer, and every repository query must keep the organization predicate.
+
 ## 6. Workflow definition and compilation
 
 The visual editor stores a versioned JSON graph:
@@ -237,6 +246,14 @@ Use `project/TASKS.md`, `project/STATUS.md`, `project/DECISIONS.md`, and `projec
 - Add cancellation and cleanup paths for every long-running execution.
 - Test tenant isolation and authorization at API and repository layers.
 
+Authentication boundary (wave 5):
+- **Identity is server-derived, never request-derived.** Headers, cookies, query parameters, and form fields are never identity inputs. A `SessionResolver` may only answer "who is calling"; a `MembershipReader` may only answer "which organization is active". Both fail closed: an unreadable session is `AUTH_REQUIRED`, an unreadable membership is `FORBIDDEN`.
+- The **role is the only authorization input**, and it is read from the membership row, never from the request. `packages/db` maps roles to capabilities (`task:read`, `task:submit`, `organization:read`, `member:manage`); a `viewer` may read but never submit. A capability failure is `FORBIDDEN` and must happen before any storage read or write.
+- The **remembered organization is a preference, not authorization**. It is honoured only when the caller really holds that membership, and otherwise ignored — a stale cookie can neither widen access nor lock the caller out. A *requested* foreign organization is `FORBIDDEN`.
+- **A deployment with a database but no usable auth configuration fails closed.** The auth state is `unavailable`, every tenant route redirects to `/login` with 307, and the local demo fallback is available only when `NODE_ENV` is `development`/`test`, `WEB_LOCAL_DEMO=true`, and `DATABASE_URL` is absent. A demo identity must never point at a real database.
+- **Membership is re-checked inside the write transaction.** The compilation service owns a mandatory `authorizeMembership` dependency; it may not be opened unconditionally, and it runs within the same transaction as the task and queue inserts.
+- The **cookie secret and auth base URL are server-only environment values**. They are never exposed to the browser, never logged, and never placed in a fixture. The browser-side secret sweep (`scripts/check-client.ts`) asserts this for the built bundle.
+
 ## 12. Integration points and decisions to verify
 
 - TanStack Start server handlers call control-plane services, not agent logic directly.
@@ -246,3 +263,4 @@ Use `project/TASKS.md`, `project/STATUS.md`, `project/DECISIONS.md`, and `projec
 - Confirm the current Mastra storage adapter supports Neon/PostgreSQL and the intended connection mode before implementation.
 - Verify provider facts against installed types before coding: Baseten model id against `GET /v1/models`; Modal egress fields (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) and image capabilities against `modal`'s d.ts. Record divergences in `project/DECISIONS.md`.
 - Record any material choice in `project/DECISIONS.md` and update this document in the same PR when boundaries or data flows change.
+- The Neon Auth host's **trusted-origin list is empty** and `allow_localhost` is enabled. The deployment origin must be added as a trusted domain before a non-localhost deployment can complete a state-changing auth call; Better Auth rejects the cross-origin request otherwise. Verify with `neon auth` after each domain change.

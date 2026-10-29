@@ -138,7 +138,7 @@ describe("trusted caller scope", () => {
 				memberships: membershipsOf({ [userA]: [membershipA, membershipB] }),
 				requestedOrganizationId: orgB,
 			}),
-		).toEqual({ organizationId: orgB, userId: userA });
+		).toEqual({ organizationId: orgB, userId: userA, role: "admin" });
 	});
 	test("deterministic organization when no organization was requested", async () => {
 		expect(
@@ -148,7 +148,7 @@ describe("trusted caller scope", () => {
 					[userA]: [membershipB, membershipA],
 				}),
 			}),
-		).toEqual({ organizationId: orgA, userId: userA });
+		).toEqual({ organizationId: orgA, userId: userA, role: "member" });
 	});
 	test("requested organization mismatch is FORBIDDEN", async () => {
 		expect(
@@ -201,6 +201,7 @@ describe("test/development demo adapter", () => {
 			).toEqual({
 				organizationId: demoScope.organizationId,
 				userId: demoScope.userId,
+				role: "owner",
 			});
 		});
 	test("demo adapter refuses another organization", async () => {

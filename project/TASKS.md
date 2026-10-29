@@ -45,15 +45,70 @@ Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w3-*`. Common rules: age
 - Merge `task/w3-*` → `main` centrally; regenerate root lockfile; full `bun run validate`; apply `0002_workflow_compilation.sql` to Neon `isolate-platform` **with user approval (Neon MCP)**; QA/DoD audit; web client-bundle secret sweep; docs (ARCHITECTURE/STATUS/CHALLENGES/SKILL-REGISTRY); push; verify CI green.
 - Status: **done (except push/CI verification)** — five zero-conflict merges; lockfile regenerated; `bun run validate` 662/662 with live Neon; migration applied (20/20 tables); client sweep 22 checks; CI updated with web build + sweep. Not pushed by request scope; CI on remote unverified.
 
-## Wave 4 — next queue (handover)
-- **W4-A — auth/tenancy:** concrete `AuthoredWorkflowVersionReader`, real session → `CallerScope`, membership/permission enforcement, API-boundary tenant-isolation tests. Owner: TBD.
-- **W4-B — jsonb write normalization:** migrate 0001 repositories from `JSON.stringify(...)` → `::jsonb` binds to object or `::text::jsonb`; add live `jsonb_typeof` assertions; re-enable/verify SQL-side `budget_limits->>` scans. Owner: TBD.
-- **W4-C — compilation in the task pipeline:** compile at submit → persist pinned plan → worker consumes pinned plan; surface rejection issues in UI. Owner: TBD.
-- **W4-D — Mastra storage + worker integration:** verify Neon/Postgres storage adapter vs `@mastra/core@1.79.0` d.ts; wire `createSdlcWorkflow` (suspension/approval resume) into worker. Owner: TBD.
-- **W4-E — sandbox execution plane:** hosted `SandboxProvider` + command/egress policy enforcement in worker; NullProvider stays default in dev/CI. Owner: TBD.
-- **W4-F — approvals + visual editor:** React Flow editor over the node registry; approval queue route with payload-SHA + expiry binding. Owner: TBD.
-- **W4-G — CI/ops:** optional live-DB CI job, gitleaks triage → blocking, deploy pipeline, push + verify CI for the wave-3 merge.
-- **W4-H — tooling:** pin Zed's `mastra` MCP to `@mastra/mcp-docs-server@1.3.9` (1.3.10 crashes on Windows); declined during wave 3, still open.
+## Wave 4 — Provider plane: Baseten inference + Modal sandboxes (planned 2026-10-29)
+
+Budget context: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; no orchestration framework change. Inference uses the **existing** OpenAI-compatible model object (`providerId/modelId/url/apiKey` in `packages/mastra/src/agents/types.ts`); sandboxing uses the **existing** `SandboxProvider` contract (`packages/sandbox/src/providers/types.ts`).
+
+Ground rules (unchanged): one writable owner per package per wave; one worktree + `task/w4-*` branch per agent; root files (`package.json`, root `bun.lock`, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package; commit on the branch before reporting; never push; never read/print `.env*`.
+
+### W4-0 — Coordinator pre-work (contracts + provisioning, no feature code)
+- Commit cross-lane contracts FIRST: `AgentUsage` + `onUsage` hook in `packages/mastra/src/agents/types.ts`; `SandboxToolBackend` interface (read/list/search/exec/git) for the tool layer; `UsageSink` shape consumed by the worker (implemented by W4-DB). Interfaces only, no implementations.
+- Verify provider facts against installed packages before lanes start: `baseten` provider id and `meta-models/muse-spark-open` against `GET https://inference.baseten.co/v1/models`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git).
+- Provision: Baseten key + credits confirmed; Modal token pair + `modal` app; secrets live only in the worker/server env (never committed, never printed).
+- Status: **planned**
+
+### W4-DB — `packages/db/**` (owner: agent W4-DB, branch `task/w4-db`)
+- W4-B follow-up: normalize remaining `JSON.stringify(...)` → `::jsonb` writes to `::text::jsonb` (or object binds); add live `jsonb_typeof` assertions; verify SQL-side `budget_limits->>` scans still work.
+- New `UsageRepository` over the existing `usage_records` table: `record({organizationId, taskId, modelId, provider, promptTokens, completionTokens, costUsd})`, `sumByTask`, `sumByOrgSince`; in-memory fake on the same pure helpers; live test. **No migration** (`usage_records` already exists).
+- DoD: offline gates ×2; live suite green when `DATABASE_URL` is present; commit + report.
+
+### W4-INF — `packages/mastra/**` (owner: agent W4-INF, branch `task/w4-inf`)
+- `basetenModelConfig(env)`: `{ providerId: "baseten", modelId: BASETEN_MODEL_ID (default meta-models/muse-spark-open), url: BASETEN_BASE_URL ?? "https://inference.baseten.co/v1", apiKey: BASETEN_API_KEY }`; fail closed with a bounded error when the key is absent (no silent fallback).
+- Extend `defineCodingAgent` to accept `tools` + `maxSteps`; extend `createMastraAgentRuntime` to pass them and emit `onUsage` from the generate result (verify exact token field names against the installed d.ts) and record tool names in `AgentTurnRecord.toolCalls` (never payloads).
+- Sandbox-backed tools behind injected `SandboxToolBackend`, wired through the existing `wirePlatformTools` policy gate (`repo.read_file`, `repo.list_files`, `repo.search`, `sandbox.exec`, git read ops). Deny-by-default and approval routing stay in `tools/policy.ts`.
+- Bounded loop: per-turn output-token cap, per-task token accumulator → `BUDGET_EXCEEDED` block; `maxSteps` finite.
+- Tests: fake Agent + fake backend only (no network); usage mapping, tool denial, cap exhaustion, tool-call recording.
+- DoD: offline gates ×2; commit + report.
+
+### W4-SBX — `packages/sandbox/**` (owner: agent W4-SBX, branch `task/w4-sbx`)
+- Add `modal` (pin `0.11.x`) to `packages/sandbox/package.json`; implement `ModalSandboxProvider` behind the existing `SandboxProvider` contract. Inject a `ModalSandboxClient` interface (create/exec/terminate) so tests never touch the network; construct the real `ModalClient` only in a server-only factory.
+- Map `SandboxSpec` → `SandboxCreateParams`: cpu, memoryMiB, lifetime `timeoutMs`, `idleTimeoutMs`, absolute `workdir`, `command: ["sleep","48h"]`; egress deny-by-default (`blockNetwork: true` unless a verified domain/CIDR allowlist is provably required for clone/install). Reject unsupported limits BEFORE create.
+- `execute`: `sb.exec(argv, { timeoutMs })`, capture stdout/stderr with caps, `wait()` exit code, map to `CommandResult`; abort propagates. `destroy`: idempotent terminate, tolerates already-gone.
+- Offline fake-client tests: mapping, pre-create rejection, timeout, output cap, destroy idempotency, no host process spawning.
+- Opt-in live smoke only (`MODAL_LIVE=1` + token env): 1 CPU / 512 MiB / 60 s, create → `echo` → terminate, assert cleanup. Skipped by default and in CI.
+- DoD: offline gates ×2; live smoke evidence when tokens are provided; commit + report.
+
+### W4-WRK — `apps/worker/**` (owner: agent W4-WRK, branch `task/w4-wrk`)
+- Composition root: `NullProvider` unless `SANDBOX_PROVIDER=modal`; Baseten config only when `INFERENCE_PROVIDER=baseten`. No direct `modal` import and no provider SDK outside the adapters.
+- `TaskExecutionHandler`: provision sandbox → bind tenant/task/run context → run bounded agent turns with sandbox tools → persist usage via injected `UsageSink` → **destroy in `finally`**; heartbeat during long work; abort → cancel + destroy; map failures to bounded verdicts. Idempotent under lease redelivery.
+- Tests: fake provider/runtime/usage sink; cleanup on success, throw and abort; retry classification; no secret/payload leakage into logs or state.
+- DoD: offline gates ×2; commit + report.
+
+### W4-WEB — `apps/web/**` (owner: agent W4-WEB, branch `task/w4-web`)
+- W4-A: `resolveCallerScope` (session → org/user/memberships) with a test-only dev adapter; enforce on task submission and list handlers; tenant-isolation tests at the API boundary.
+- W4-C: compile at submit against `AuthoredWorkflowVersionReader`, persist the pinned plan, surface `rejection_issues` in the task response; keep `Cache-Control: private, no-store`; no provider keys or DB URLs in the client bundle.
+- Visual editor and approval queue move to wave 5 (same package, single writer).
+- DoD: build + client secret sweep + tests; commit + report.
+
+### W4-OPS — Coordinator integration (after all lanes report)
+- Extend `apps/web/scripts/check-client.ts` forbidden patterns with `BASETEN_`, `MODAL_`, `inference.baseten.co`, `modal.com`.
+- CI: optional/manual live smokes (never on PRs), gitleaks triage, full `bun run validate`, docs (`STATUS`/`DECISIONS`/`CHALLENGES`/`TASKS`/`ARCHITECTURE`), push only with user approval.
+- Keep W4-H (pin Zed's Mastra docs MCP to 1.3.9) as opportunistic tooling.
+
+### Dependency graph / parallelism
+`W4-0 contracts → {W4-DB, W4-INF, W4-SBX, W4-WEB in parallel} → W4-WRK (develops against interfaces + fakes, integrates after INF/SBX merge) → W4-OPS`.
+W4-WRK must NOT wait for adapters to be finished: it codes to `SandboxProvider`/`CodingAgentRuntime` and fake implementations, then swaps in the real ones at integration.
+
+### Cost guardrails (both credits)
+- Baseten: `maxOutputTokens` per turn, per-task token accumulator, existing `max_agent_turns`/`max_duration_ms`; one `usage_records` row per model call with cost from a config price table (no hardcoded guess); block at cap.
+- Modal: default 1 CPU / 1 GiB / 15 min lifetime / 5 min idle, no GPU, per-task sandbox-seconds cap, concurrency cap, destroy in `finally`; record sandbox usage rows (provider `modal`, model_id `sandbox:<cpu>x<mem>`, estimated `cost_usd`).
+- Live tests are opt-in, tiny, and skipped by default; they are the only paths allowed to spend credits.
+
+### Deferred to wave 5
+- Visual workflow editor (React Flow) + approval queue UI; GitHub App / scoped token broker for clone+PR; Mastra `Workspace`/LSP evaluation (native workspace sandbox package is not published: `@mastra/workspace-sandbox-computesdk` returns 404 as of 2026-10-29); deploy pipeline.
+
+## Wave 4 — legacy handover (superseded by the provider-plane plan above)
+- W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 
 ## Wave 2 — Integration & validation (coordinator)
 - Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.

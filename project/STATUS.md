@@ -33,16 +33,19 @@ Last updated: 2026-10-29 (wave 3 fully integrated, live-verified; wave 4 handove
 - Local mode uses `@isolate/db/testing` fakes when `DATABASE_URL` is absent; Postgres mode uses `@isolate/db` server-side only. Workflow compilation service (scope → membership → policy → compile → persist/reject) is implemented server-side with a W4-owned authored-version reader seam.
 - 114 tests, typecheck, production build and client secret sweep green; no provider keys or DB URLs in client bundle.
 
-## Wave 4 handover (next)
+## Wave 4 handover (planned 2026-10-29: provider plane)
 
-1. **W4-A — auth/tenancy surface:** implement `AuthoredWorkflowVersionReader` and real session → `CallerScope` resolution (currently dev/local-mode only); enforce membership/permission in server handlers; add a tenant-isolation test at API boundary.
-2. **W4-B — normalize remaining jsonb write paths:** 0001 repositories still bind `JSON.stringify(...)` to `::jsonb`; the roundtrip works only because `parseJsonbColumn` parses the double-encoded value. Switch to object or `::text::jsonb` binds and add live `jsonb_typeof` assertions. This matters for SQL-side scans (e.g. `budget_limits->>'max_duration_ms'`).
-3. **W4-C — wire compilation into the task pipeline:** compile at task submit against an authored version, persist the pinned plan, surface rejection issues in the UI, and make the worker consume the pinned plan instead of ad-hoc orchestration.
-4. **W4-D — Mastra storage + worker integration:** confirm the current Neon/Postgres storage adapter against installed `@mastra/core@1.79.0` d.ts; wire `createSdlcWorkflow` into the worker loop with suspension/approval resume (storage-backed instance required).
-5. **W4-E — sandbox execution plane:** implement a hosted provider behind `SandboxProvider`, wire command policy + egress policy into the worker, and keep the NullProvider as the default in development/CI.
-6. **W4-F — approvals + visual editor UI:** React Flow editor over the validated node registry; approval queue route bound to payload SHA + expiry.
-7. **W4-G — CI/ops:** optional live-DB job (Neon branch or disposable project), gitleaks triage → blocking, deploy pipeline. Push + CI verification of the wave-3 merge is still pending (not pushed in this session).
-8. **W4-H — tooling:** `.zed/settings.json` still launches `@mastra/mcp-docs-server@latest`, which crashes on Windows (1.3.10 packaging bug). Qoder uses a pinned local 1.3.9 install; pinning Zed too was declined by the user and remains open.
+Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; inference uses the existing OpenAI-compatible model object and sandboxing uses the existing `SandboxProvider` contract. Full task specs, ownership and dependency graph live in [TASKS.md](TASKS.md#wave-4--provider-plane-baseten-inference--modal-sandboxes-planned-2026-10-29).
+
+- **W4-0 (coordinator):** commit interface contracts; verify `meta-models/muse-spark-open` via `GET /v1/models`; verify Modal egress/image facts against the installed d.ts; provision keys (server-only).
+- **W4-DB (`packages/db`):** jsonb write normalization + `UsageRepository` over existing `usage_records` (no migration).
+- **W4-INF (`packages/mastra`):** Baseten model config, tools passed to `Agent`, `maxSteps`, usage callback, sandbox-backed typed tools through the policy gate.
+- **W4-SBX (`packages/sandbox`):** `ModalSandboxProvider` (`modal@0.11.x`) with injected client, offline fake tests, opt-in live smoke.
+- **W4-WRK (`apps/worker`):** task handler wiring provider + runtime + usage; always destroy in `finally`; abort/lease-safe.
+- **W4-WEB (`apps/web`):** auth/`CallerScope` + compile-at-submit + rejection surfacing (W4-A/C).
+- **W4-OPS:** client sweep patterns (`BASETEN_`, `MODAL_`), optional live smokes, full validate, docs, push on approval.
+
+Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline. W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic. Nothing in wave 4 has been started yet.
 
 ## Repository
 - This repo (`isolate-platform`) contains ONLY event-week work (started Oct 27, 2026), fresh git history. The pre-event spike/compatibility MVP lives in a separate private repo and stays out of this history.

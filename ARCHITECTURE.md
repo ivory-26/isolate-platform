@@ -84,10 +84,14 @@ Run a separate TypeScript process. It claims jobs, applies idempotency, starts a
 
 Begin with one coding agent and one explicit workflow. Add planner/reviewer agents only where tests show a useful improvement.
 
+Provider plan (wave 4): the coding agent runs on Baseten Model APIs (`https://inference.baseten.co/v1`, `BASETEN_API_KEY`, `meta-models/muse-spark-open`) through Mastra's existing OpenAI-compatible model object; `@mastra/core` stays pinned and tool calls are Mastra-native. Usage is recorded per call in `usage_records` and bounded by per-task token/step/time caps. No provider SDK is imported by the web app or the browser bundle.
+
 ### Sandbox
 Run all untrusted repository commands in a disposable cloud sandbox or VM. The sandbox receives only scoped, short-lived credentials required for its task. Enforce execution timeout, CPU/memory limits, output limits, network egress policy, and cleanup. The worker host and web server must never execute untrusted project scripts.
 
 A Git worktree is a workspace convenience, not a security boundary. For independent parallel tasks, use separate sandboxes and branches/worktrees. Never allow concurrent writers to mutate the same checkout or branch without an explicit coordination protocol.
+
+Execution provider (wave 4): `packages/sandbox` defines a deny-by-default `SandboxProvider` (`create/execute/destroy`) with `NullProvider` as the default. `ModalSandboxProvider` (`modal@0.11.x`) provisions one disposable Modal sandbox per task with explicit CPU/memory/lifetime/idle limits, network denied unless an allowlist is required, argv-only execution, bounded output, and idempotent teardown in every exit path. Command policy (timeout, arg shape, output cap, egress intent) stays in trusted platform code and is applied before the provider is called; the provider never falls back to a local process. Live Modal tests are opt-in and intentionally tiny.
 
 ## 4. Suggested folder conventions
 
@@ -239,4 +243,5 @@ Use `project/TASKS.md`, `project/STATUS.md`, `project/DECISIONS.md`, and `projec
 - Use the supported Mastra packages for agents, workflows, storage, observability, and MCP after verifying current versions.
 - Do not assume a package named `@mastra/tanstack-start` exists or is required. Prefer framework-neutral Mastra server-side imports unless official documentation confirms a maintained integration.
 - Confirm the current Mastra storage adapter supports Neon/PostgreSQL and the intended connection mode before implementation.
+- Verify provider facts against installed types before coding: Baseten model id against `GET /v1/models`; Modal egress fields (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) and image capabilities against `modal`'s d.ts. Record divergences in `project/DECISIONS.md`.
 - Record any material choice in `project/DECISIONS.md` and update this document in the same PR when boundaries or data flows change.

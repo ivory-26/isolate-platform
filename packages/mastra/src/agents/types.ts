@@ -33,18 +33,75 @@ export type AgentTurnRecord = {
 	toolCalls: string[];
 	// Narrative/text output for the timeline; never provider payloads.
 	summary: string | null;
+	/**
+	 * Provider-reported token usage for this turn. Null/absent for fakes,
+	 * denials and turns that never reached the model. Never estimated here.
+	 */
+	usage?: AgentUsage | null;
+};
+
+/**
+ * Token usage exactly as reported by the provider for one model call.
+ *
+ * `costUsd` comes from a trusted, configured price table; null means no price
+ * is configured. Agents and model output must never supply token counts or
+ * prices — only `generate()`'s reported usage is mapped into this shape.
+ */
+export type AgentUsage = {
+	providerId: string;
+	modelId: string;
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+	costUsd: number | null;
+};
+
+/** Trusted spend listener; awaited before the next turn so caps see the spend. */
+export type AgentUsageListener = (usage: AgentUsage) => Promise<void> | void;
+
+/**
+ * Hard per-task bounds enforced by the runtime, not by model judgement.
+ * Exhaustion surfaces as `PlatformError("BUDGET_EXCEEDED")`.
+ */
+export type AgentTurnCaps = {
+	/** Max output tokens requested per model call. */
+	maxOutputTokensPerTurn: number;
+	/** Max cumulative tokens for the whole task. */
+	maxTaskTokens: number;
+	/** Finite Mastra step bound passed to `generate()`. */
+	maxSteps: number;
 };
 
 /** Minimal agent-facing surface used by the SDLC workflow. */
 export type CodingAgentRuntime = {
 	id: string;
 	name: string;
+	/**
+	 * Runs one bounded turn. Implementations must throw
+	 * `PlatformError("BUDGET_EXCEEDED")` when `caps` are exhausted and honour
+	 * the abort signal instead of continuing to call the model.
+	 */
 	runTurn(input: {
 		prompt: string;
 		context: TaskContext;
 		signal: AbortSignal;
 	}): Promise<string>;
 };
+
+/**
+ * Per-task runtime factory (wave 4). The worker supplies the record/usage
+ * listeners and caps; the concrete model, tools and provider stay in the
+ * composition root. Tests inject fake factories with the same shape.
+ */
+export type CodingAgentRuntimeFactoryOptions = {
+	onRecord?: (record: AgentTurnRecord) => Promise<void>;
+	onUsage?: AgentUsageListener;
+	caps?: AgentTurnCaps;
+};
+
+export type CodingAgentRuntimeFactory = (
+	options: CodingAgentRuntimeFactoryOptions,
+) => CodingAgentRuntime;
 
 export type OpenAICompatibleModelConfig = {
 	/**

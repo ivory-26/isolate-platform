@@ -13,7 +13,7 @@ export const MAX_LOOP_ATTEMPTS = 10;
 /**
  * Finite node registry: exactly one strict Zod schema per node type. Strict
  * objects reject undeclared fields, which the validator maps to UNSAFE_CONFIG
- * so the visual editor can flag them on the exact key.
+ * at the config boundary without echoing authored keys.
  */
 export const NODE_CONFIG_SCHEMAS = {
 	"task.agent": z.strictObject({
@@ -48,7 +48,7 @@ export type AnyNodeConfigSchema = (typeof NODE_CONFIG_SCHEMAS)[NodeType];
 /**
  * Parses a node config against its registry schema, appending structured
  * issues on failure:
- * - unknown keys of the strict object → UNSAFE_CONFIG (one per key)
+ * - unknown keys of the strict object → UNSAFE_CONFIG at the config path
  * - anything else (wrong type/value) → INVALID_TYPE
  */
 export function parseNodeConfig(
@@ -61,21 +61,33 @@ export function parseNodeConfig(
 		issues.push({
 			path: `${path}.type`,
 			code: "INVALID_TYPE",
-			message: `unknown node type: ${String(type)}`,
+			message: "node type must be a registered node type",
 		});
 		return undefined;
 	}
-	const parsed = NODE_CONFIG_SCHEMAS[type].safeParse(config);
+	const schema = NODE_CONFIG_SCHEMAS[type];
+	if (
+		typeof config === "object" &&
+		config !== null &&
+		!Array.isArray(config) &&
+		Object.keys(config).some((key) => !Object.hasOwn(schema.shape, key))
+	) {
+		issues.push({
+			path,
+			code: "UNSAFE_CONFIG",
+			message: "config contains undeclared fields",
+		});
+		return undefined;
+	}
+	const parsed = schema.safeParse(config);
 	if (parsed.success) return parsed.data;
 	for (const issue of parsed.error.issues) {
 		if (issue.code === "unrecognized_keys") {
-			for (const key of issue.keys) {
-				issues.push({
-					path: `${path}.${String(key)}`,
-					code: "UNSAFE_CONFIG",
-					message: `field "${String(key)}" is not declared for node type ${type}`,
-				});
-			}
+			issues.push({
+				path,
+				code: "UNSAFE_CONFIG",
+				message: "config contains undeclared fields",
+			});
 			continue;
 		}
 		const subPath =

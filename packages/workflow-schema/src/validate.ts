@@ -1,8 +1,8 @@
 import { err, ok, type Result } from "@isolate/shared";
 import { nodeAdjacency, reachableFrom, tarjanComponents } from "./graph";
 import { parseNodeConfig } from "./nodes";
+import { parseDefinitionShape } from "./shape";
 import {
-	EDGE_OPERATORS,
 	NODE_TYPES,
 	type NodeConfig,
 	type ValidatedDefinition,
@@ -16,6 +16,8 @@ import {
 /**
  * Full registry-backed structural + per-type validation (architecture §6):
  * - duplicate ids, missing edge endpoints, unknown node types;
+ * - dotted node ids rejected as INVALID_NODE_ID (Mastra resume path separator);
+ *   other non-empty, dot-free ids and edge references are kept verbatim;
  * - per-type strict config validation (undeclared fields → UNSAFE_CONFIG);
  * - tool.call denied unless the tool is in a supplied allowlist;
  * - condition.switch edges restricted to the enumerated branch values;
@@ -26,7 +28,7 @@ import {
  * - every node reachable from an entry node, and at least one terminal node.
  *
  * Issues are collected (not thrown); the caller decides what to do.
- * @internal Shared by validateDefinition and compileWorkflow.
+ * @internal Requires a shape-checked definition. Shared by the public APIs.
  */
 export function validateDefinitionParts(
 	def: WorkflowDefinition,
@@ -93,12 +95,20 @@ export function validateDefinitionParts(
 				message: "node id must be a non-empty string",
 			});
 		} else {
+			if (id.includes(".")) {
+				issues.push({
+					path: `nodes[${i}].id`,
+					code: "INVALID_NODE_ID",
+					message:
+						'node id must not contain "." because Mastra treats it as a resume path separator',
+				});
+			}
 			const first = indexById.get(id);
 			if (first !== undefined) {
 				issues.push({
 					path: `nodes[${i}].id`,
 					code: "DUPLICATE_ID",
-					message: `duplicate node id ${id} (first declared at nodes[${first}])`,
+					message: `duplicate node id (first declared at nodes[${first}])`,
 				});
 			} else {
 				indexById.set(id, i);
@@ -108,14 +118,14 @@ export function validateDefinitionParts(
 			issues.push({
 				path: `nodes[${i}].label`,
 				code: "INVALID_TYPE",
-				message: `node ${id} label must be a non-empty string`,
+				message: "node label must be a non-empty string",
 			});
 		}
-		if (!(NODE_TYPES as readonly string[]).includes(node.type)) {
+		if (!NODE_TYPES.includes(node.type)) {
 			issues.push({
 				path: `nodes[${i}].type`,
 				code: "INVALID_TYPE",
-				message: `unknown node type: ${String(node.type)}`,
+				message: "node type must be a registered node type",
 			});
 			continue;
 		}
@@ -149,21 +159,18 @@ export function validateDefinitionParts(
 			issues.push({
 				path: `edges[${i}].from`,
 				code: "MISSING_NODE",
-				message: `edge references missing node ${edge.from}`,
+				message: "edge references a missing node",
 			});
 		}
 		if (to === undefined) {
 			issues.push({
 				path: `edges[${i}].to`,
 				code: "MISSING_NODE",
-				message: `edge references missing node ${edge.to}`,
+				message: "edge references a missing node",
 			});
 		}
 		if (from !== undefined && to !== undefined) {
 			indexedEdges.push({ from, to, edge, index: i });
-		}
-		if (edge.when !== undefined) {
-			validateWhenShape(edge, i, issues);
 		}
 	}
 
@@ -180,20 +187,15 @@ export function validateDefinitionParts(
 				issues.push({
 					path: `edges[${ie.index}].when`,
 					code: "INVALID_TYPE",
-					message: `"when" is only supported on condition.switch outgoing edges (edge from ${source.id} is a ${source.type})`,
+					message:
+						'"when" is only supported on condition.switch outgoing edges',
 				});
 			}
 			continue;
 		}
 		const branches = configs.get(source.id);
 		if (branches === undefined || !("branches" in branches)) continue;
-		validateSwitchEdges(
-			ie,
-			ie.index,
-			branches.branches,
-			outgoing[ie.from],
-			issues,
-		);
+		validateSwitchEdges(ie.index, branches.branches, outgoing[ie.from], issues);
 	}
 
 	// --- Cycles: only simple, validate.loop-bounded cycles -------------------
@@ -209,17 +211,18 @@ export function validateDefinitionParts(
 				issues.push({
 					path: `nodes[${v}].id`,
 					code: "CYCLE_NOT_SUPPORTED",
-					message: `self-loop on "${nodesReadonly[v].id}" is not supported; every cycle must be bounded by exactly one validate.loop`,
+					message:
+						"self-loop is not supported; every cycle must be bounded by exactly one validate.loop",
 				});
 				continue;
 			}
-			const vId = nodesReadonly[v].id;
 			const exit = indexedEdges.some((ie) => ie.from === v && ie.to !== v);
 			if (!exit) {
 				issues.push({
 					path: `nodes[${v}].id`,
 					code: "CYCLE_NOT_SUPPORTED",
-					message: `validate.loop "${vId}" has no exit edge; the self-loop would be unbounded`,
+					message:
+						"validate.loop has no exit edge; the self-loop would be unbounded",
 				});
 			}
 			continue;
@@ -246,13 +249,14 @@ export function validateDefinitionParts(
 				issues.push({
 					path: `nodes[${i}].config.tool`,
 					code: "UNAUTHORIZED_TOOL",
-					message: `no tool allowlist was supplied; tool.call "${node.id}" is denied by default`,
+					message:
+						"no tool allowlist was supplied; tool.call is denied by default",
 				});
 			} else if (!allowlist.includes(config.tool)) {
 				issues.push({
 					path: `nodes[${i}].config.tool`,
 					code: "UNAUTHORIZED_TOOL",
-					message: `tool "${config.tool}" is not in the supplied allowlist`,
+					message: "tool is not in the supplied allowlist",
 				});
 			}
 		}
@@ -271,7 +275,7 @@ export function validateDefinitionParts(
 				issues.push({
 					path: `nodes[${i}].config.maxAttempts`,
 					code: "INVALID_TYPE",
-					message: `validate.loop "${node.id}" maxAttempts (${config.maxAttempts}) exceeds the task budget (${options.taskBudget})`,
+					message: "validate.loop maxAttempts exceeds the task budget",
 				});
 			}
 		}
@@ -298,7 +302,8 @@ export function validateDefinitionParts(
 				issues.push({
 					path: `nodes[${i}].id`,
 					code: "UNREACHABLE_REQUIRED_STEP",
-					message: `node "${nodesReadonly[i].id}" is unreachable from any entry node and would never execute`,
+					message:
+						"node is unreachable from any entry node and would never execute",
 				});
 			}
 		}
@@ -316,41 +321,19 @@ export function validateDefinitionParts(
 	return { definition: def, configs, issues };
 }
 
+/** Validates unknown authored JSON; malformed shapes return issues, not throws. */
 export function validateDefinition(
-	def: WorkflowDefinition,
+	input: unknown,
 	options: ValidationOptions = {},
 ): Result<ValidatedDefinition, WorkflowIssue[]> {
-	const validated = validateDefinitionParts(def, options);
+	const parsed = parseDefinitionShape(input);
+	if (!parsed.ok) return err(parsed.error);
+	const validated = validateDefinitionParts(parsed.value, options);
 	if (validated.issues.length > 0) return err(validated.issues);
 	return ok(validated);
 }
 
-function validateWhenShape(
-	edge: WorkflowEdge,
-	i: number,
-	issues: WorkflowIssue[],
-): void {
-	const when = edge.when;
-	const okWhen =
-		typeof when === "object" &&
-		when !== null &&
-		typeof when.left === "string" &&
-		when.left.length > 0 &&
-		(EDGE_OPERATORS as readonly string[]).includes(when.operator) &&
-		(typeof when.right === "string" ||
-			typeof when.right === "boolean" ||
-			typeof when.right === "number");
-	if (okWhen) return;
-	issues.push({
-		path: `edges[${i}].when`,
-		code: "INVALID_TYPE",
-		message:
-			"edge condition `when` must be { left: non-empty string, operator: eq|ne|truthy, right: string|boolean|number } (regex-free, enumerated language only)",
-	});
-}
-
 function validateSwitchEdges(
-	firstEdge: { edge: WorkflowEdge; index: number },
 	index: number,
 	branches: string[],
 	outgoingEdges: Array<{ edge: WorkflowEdge; index: number }>,
@@ -364,7 +347,8 @@ function validateSwitchEdges(
 			issues.push({
 				path: `edges[${outgoingEdge.index}].when`,
 				code: "INVALID_TYPE",
-				message: `outgoing edges of condition.switch must carry a "when" branch condition (edge from ${firstEdge.edge.from})`,
+				message:
+					'outgoing edges of condition.switch must carry a "when" branch condition',
 			});
 			continue;
 		}
@@ -382,7 +366,8 @@ function validateSwitchEdges(
 			issues.push({
 				path: `edges[${outgoingEdge.index}].when.right`,
 				code: "INVALID_TYPE",
-				message: `switch edge condition must compare against one of the enumerated branches [${branches.join(", ")}]`,
+				message:
+					"switch edge condition must compare against one of the enumerated branches",
 			});
 			invalidValue = true;
 		}
@@ -404,16 +389,17 @@ function validateSwitchEdges(
 			issues.push({
 				path: `nodes.config.branches`,
 				code: "INVALID_TYPE",
-				message: `enumerated branch "${branch}" of condition.switch ${firstEdge.edge.from} has no outgoing edge`,
+				message: "enumerated branch of condition.switch has no outgoing edge",
 			});
 		}
 	}
-	for (const [branch, count] of mapped) {
+	for (const count of mapped.values()) {
 		if (count > 1) {
 			issues.push({
 				path: `edges.config.branches`,
 				code: "INVALID_TYPE",
-				message: `branch "${branch}" is mapped by ${count} outgoing edges; each branch must map to exactly one edge`,
+				message:
+					"branch is mapped by multiple outgoing edges; each branch must map to exactly one edge",
 			});
 		}
 	}
@@ -436,11 +422,11 @@ function validateSimpleLoopComponent(
 		(ie) => ie.from === ie.to && members.has(ie.from),
 	);
 	if (hasSelfLoop) {
-		const label = component.map((i) => nodes[i].id).join(", ");
 		issues.push({
 			path: "nodes",
 			code: "CYCLE_NOT_SUPPORTED",
-			message: `cycle [${label}] contains a self-loop nested inside another cycle; only a single simple cycle bounded by one validate.loop is supported`,
+			message:
+				"cycle contains a self-loop nested inside another cycle; only a single simple cycle bounded by one validate.loop is supported",
 		});
 		return false;
 	}
@@ -463,11 +449,11 @@ function validateSimpleLoopComponent(
 		}
 	}
 	if (!simple) {
-		const label = component.map((i) => nodes[i].id).join(", ");
 		issues.push({
 			path: "nodes",
 			code: "CYCLE_NOT_SUPPORTED",
-			message: `cycle [${label}] is nested or intersecting; only a single simple cycle bounded by one validate.loop is supported`,
+			message:
+				"cycle is nested or intersecting; only a single simple cycle bounded by one validate.loop is supported",
 		});
 		return false;
 	}
@@ -475,11 +461,10 @@ function validateSimpleLoopComponent(
 		(i) => nodes[i].type === "validate.loop",
 	);
 	if (loopMembers.length !== 1) {
-		const label = component.map((i) => nodes[i].id).join(", ");
 		issues.push({
 			path: "nodes",
 			code: "CYCLE_NOT_SUPPORTED",
-			message: `cycle [${label}] must be bounded by exactly one validate.loop (found ${loopMembers.length})`,
+			message: "cycle must be bounded by exactly one validate.loop",
 		});
 		return false;
 	}
@@ -490,11 +475,11 @@ function validateSimpleLoopComponent(
 		issues.push({
 			path: `nodes[${switchMember}].id`,
 			code: "CYCLE_NOT_SUPPORTED",
-			message: `condition.switch "${nodes[switchMember].id}" participates in a cycle; branch back edges into an executed set are unsupported`,
+			message:
+				"condition.switch participates in a cycle; branch back edges into an executed set are unsupported",
 		});
 		return false;
 	}
-	const loopNode = nodes[loopMembers[0]];
 	const hasExit = indexedEdges.some(
 		(ie) => ie.from === loopMembers[0] && !members.has(ie.to),
 	);
@@ -502,7 +487,7 @@ function validateSimpleLoopComponent(
 		issues.push({
 			path: `nodes[${loopMembers[0]}].id`,
 			code: "CYCLE_NOT_SUPPORTED",
-			message: `validate.loop "${loopNode.id}" has no exit edge; the cycle would be unbounded`,
+			message: "validate.loop has no exit edge; the cycle would be unbounded",
 		});
 		return false;
 	}

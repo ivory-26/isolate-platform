@@ -11,39 +11,49 @@ Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w3-*`. Common rules: age
 - File ownership: `apps/worker/**`
 - Work: the per-job hard timeout now has its contract in `@isolate/shared` (`workerConfigSchema.jobTimeoutMs`, default 120000, bounds 1000–3600000). Source it from parsed WorkerConfig; keep the dep-level override strictly as a test seam; update createdAt/fixtures; keep all 20 loop/config tests green and add coverage that config-supplied timeouts are honored (including BUDGET_EXCEEDED path).
 - DoD: scoped gates green ×2 reproducibility, commit, report with command evidence.
-- Status: in progress
+- Status: **done** — commit `e73e3d1`; coordinator gates: tsc clean, 33 pass / 0 fail ×2, biome clean 0 issues.
 
 ### W3-D — Wave-3 DB schema + repositories
 - Owner: agent session W3-D · Branch: `task/w3-db`
 - File ownership: `packages/db/**`
 - Work: migration `0002_workflow_compilation.sql` (idempotent, Postgres ≥13, editorial style matching 0001): `compiled_plans` (org-scoped, `workflow_definition_id` + version-pinned `workflow_version` uniqueness, `plan` JSONB, `created_at`) and `rejection_issues` (`workflow_definition_id`, `workflow_version`, `issues` JSONB, `created_at`); new repositories `CompiledPlanRepository` (save/get/list, version immutability) and `WorkflowRejectionRepository` (record by version, list latest) with in-memory fakes built on pure decision helpers, offline tests mirroring `approval-repository.test.ts` style, live-Neon suite updates that skip cleanly without `DATABASE_URL`.
 - DoD: scoped gates green ×2; migration NOT applied (coordinator applies); commit + report.
-- Status: in progress
+- Status: **done** — commit `70497f4`; 137 offline pass / 2 live skips; migration `0002` applied by coordinator (20/20 tables); live suite 139/139 after fixing jsonb `::text::jsonb` binding (commit `7ffdead`).
 
 ### W3-F — Compiler: forbid dotted node ids
 - Owner: agent session W3-F · Branch: `task/w3-wfschema`
 - File ownership: `packages/workflow-schema/**`
 - Work: validator must reject any node id containing `.` (Mastra resume treats `.` as a path separator — see DECISIONS B2 note); new rejection class with dedicated tests; keep all 52 existing tests green; document in the module docstring.
 - DoD: scoped gates green ×2; commit + report.
-- Status: in progress
+- Status: **done** — commit `7d7afd6`; 157 pass / 0 fail (up from 52; dot-id rejection + unknown-input shape hardening); tsc/biome clean.
 
 ### W3-U — Fresh web app scaffold + minimal control-plane UI
 - Owner: agent session W3-U · Branch: `task/w3-web`
 - File ownership: `apps/web/**` only (its package.json is inside). May `bun add` (worktree-local bun.lock changes allowed; coordinator owns the root lockfile merge).
 - Work: fresh TanStack Start app (not a port) — Bun, React, TS strict; two routes: task submission (org-scoped, server function validates via `@isolate/shared` schemas and enqueues through `TaskRepository`/`QueueRepository` contracts; when `DATABASE_URL` is absent use the in-memory fakes from `@isolate/db/testing`) and a runs/tasks list (latest-first, sanitized fields only). Deps: `@tanstack/react-start`, `@tanstack/react-router`, `@tanstack/react-query`, react/react-dom, zod. Use the installed skills `tanstack-start-best-practices` / `tanstack-router-best-practices` / `tanstack-query-best-practices` + context7 for API confirmation. No secrets, no model providers, no sandbox execution in browser bundles; verify `dist/client` excludes `apiKey`/`DATABASE_URL`/provider hosts. Must pass root `bun run typecheck` (project auto-discovery) and `bunx biome check apps/web`.
 - DoD: scoped gates + production build green; commit (excluding node_modules); report with command evidence. If online scaffold tooling fails, hand-build a minimal TanStack Start app from docs (do not commit broken state).
-- Status: in progress
+- Status: **done** — commit `cd3c40f`; tsc clean, 114 pass, production build + 22-check client secret sweep green. Integration note: the worktree also contained stale copies of W3-D/W3-F package work; those were dropped in favor of the canonical branches (hash-verified) before merge.
 
 ### W3-S — `packages/sandbox`: adapter contract + git helpers + command policy
 - Owner: agent session W3-S · Branch: `task/w3-sandbox`
 - File ownership: `packages/sandbox/**`
 - Work: package from scratch (package.json, tsconfig matching sibling conventions, src). Deliver: (1) `SandboxProvider` adapter interface + a deny-by-default `NullProvider` that refuses every execution (no host process spawning of untrusted code — enforce in types and tests); (2) `commandPolicy` — timeout/arg-shape/output-cap/egress validators over an explicit allowlist shape; (3) `git` helpers — `openRepo`, `createBranch`, `createWorktree`, `removeWorktree`, unique `task/<id>` branch naming, operating with `Bun.$` on explicit paths (temp fixtures under the platform temp dir; never the host repo), bounded output; offline tests only.
 - DoD: scoped gates green; package discovered by root typecheck (already wired); commit + report.
-- Status: in progress
+- Status: **done** — commit `3c8ef0a`; 119 pass / 0 fail, tsc/biome clean, offline-only.
 
 ## Wave 3 — Integration & validation (coordinator, after W3-* report)
 - Merge `task/w3-*` → `main` centrally; regenerate root lockfile; full `bun run validate`; apply `0002_workflow_compilation.sql` to Neon `isolate-platform` **with user approval (Neon MCP)**; QA/DoD audit; web client-bundle secret sweep; docs (ARCHITECTURE/STATUS/CHALLENGES/SKILL-REGISTRY); push; verify CI green.
-- Status: in progress
+- Status: **done (except push/CI verification)** — five zero-conflict merges; lockfile regenerated; `bun run validate` 662/662 with live Neon; migration applied (20/20 tables); client sweep 22 checks; CI updated with web build + sweep. Not pushed by request scope; CI on remote unverified.
+
+## Wave 4 — next queue (handover)
+- **W4-A — auth/tenancy:** concrete `AuthoredWorkflowVersionReader`, real session → `CallerScope`, membership/permission enforcement, API-boundary tenant-isolation tests. Owner: TBD.
+- **W4-B — jsonb write normalization:** migrate 0001 repositories from `JSON.stringify(...)` → `::jsonb` binds to object or `::text::jsonb`; add live `jsonb_typeof` assertions; re-enable/verify SQL-side `budget_limits->>` scans. Owner: TBD.
+- **W4-C — compilation in the task pipeline:** compile at submit → persist pinned plan → worker consumes pinned plan; surface rejection issues in UI. Owner: TBD.
+- **W4-D — Mastra storage + worker integration:** verify Neon/Postgres storage adapter vs `@mastra/core@1.79.0` d.ts; wire `createSdlcWorkflow` (suspension/approval resume) into worker. Owner: TBD.
+- **W4-E — sandbox execution plane:** hosted `SandboxProvider` + command/egress policy enforcement in worker; NullProvider stays default in dev/CI. Owner: TBD.
+- **W4-F — approvals + visual editor:** React Flow editor over the node registry; approval queue route with payload-SHA + expiry binding. Owner: TBD.
+- **W4-G — CI/ops:** optional live-DB CI job, gitleaks triage → blocking, deploy pipeline, push + verify CI for the wave-3 merge.
+- **W4-H — tooling:** pin Zed's `mastra` MCP to `@mastra/mcp-docs-server@1.3.9` (1.3.10 crashes on Windows); declined during wave 3, still open.
 
 ## Wave 2 — Integration & validation (coordinator)
 - Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.

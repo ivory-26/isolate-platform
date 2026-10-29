@@ -70,6 +70,8 @@ Use Bun and TanStack Start with React, TanStack Router, and TanStack Query. The 
 
 TanStack server handlers/functions are the control-plane boundary. They validate requests, authenticate the caller, enforce tenant access, persist task metadata, and enqueue work. They must not run arbitrary repository code or hold open an HTTP request for the full agent execution.
 
+Implemented in wave 3 (`apps/web`): TanStack Start + Router + Query with two routes — task submission and runs/tasks list. Server functions use `createServerFn` with `@isolate/shared` validation and `Cache-Control: private, no-store`; DB access is server-only (`@isolate/db` in Postgres mode, `@isolate/db/testing` fakes in local mode when `DATABASE_URL` is absent). A production build plus a client-bundle secret sweep (`scripts/check-client.ts`, 22 checks) run in CI to keep provider keys and DB URLs out of the browser. Session→tenant resolution and the authored-version reader are explicit seams for wave 4 (W4-A).
+
 ### Worker
 Run a separate TypeScript process. It claims jobs, applies idempotency, starts and monitors executions, invokes Mastra workflows, persists status/events, handles cancellation/timeouts, and cleans up sandboxes. Use a durable queue or a database-backed queue with atomic claiming, retries, dead-letter handling, and duplicate protection. Select the concrete queue implementation in an ADR before relying on it.
 
@@ -140,6 +142,7 @@ Use Neon PostgreSQL for durable application state. At minimum, model:
 - `organizations`, `users`, `memberships`
 - `repositories`, `integrations`, `integration_permissions`
 - `workflow_definitions`, `workflow_versions`
+- `compiled_plans`, `rejection_issues` (wave 3 — see §6)
 - `tasks`, `task_attempts`, `workflow_runs`
 - `run_events`, `artifacts`, `approvals`
 - `tool_invocations`, `audit_events`, `usage_records`
@@ -147,6 +150,11 @@ Use Neon PostgreSQL for durable application state. At minimum, model:
 Every tenant-owned record must carry an organization/tenant identifier and be checked in server-side authorization. Use foreign keys, unique idempotency keys, and explicit lifecycle enums. Keep large logs/artifacts in object storage when appropriate; store metadata and references in Neon.
 
 Use Neon connection pooling appropriately for serverless/web workloads, and ensure migrations and transaction patterns work with the chosen driver. Do not assume every adapter supports every pooling mode. Select the Mastra storage adapter only after confirming current PostgreSQL/Neon support; do not introduce another database merely to satisfy a tutorial.
+
+Implemented data-plane notes (wave 3):
+- Neon Pg 17, PgBouncer transaction mode → `prepare: false`; row mappers normalize jsonb via `parseJsonbColumn` (drivers may return jsonb as a raw JSON string on pooled endpoints).
+- JSON writes bind `$n::text::jsonb`, never `$n::jsonb`: postgres.js stringifies a JS string parameter before the cast, which would store a JSON *string scalar* (`jsonb_typeof = 'string'`). This was latent under `0001` and became a hard failure once `0002` added `jsonb_typeof` CHECKs (W4-B tracks the remaining `0001` write paths).
+- Compilation artifacts are insert-only and tenant/version-scoped; composite foreign keys `(organization_id, workflow_definition_id)` and `(workflow_definition_id, workflow_version)` prevent cross-tenant and nonexistent-version references.
 
 ## 6. Workflow definition and compilation
 
@@ -158,6 +166,13 @@ The visual editor stores a versioned JSON graph:
 - each run pins a workflow version so later edits cannot silently change an active execution.
 
 Never evaluate arbitrary user expressions with `eval` or compile arbitrary user-provided TypeScript in the control plane. Start with a small, explicit condition language and a finite node registry.
+
+Compilation persistence (wave 3, `0002_workflow_compilation.sql`):
+- `compiled_plans` — one immutable plan per `(organization_id, workflow_definition_id, workflow_version)`. Insert-only: a second save of an existing pin is `CONFLICT` (even for an identical plan); callers must create a new version. A plan/pin CHECK enforces `plan->>'workflowId' = definition` and `plan->'versionPinned' = version`.
+- `rejection_issues` — append-only history of compiler rejections for a version (non-empty issues array CHECK; indexed by `(org, def, version, created_at DESC, id DESC)`), not a mutable "last error".
+- Repositories expose pure decision helpers (`evaluateWorkflowVersion`, `evaluatePlanSaveOutcome`) shared by the Postgres drivers and in-memory fakes, so `NOT_FOUND` (foreign tenant / missing version) is never misreported as `CONFLICT`.
+
+Node-id grammar: ids must not contain `.`. Mastra resolves suspended steps by splitting the resume label on `.`, so a dotted id (e.g. `sdlc.review_ready`) is parsed as a nested path and cannot be resumed. The compiler rejects dotted ids with `INVALID_NODE_ID` at `nodes[index].id` and never rewrites authored ids. `compileWorkflow`/`validateDefinition` accept `unknown` from authored JSON and reject unknown fields rather than stripping them; diagnostics report paths and codes without echoing authored values.
 
 ## 7. Integrations, MCP, and custom skills
 

@@ -169,3 +169,39 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: task assignment lives only in orchestration context, not on disk.
 - Correction: reports keyed by worktree path/branch via `git worktree list`; agents write task id + touch-set into `project/TASKS.md` at claim time.
 - Prevention: persist task manifest at spawn (worktree, branch, ownership list) and require a claim-time record before edits.
+
+## 2026-10-29 — Wave 3: uncommitted work spread across five worktrees + main
+- Symptom: five `task/w3-*` branches held completed but uncommitted work on disk; `main` also had uncommitted files. A naive checkout/merge would either lose worktree edits or overwrite them.
+- Root cause: agents stopped mid-sprint (context limits) before their commit step; the worktree directories are separate checkouts, so each branch's "uncommitted" state is invisible from `main`.
+- Correction: inventory every worktree via `git worktree list` + `git status` per path, commit each branch in place (never from `main`), then `--no-ff` merge with a backup tar for anything classified as duplicate. Result: zero conflicts, zero overwrites.
+- Prevention: commit-time task-record discipline (above) plus a wave-close "worktree sweep" step that treats every `task/*` worktree as a potential uncommitted deliverable, not just the one being merged.
+
+## 2026-10-29 — Wave 3: `w3-web` carried a stale duplicate of W3-D/W3-F packages
+- Symptom: before merging `task/w3-web` it contained full copies of `packages/db` and `packages/workflow-schema` alongside `apps/web`; hashing showed all files identical except `packages/db/src/index.ts` (older export list).
+- Root cause: the web agent scaffolded against a snapshot of sibling packages instead of importing the committed workspace packages — a copy, not a dependency.
+- Correction: hash-compared every file, backed up the duplicate trees to `/tmp/w3-web-dupes-backup/packages-dupes.tar`, reverted them on the branch, and merged only `apps/web`. `w3-db`/`w3-wfschema` remain canonical.
+- Prevention: a merge gate that rejects a `task/*` branch touching packages it does not own; `git diff --stat main...<branch> -- packages/` should be empty for non-owner branches.
+
+## 2026-10-29 — JSON params bound to `::jsonb` were double-encoded (CHECK exposed it)
+- Symptom: live suite failed `23514 compiled_plans_plan_check` on every `save`, though the plan was a valid object in TypeScript; a probe showed `jsonb_typeof(plan) = 'string'`.
+- Root cause: postgres.js serializes a JS string parameter to a JSON string before the `::jsonb` cast parses it, producing a JSON *string scalar* whose contents are the plan text. `0001` masked this because `parseJsonbColumn` parsed the double-encoded value on read; `0002`'s `jsonb_typeof(plan) = 'object'` CHECK made storage correctness observable.
+- Correction: bind `$n::text::jsonb` in both new repositories and in the live test's direct inserts; live suite then asserts DB-level JSON types (object/array) in addition to roundtrip equality. All 139/139 `packages/db` live tests green.
+- Prevention: never assume a driver's type coercion under a cast; when a new CHECK or SQL-side JSON access is introduced, verify `jsonb_typeof` at the DB, not just the repo roundtrip. Wave-4 W4-B tracks the same latent pattern in `0001` write paths.
+
+## 2026-10-29 — Live test param-type inference: `$1` used as both `text` and `uuid`
+- Symptom: `42P08 inconsistent types deduced for parameter $1: text versus uuid` in the organizations insert.
+- Root cause: the same `$1` was used as a `uuid` primary key and as a `slug` text value; Postgres could not infer one type for both.
+- Correction: explicit `$1::uuid` / `$2::uuid` casts for ids, `$1::text` for the slug. The test still uses only generated UUIDs.
+- Prevention: when one parameter feeds columns of different types, cast at each site; don't rely on inference across a multi-use parameter.
+
+## 2026-10-29 — CRLF/tsconfig newline noise across worktrees looked like real diffs
+- Symptom: identical `tsconfig.json` files showed as modified across worktrees (trailing newline / EOL only); biome format gate could flag unchanged files.
+- Root cause: Windows checkouts with mixed EOL normalization + editors adding a trailing newline; `.gitattributes` (`eol=lf`) fixes new blobs but does not retroactively normalize already-different working copies.
+- Correction: byte/EOL-aware hash comparison to prove the files were identical in content; excluded the noise from branch commits instead of overwriting another agent's file.
+- Prevention: normalize with the scoped `biome check --write` before declaring a diff, and never "fix" another owner's file to silence formatting noise — that is exactly the overwrite the merge discipline forbids.
+
+## 2026-10-29 — Mastra docs MCP 1.3.10 is broken on Windows; `npx` cold starts time out
+- Symptom: `@mastra/mcp-docs-server@latest` (1.3.10) crashed at startup with `ERR_MODULE_NOT_FOUND` resolving `@modelcontextprotocol/client/dist/index.mjs`; `npx`-launched stdio MCP servers intermittently timed out during handshake.
+- Root cause: a packaging defect in 1.3.10's dependency layout; separately, Windows `npx` cold start can exceed the MCP client's init timeout.
+- Correction: installed pinned local copies (`~/.qoder/mcp-servers/{context7,mastra-docs}`, mastra-docs pinned 1.3.9) and launch them with `node <dist/index.js>` instead of `npx`. Neon uses the hosted streamable-HTTP MCP with OAuth.
+- Prevention: pin MCP server versions and pre-install them locally on Windows; a local `node` entrypoint removes `npx` from the startup path entirely. Zed's config still uses `@latest` and is tracked as W4-H (user declined to change it).

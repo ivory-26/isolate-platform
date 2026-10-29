@@ -181,7 +181,7 @@ Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth st
 - Migration `0004_task_context.sql`: `goal text`, `acceptance_criteria jsonb`, `file_ownership jsonb` with array CHECKs (additive; existing rows default to `''`/`[]`).
 - `submitTaskSchema` requires a goal and bounds both lists; the form collects them one-per-line.
 - `PostgresTaskContextRepository` joins task → repository under one `organization_id`; the worker maps to `TaskContext` and fails closed on missing/terminal/foreign rows.
-- Status: **code done; migration apply pending user approval** (the MCP write was blocked in this session).
+- Status: **done** — migration applied and verified; live suite includes the round-trip and foreign-tenant null read.
 
 ### W6-WRK — Sandbox handle binding + real composition
 - `CodingAgentRuntimeFactoryOptions` gains `sandboxBackend` + `toolContext`; the handler builds it from the provisioned handle.
@@ -190,8 +190,9 @@ Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth st
 - Status: **done** — offline fakes only; no keyed calls.
 
 ### W6-OPS — Validation and keyed acceptance (pending keys)
-- Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip, web build + 30-check sweep + smoke, `acceptance:offline` PASS.
-- Pending: apply `0004`, run the live Neon suite, then Phase D/E (one Baseten completion, one Modal sandbox) with user-supplied keys and cap enforcement; read `usage_records`, destroy sandboxes, update docs.
+- Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip ×2, web build + 30-check sweep + smoke, `acceptance:offline` PASS.
+- Live Neon: migration `0004` applied and verified; full suite 950 pass / 0 fail.
+- Pending: Phase D/E (one Baseten completion, one Modal sandbox) with user-supplied keys and cap enforcement; read `usage_records`, destroy sandboxes, update docs. Runner: `BASETEN_LIVE=1 MODAL_LIVE=1 bun run acceptance:live` (refuses without the opt-in flags, sequential, no retries, max 16 output tokens and a 60 s sandbox).
 - Merge `task/w6-finish` → `main` after acceptance.
 
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)

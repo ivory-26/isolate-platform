@@ -293,7 +293,7 @@ function createDeps(
 			if (options.onUsage) {
 				await options.onUsage({
 					providerId: "baseten",
-					modelId: "meta-models/muse-spark-open",
+					modelId: "meta-models/muse-spark-open-1026",
 					promptTokens: 10,
 					completionTokens: 5,
 					totalTokens: 15,

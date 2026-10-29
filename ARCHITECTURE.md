@@ -90,7 +90,7 @@ Composition (wave 6): `apps/worker/src/runtime-composition.ts` binds the Postgre
 
 Begin with one coding agent and one explicit workflow. Add planner/reviewer agents only where tests show a useful improvement.
 
-Provider plan (wave 4): the coding agent runs on Baseten Model APIs (`https://inference.baseten.co/v1`, `BASETEN_API_KEY`, `meta-models/muse-spark-open`) through Mastra's existing OpenAI-compatible model object; `@mastra/core` stays pinned and tool calls are Mastra-native. Usage is recorded per call in `usage_records` and bounded by per-task token/step/time caps. No provider SDK is imported by the web app or the browser bundle.
+Provider plan (wave 4): the coding agent runs on Baseten Model APIs (`https://inference.baseten.co/v1`, `BASETEN_API_KEY`, `meta-models/muse-spark-open-1026`) through Mastra's existing OpenAI-compatible model object; `@mastra/core` stays pinned and tool calls are Mastra-native. Meta Muse Spark Open is the only configured inference model; no fallback provider or model exists. Usage is recorded per call in `usage_records` and bounded by per-task token/step/time caps. No provider SDK is imported by the web app or the browser bundle.
 
 Per-job tool binding (wave 6): the worker provisions the sandbox first, builds a `SandboxToolBackend` over that handle (every call passes `executeCommand` with the trusted `CommandPolicy`), and passes it plus the job's organization/task ids to `CodingAgentRuntimeFactoryOptions`. The factory wires `wireSandboxTools(...).forTask(...)`, so one agent turn can reach exactly one sandbox and one task. Without a backend the runtime runs tool-less.
 

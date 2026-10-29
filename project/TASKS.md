@@ -64,7 +64,7 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 
 ### W4-0 — Coordinator pre-work (contracts only, NO keys)
 - Commit cross-lane contracts FIRST: `AgentUsage` + `onUsage` hook in `packages/mastra/src/agents/types.ts`; `SandboxToolBackend` interface (read/list/search/exec/git) for the tool layer; `UsageSink` shape consumed by the worker (implemented by W4-DB). Interfaces only, no implementations.
-- Verify provider facts against **installed types and published docs only** — no keyed call: `baseten` provider id and documented model id `meta-models/muse-spark-open`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git). The dated snapshot id is confirmed in Phase D with a single `GET /v1/models`.
+- Verify provider facts against **installed types and published docs only** — no keyed call: `baseten` provider id and model id `meta-models/muse-spark-open-1026`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git). Phase D's single `GET /v1/models` confirms the id.
 - **Do NOT provision, request, or test with Baseten/Modal credentials here.** Keys are Phase D, after A–C are green.
 - Status: **done** — commits `d0da5ff` (contracts: `UsageRecordInput`/`UsageSink` in `@isolate/shared`; `AgentUsage`/`AgentUsageListener`/`AgentTurnCaps`/`CodingAgentRuntimeFactory` + optional `AgentTurnRecord.usage` in `@isolate/mastra`; `SandboxToolBackend` in `tools/sandbox-backend.ts`) and `a80868e` (verified Modal 0.11.1/Baseten/Mastra facts + Phase-C acceptance design in DECISIONS). Full offline validate in the worktree: 660 pass / 2 skip / 0 fail, 8/8 typecheck, biome clean. No keyed calls.
 
@@ -75,7 +75,7 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - Status: **done** — commit `fe70346` (merge `75b668a`). Six jsonb write sites now bind `$n::text::jsonb`; live `jsonb_typeof` + `budget_limits->>` suite; exact micro-dollar `UsageRepository` + in-memory fake. Gates ×2: 154 pass / 4 skip offline; on `main` with Neon: 158 pass / 0 fail (live jsonb + usage rows green).
 
 ### W4-INF — `packages/mastra/**` (owner: agent W4-INF, branch `task/w4-inf`)
-- `basetenModelConfig(env)`: `{ providerId: "baseten", modelId: BASETEN_MODEL_ID (default meta-models/muse-spark-open), url: BASETEN_BASE_URL ?? "https://inference.baseten.co/v1", apiKey: BASETEN_API_KEY }`; fail closed with a bounded error when the key is absent (no silent fallback).
+- `basetenModelConfig(env)`: `{ providerId: "baseten", modelId: BASETEN_MODEL_ID (default meta-models/muse-spark-open-1026), url: BASETEN_BASE_URL ?? "https://inference.baseten.co/v1", apiKey: BASETEN_API_KEY }`; fail closed with a bounded error when the key is absent (no silent fallback).
 - Extend `defineCodingAgent` to accept `tools` + `maxSteps`; extend `createMastraAgentRuntime` to pass them and emit `onUsage` from the generate result (verify exact token field names against the installed d.ts) and record tool names in `AgentTurnRecord.toolCalls` (never payloads).
 - Sandbox-backed tools behind injected `SandboxToolBackend`, wired through the existing `wirePlatformTools` policy gate (`repo.read_file`, `repo.list_files`, `repo.search`, `sandbox.exec`, git read ops). Deny-by-default and approval routing stay in `tools/policy.ts`.
 - Bounded loop: per-turn output-token cap, per-task token accumulator → `BUDGET_EXCEEDED` block; `maxSteps` finite.
@@ -189,11 +189,11 @@ Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth st
 - `createBasetenRuntimeFactory`, DB queue/usage/task-context composition, Modal provider selection (lazy app resolution) and fail-closed provider selection.
 - Status: **done** — offline fakes only; no keyed calls.
 
-### W6-OPS — Validation and keyed acceptance (pending keys)
-- Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip ×2, web build + 30-check sweep + smoke, `acceptance:offline` PASS.
+### W6-OPS — Validation and keyed acceptance
+- Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip ×2, web build + 30-check sweep + smoke, `acceptance:offline` PASS (`--no-env-file`).
 - Live Neon: migration `0004` applied and verified; full suite 950 pass / 0 fail.
-- Pending: Phase D/E (one Baseten completion, one Modal sandbox) with user-supplied keys and cap enforcement; read `usage_records`, destroy sandboxes, update docs. Runner: `BASETEN_LIVE=1 MODAL_LIVE=1 bun run acceptance:live` (refuses without the opt-in flags, sequential, no retries, max 16 output tokens and a 60 s sandbox).
-- Merge `task/w6-finish` → `main` after acceptance.
+- Keyed acceptance (one run): models 20 listed / target present → one completion HTTP 200, 148 prompt + 16 completion tokens, no tools → one Modal sandbox 0.125 CPU / 512 MiB / 60 s, `echo` exit 0, terminated → usage rows recorded, printed and cleaned. No trusted price configured, so cost stays null.
+- Status: **done** — live pass complete; Google consent remains a user browser check. Merge `task/w6-finish` → `main`.
 
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.

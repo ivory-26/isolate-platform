@@ -21,7 +21,7 @@ import {
 	type SandboxHandle,
 } from "../packages/sandbox/src/index";
 
-const BASETEN_MODEL = "meta-models/muse-spark-open";
+const BASETEN_MODEL = "meta-models/muse-spark-open-1026";
 const BASETEN_BASE = "https://inference.baseten.co/v1";
 const ACCEPTANCE_MAX_OUTPUT_TOKENS = 16;
 const ACCEPTANCE_SANDBOX_TIMEOUT_MS = 60_000;

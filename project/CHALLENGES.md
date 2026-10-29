@@ -294,3 +294,9 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: wave 4 kept the factory provider-agnostic by omission; the handle existed only inside the handler.
 - Correction: the handler now builds a policy-gated `SandboxToolBackend` from the provisioned handle and passes it plus the trusted task ids to the factory; the factory wires `wireSandboxTools(...).forTask(...)`.
 - Prevention: when a per-job resource is created by one layer and needed by another, put it in the interface between them explicitly; "provider-agnostic" must not mean "resource-free".
+
+## 2026-10-29 — W6: offline acceptance refuses once a keyed `.env` exists
+- Symptom: `bun run acceptance:offline` exited 1 with "provider environment variables are set (MODAL_API_KEY)" even though the script imports no provider SDK; the same command had passed before the worktree gained a `.env`.
+- Root cause: Bun auto-loads `.env` for `bun run`, and the offline script deliberately refuses to start when any `BASETEN_*`/`MODAL_*` variable is present — exactly the guard that keeps CI key-free.
+- Correction: run the offline acceptance with `bun --no-env-file scripts/acceptance-offline.ts` in a keyed workspace, or keep the keyed `.env` outside that invocation. CI has no `.env`, so its plain command still exercises the guard.
+- Prevention: treat "offline acceptance refuses" as a key-presence signal, not a bug. Make the key-free invocation explicit (`--no-env-file`) in local runbooks.

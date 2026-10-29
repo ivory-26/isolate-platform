@@ -46,7 +46,7 @@ describe("createBasetenRuntimeFactory", () => {
 	test("builds a runtime with and without a sandbox binding", () => {
 		const factory = createBasetenRuntimeFactory({
 			BASETEN_API_KEY: "test-key",
-			BASETEN_MODEL_ID: "meta-models/muse-spark-open",
+			BASETEN_MODEL_ID: "meta-models/muse-spark-open-1026",
 		});
 		const plain = factory({ caps });
 		expect(plain.id).toBe("coding-agent");

@@ -22,7 +22,7 @@ function usageInput(
 		organizationId: ORG,
 		taskId: TASK,
 		provider: "baseten",
-		modelId: "meta-models/muse-spark-open",
+		modelId: "meta-models/muse-spark-open-1026",
 		promptTokens: 10,
 		completionTokens: 5,
 		costUsd: 0.1,
@@ -140,7 +140,7 @@ describe("InMemoryUsageRepository (UsageRepository contract)", () => {
 		expect(row.organization_id).toBe(ORG);
 		expect(row.task_id).toBe(TASK);
 		expect(row.provider).toBe("baseten");
-		expect(row.model_id).toBe("meta-models/muse-spark-open");
+		expect(row.model_id).toBe("meta-models/muse-spark-open-1026");
 		expect(row.prompt_tokens).toBe(100);
 		expect(row.completion_tokens).toBe(25);
 		expect(row.cost_usd).toBe("0.100000");
@@ -322,7 +322,7 @@ describe("PostgresUsageRepository SQL wiring", () => {
 				id: "usage-1",
 				organization_id: ORG,
 				task_id: null,
-				model_id: "meta-models/muse-spark-open",
+				model_id: "meta-models/muse-spark-open-1026",
 				provider: "baseten",
 				prompt_tokens: 100,
 				completion_tokens: 25,

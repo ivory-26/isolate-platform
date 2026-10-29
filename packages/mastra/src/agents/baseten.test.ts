@@ -101,12 +101,12 @@ describe("basetenModelConfig", () => {
 
 describe("estimateUsageCostUsd", () => {
 	const usage = {
-		modelId: "meta-models/muse-spark-open",
+		modelId: "meta-models/muse-spark-open-1026",
 		promptTokens: 1000,
 		completionTokens: 500,
 	};
 	const table = {
-		"meta-models/muse-spark-open": {
+		"meta-models/muse-spark-open-1026": {
 			promptUsdPerMillion: 3,
 			completionUsdPerMillion: 15,
 		},
@@ -135,7 +135,7 @@ describe("estimateUsageCostUsd", () => {
 			promptUsdPerMillion: number,
 			completionUsdPerMillion: number,
 		) => ({
-			"meta-models/muse-spark-open": {
+			"meta-models/muse-spark-open-1026": {
 				promptUsdPerMillion,
 				completionUsdPerMillion,
 			},

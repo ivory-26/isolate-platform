@@ -61,7 +61,10 @@ function runtimeWith(
 	return createMastraAgentRuntime(agent, {
 		id: "coding-agent",
 		name: "Coding Agent",
-		model: { providerId: "baseten", modelId: "meta-models/muse-spark-open" },
+		model: {
+			providerId: "baseten",
+			modelId: "meta-models/muse-spark-open-1026",
+		},
 		...overrides,
 	});
 }
@@ -100,7 +103,7 @@ describe("createMastraAgentRuntime usage mapping", () => {
 			toolCalls: ["repo.read_file", "repo.search"],
 			usage: {
 				providerId: "baseten",
-				modelId: "meta-models/muse-spark-open",
+				modelId: "meta-models/muse-spark-open-1026",
 				promptTokens: 120,
 				completionTokens: 30,
 				totalTokens: 150,
@@ -121,7 +124,7 @@ describe("createMastraAgentRuntime usage mapping", () => {
 		}));
 		const runtime = runtimeWith(fake.agent, {
 			priceTable: {
-				"meta-models/muse-spark-open": {
+				"meta-models/muse-spark-open-1026": {
 					promptUsdPerMillion: 3,
 					completionUsdPerMillion: 15,
 				},

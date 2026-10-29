@@ -3,13 +3,14 @@ import type { AgentUsage, OpenAICompatibleModelConfig } from "./types";
 
 /**
  * Baseten Model APIs are OpenAI-compatible; Mastra addresses them with the
- * object form `{ providerId, modelId, url, apiKey }`. The dated Muse Spark
- * snapshot is resolved by the operator at setup and supplied via
- * `BASETEN_MODEL_ID`; this module never guesses a snapshot or falls back to a
- * different provider.
+ * object form `{ providerId, modelId, url, apiKey }`. The platform standardizes
+ * on the Meta Muse Spark Open snapshot `meta-models/muse-spark-open-1026` and
+ * never falls back to another model or provider. `BASETEN_MODEL_ID` may pin the
+ * same family only.
  */
 export const BASETEN_PROVIDER_ID = "baseten";
-export const BASETEN_DEFAULT_MODEL_ID = "meta-models/muse-spark-open";
+/** The only inference model this platform uses (Meta Muse Spark Open, 1026). */
+export const BASETEN_DEFAULT_MODEL_ID = "meta-models/muse-spark-open-1026";
 export const BASETEN_DEFAULT_BASE_URL = "https://inference.baseten.co/v1";
 
 /** Bounds keep config errors and provider payloads free of unbounded input. */

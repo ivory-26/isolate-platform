@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { asOrganizationId } from "@isolate/shared";
+import { asOrganizationId, asWorkflowDefinitionId } from "@isolate/shared";
 import { ControlPlaneError, createTaskService } from "./task-service.server";
 import { harness, input, otherScope, scope } from "./test-fixtures";
 
@@ -23,6 +23,20 @@ describe("offline task control plane", () => {
 		});
 		if (!result.ok) throw new Error("Expected receipt");
 		expect(h.queue.calls[0].payload).toEqual({ taskId: result.value.task.id });
+		expect(result.value.compilation).toEqual({
+			outcome: "compiled",
+			compiledPlanId: h.compilation.compiledPlanId,
+		});
+		expect(h.compilation.calls).toHaveLength(1);
+		expect(h.compilation.calls[0]).toEqual({
+			scope,
+			pin: {
+				workflowDefinitionId: asWorkflowDefinitionId(
+					input().workflowDefinitionId,
+				),
+				workflowVersion: input().workflowVersion,
+			},
+		});
 		expect(Object.keys(result.value.task).sort()).toEqual(
 			[
 				"id",
@@ -166,5 +180,95 @@ describe("offline task control plane", () => {
 				.list({}),
 		).toMatchObject({ ok: false, error: { code: "AUTH_REQUIRED" } });
 		expect(h.reads()).toBe(0);
+	});
+	test("compile-at-submit normalizes the pinned definition and persists before writes", async () => {
+		const h = harness();
+		const canonical = input();
+		expect(
+			(
+				await h.service.submit({
+					...canonical,
+					workflowDefinitionId: canonical.workflowDefinitionId.toUpperCase(),
+				})
+			).ok,
+		).toBe(true);
+		expect(h.compilation.calls[0].pin).toEqual({
+			workflowDefinitionId: asWorkflowDefinitionId(
+				canonical.workflowDefinitionId,
+			),
+			workflowVersion: 1,
+		});
+	});
+	test("rejected compilation surfaces bounded issues and writes no task or job", async () => {
+		const h = harness();
+		h.compilation.outcome = "rejected";
+		const result = await h.service.submit(input());
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "WORKFLOW_REJECTED",
+				issues: [
+					{
+						code: "UNSAFE_CONFIG",
+						path: "nodes[0].config",
+					},
+				],
+			},
+		});
+		if (result.ok) throw new Error("Expected rejection");
+		expect(result.error.message).not.toContain("nodes[0]");
+		expect(h.tasks.calls).toHaveLength(0);
+		expect(h.queue.calls).toHaveLength(0);
+	});
+	test("oversized rejection issues are dropped rather than echoed", async () => {
+		const h = harness();
+		h.compilation.outcome = "rejected";
+		h.compilation.issues = Array.from({ length: 101 }, (_, index) => ({
+			code: "INVALID_TYPE",
+			path: `nodes[${index}].id`,
+			message: "Bounded compiler diagnostic.",
+		}));
+		const result = await h.service.submit(input());
+		expect(result).toMatchObject({
+			ok: false,
+			error: { code: "WORKFLOW_REJECTED" },
+		});
+		if (result.ok) throw new Error("Expected rejection");
+		expect(result.error.issues).toBeUndefined();
+		expect(h.tasks.calls).toHaveLength(0);
+		expect(h.queue.calls).toHaveLength(0);
+	});
+	test("compiled-plan conflict maps to CONFLICT before any task write", async () => {
+		const h = harness();
+		h.compilation.outcome = "conflict";
+		expect(await h.service.submit(input())).toMatchObject({
+			ok: false,
+			error: { code: "CONFLICT" },
+		});
+		expect(h.tasks.calls).toHaveLength(0);
+		expect(h.queue.calls).toHaveLength(0);
+	});
+	for (const [outcome, code] of [
+		["not_found", "FORBIDDEN"],
+		["forbidden", "FORBIDDEN"],
+		["storage", "UNAVAILABLE"],
+	] as const)
+		test(`compiler ${outcome} maps to bounded ${code} without leaking messages`, async () => {
+			const h = harness();
+			h.compilation.outcome = outcome;
+			const result = await h.service.submit(input());
+			expect(result).toMatchObject({ ok: false, error: { code } });
+			expect(JSON.stringify(result)).not.toContain("fixture-secret");
+			expect(h.tasks.calls).toHaveLength(0);
+			expect(h.queue.calls).toHaveLength(0);
+		});
+	test("repository ownership is checked before compilation", async () => {
+		const h = harness();
+		h.denyRepository();
+		expect(await h.service.submit(input())).toMatchObject({
+			ok: false,
+			error: { code: "FORBIDDEN" },
+		});
+		expect(h.compilation.calls).toHaveLength(0);
 	});
 });

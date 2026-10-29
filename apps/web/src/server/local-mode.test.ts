@@ -73,6 +73,7 @@ describe("explicit local-only fake policy", () => {
 			for (let n = 0; n < 4; n++) {
 				const result = await service.submit(input());
 				if (!result.ok) throw new Error("Expected task");
+				expect(result.value.compilation.outcome).toBe("compiled");
 				receipts.push(result.value.task);
 			}
 			const result = await service.list({ limit: 2 });
@@ -89,4 +90,24 @@ describe("explicit local-only fake policy", () => {
 			).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
 			expect(await store.listLatest(otherScope, 25)).toEqual([]);
 		});
+	test("local fixture compiles one plan and reuses it for later tasks", async () => {
+		const config = { nodeEnv: "test", localDemo: "true" };
+		const store = createDevelopmentStore(config);
+		const service = createTaskService({
+			resolveScope: async () => scope,
+			getStore: async () => store,
+		});
+		const first = await service.submit(input());
+		const second = await service.submit(input());
+		if (!first.ok || !second.ok) throw new Error("Expected compiled receipts");
+		expect(first.value.compilation.compiledPlanId).toBe(
+			second.value.compilation.compiledPlanId,
+		);
+		expect(first.value.task.id).not.toBe(second.value.task.id);
+		expect(
+			await service.submit(
+				input({ workflowDefinitionId: crypto.randomUUID() }),
+			),
+		).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+	});
 });

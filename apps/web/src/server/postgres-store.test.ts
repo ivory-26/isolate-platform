@@ -12,12 +12,17 @@ import { input, scope } from "./test-fixtures";
 const taskId = "30000000-0000-4000-8000-000000000001";
 const jobId = "30000000-0000-4000-8000-000000000002";
 const runId = "30000000-0000-4000-8000-000000000003";
+const planRowId = "30000000-0000-4000-8000-000000000004";
+const rejectionRowId = "30000000-0000-4000-8000-000000000005";
+const authoredVersionId = "30000000-0000-4000-8000-000000000006";
 const when = new Date("2026-10-28T12:00:00.000Z");
 function sqlFixture(
 	options: {
 		queueFailure?: boolean;
 		repositoryDenied?: boolean;
 		badTimestamp?: boolean;
+		malformedGraph?: boolean;
+		missingAuthoredVersion?: boolean;
 	} = {},
 ) {
 	const calls: {
@@ -28,6 +33,25 @@ function sqlFixture(
 	let committed = false;
 	let rolledBack = false;
 	const request = input();
+	const graph = options.malformedGraph
+		? null
+		: {
+				id: request.workflowDefinitionId,
+				name: "Stored authored definition",
+				version: request.workflowVersion,
+				nodes: [
+					{
+						id: "agent-step",
+						type: "task.agent",
+						label: "Agent",
+						config: {
+							agentId: "coding-agent",
+							promptTemplateId: "stored-template",
+						},
+					},
+				],
+				edges: [],
+			};
 	const task = {
 		id: taskId,
 		organization_id: scope.organizationId,
@@ -70,6 +94,43 @@ function sqlFixture(
 		calls.push({ statement, parameters, transaction });
 		if (statement === repositoryOwnershipSql)
 			return options.repositoryDenied ? [] : [{ id: request.repositoryId }];
+		if (statement.includes("FROM compiled_plans")) return [];
+		if (statement.includes("FROM workflow_versions")) {
+			if (options.missingAuthoredVersion) return [];
+			return [
+				{
+					id: authoredVersionId,
+					definition_id: request.workflowDefinitionId,
+					version: request.workflowVersion,
+					graph,
+					compiled: null,
+					created_by: scope.userId,
+					created_at: when,
+				},
+			];
+		}
+		if (statement.startsWith("INSERT INTO compiled_plans"))
+			return [
+				{
+					id: planRowId,
+					organization_id: parameters[0],
+					workflow_definition_id: parameters[1],
+					workflow_version: parameters[2],
+					plan: JSON.parse(String(parameters[3])),
+					created_at: when,
+				},
+			];
+		if (statement.startsWith("INSERT INTO rejection_issues"))
+			return [
+				{
+					id: rejectionRowId,
+					organization_id: parameters[0],
+					workflow_definition_id: parameters[1],
+					workflow_version: parameters[2],
+					issues: JSON.parse(String(parameters[3])),
+					created_at: when,
+				},
+			];
 		if (statement.startsWith("INSERT INTO tasks")) return [task];
 		if (statement.startsWith("INSERT INTO jobs")) {
 			if (options.queueFailure) throw new Error("private driver failure");
@@ -87,7 +148,7 @@ function sqlFixture(
 					credential_ref: "must-not-escape",
 					data: { apiKey: "fake-only" },
 				},
-				{ ...task, id: "30000000-0000-4000-8000-000000000004", run_id: null },
+				{ ...task, id: "30000000-0000-4000-8000-000000000007", run_id: null },
 			];
 		throw new Error("Unexpected fixture statement");
 	}
@@ -123,25 +184,45 @@ function sqlFixture(
 }
 
 describe("offline PostgreSQL adapter", () => {
-	test("ownership check, task and queue writes share one transaction", async () => {
+	test("ownership, compile, task and queue writes share one transaction", async () => {
 		const h = sqlFixture();
 		const result = await h.service.submit(h.request);
 		expect(result.ok).toBe(true);
 		expect(h.committed()).toBe(true);
 		expect(h.rolledBack()).toBe(false);
-		expect(h.calls).toHaveLength(3);
+		expect(h.calls).toHaveLength(6);
 		expect(h.calls.every((call) => call.transaction)).toBe(true);
 		expect(h.calls[0].parameters).toEqual([
 			scope.organizationId,
 			h.request.repositoryId,
 		]);
-		expect(h.calls[1].parameters[0]).toBe(scope.organizationId);
-		expect(h.calls[1].parameters[5]).toBe(scope.userId);
-		expect(h.calls[2].parameters.slice(0, 3)).toEqual([
+		expect(h.calls[1].parameters).toEqual([
+			scope.organizationId,
+			h.request.workflowDefinitionId,
+			h.request.workflowVersion,
+		]);
+		expect(h.calls[2].parameters).toEqual([
+			scope.organizationId,
+			h.request.workflowDefinitionId,
+			h.request.workflowVersion,
+		]);
+		expect(h.calls[3].parameters.slice(0, 3)).toEqual([
+			scope.organizationId,
+			h.request.workflowDefinitionId,
+			h.request.workflowVersion,
+		]);
+		expect(h.calls[4].parameters[0]).toBe(scope.organizationId);
+		expect(h.calls[4].parameters[5]).toBe(scope.userId);
+		expect(h.calls[5].parameters.slice(0, 3)).toEqual([
 			scope.organizationId,
 			taskId,
 			"run_task",
 		]);
+		if (!result.ok) throw new Error("Expected receipt");
+		expect(result.value.compilation).toEqual({
+			outcome: "compiled",
+			compiledPlanId: planRowId,
+		});
 	});
 	test("enqueue error rolls back transaction and returns a safe error", async () => {
 		const h = sqlFixture({ queueFailure: true });
@@ -151,7 +232,7 @@ describe("offline PostgreSQL adapter", () => {
 		expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
 		expect(JSON.stringify(result)).not.toContain("private");
 	});
-	test("foreign repository rolls back before task write", async () => {
+	test("foreign repository rolls back before compilation", async () => {
 		const h = sqlFixture({ repositoryDenied: true });
 		expect(await h.service.submit(h.request)).toMatchObject({
 			ok: false,
@@ -159,6 +240,39 @@ describe("offline PostgreSQL adapter", () => {
 		});
 		expect(h.calls).toHaveLength(1);
 		expect(h.rolledBack()).toBe(true);
+	});
+	test("rejection commits sanitized history but writes no task or job", async () => {
+		const h = sqlFixture({ malformedGraph: true });
+		const result = await h.service.submit(h.request);
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "WORKFLOW_REJECTED",
+				issues: [{ code: "MALFORMED_GRAPH", path: "graph" }],
+			},
+		});
+		expect(h.committed()).toBe(true);
+		expect(h.rolledBack()).toBe(false);
+		expect(h.calls).toHaveLength(4);
+		expect(h.calls[3].statement).toContain("INSERT INTO rejection_issues");
+		expect(
+			h.calls.some((call) => call.statement.startsWith("INSERT INTO tasks")),
+		).toBe(false);
+		expect(
+			h.calls.some((call) => call.statement.startsWith("INSERT INTO jobs")),
+		).toBe(false);
+	});
+	test("missing authored version is FORBIDDEN and never writes a task", async () => {
+		const h = sqlFixture({ missingAuthoredVersion: true });
+		expect(await h.service.submit(h.request)).toMatchObject({
+			ok: false,
+			error: { code: "FORBIDDEN" },
+		});
+		expect(h.rolledBack()).toBe(true);
+		expect(h.committed()).toBe(false);
+		expect(
+			h.calls.some((call) => call.statement.startsWith("INSERT INTO tasks")),
+		).toBe(false);
 	});
 	test("list scopes tasks and runs before latest-first limit, projects only safe fields", async () => {
 		const h = sqlFixture();
@@ -198,11 +312,14 @@ describe("offline PostgreSQL adapter", () => {
 			await sqlFixture({ badTimestamp: true }).service.list({}),
 		).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
 	});
-	test("store input comes from validated shared budget schema", () => {
-		expect(submitTaskSchema.parse(input()).budget).toEqual({
+	test("store input comes from validated shared budget and workflow schemas", () => {
+		const parsed = submitTaskSchema.parse(input());
+		expect(parsed.budget).toEqual({
 			maxAgentTurns: 12,
 			repairBudget: 2,
 			jobTimeoutMs: 120000,
 		});
+		expect(parsed.workflowDefinitionId).toBe(input().workflowDefinitionId);
+		expect(parsed.workflowVersion).toBe(1);
 	});
 });

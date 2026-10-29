@@ -141,15 +141,31 @@ export async function createModalSandboxClient(
 	}
 
 	let image: unknown;
-	let app: unknown;
 	try {
 		image = client.images.fromRegistry(imageTag);
-		app = await client.apps.fromName(appName, { createIfMissing: true });
 	} catch {
 		throw new SandboxError(
 			"PROVIDER_UNAVAILABLE",
 			"Modal app or image could not be resolved",
 		);
+	}
+
+	// App resolution is the first network call, so it is deferred until a
+	// sandbox is actually requested: constructing the client (for example at
+	// worker boot) never talks to Modal. A failed attempt is not memoized, so a
+	// later retry can still succeed.
+	let appPromise: Promise<unknown> | undefined;
+	function resolveApp(): Promise<unknown> {
+		appPromise ??= client.apps
+			.fromName(appName, { createIfMissing: true })
+			.catch(() => {
+				appPromise = undefined;
+				throw new SandboxError(
+					"PROVIDER_UNAVAILABLE",
+					"Modal app or image could not be resolved",
+				);
+			});
+		return appPromise;
 	}
 
 	const sandboxes = new Map<string, ModalSdkSandbox>();
@@ -158,6 +174,7 @@ export async function createModalSandboxClient(
 		async create(params) {
 			let sandbox: ModalSdkSandbox;
 			try {
+				const app = await resolveApp();
 				sandbox = await client.sandboxes.create(app, image, {
 					cpu: params.cpu,
 					memoryMiB: params.memoryMiB,
@@ -172,7 +189,8 @@ export async function createModalSandboxClient(
 							}
 						: {}),
 				});
-			} catch {
+			} catch (error) {
+				if (error instanceof SandboxError) throw error;
 				throw new SandboxError(
 					"PROVIDER_UNAVAILABLE",
 					"Modal sandbox provisioning failed",

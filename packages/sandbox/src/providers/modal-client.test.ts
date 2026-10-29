@@ -149,7 +149,7 @@ describe("createModalSandboxClient configuration", () => {
 		expect(loaded).toBe(false);
 	});
 
-	test("constructs the SDK client and resolves the default image and app once", async () => {
+	test("constructs the SDK client and resolves the image without touching the network", async () => {
 		const { module, calls } = fakeSdk();
 		const client = await createModalSandboxClient(env, async () => module);
 		expect(client).toBeDefined();
@@ -157,6 +157,16 @@ describe("createModalSandboxClient configuration", () => {
 			{ tokenId: "test-token-id", tokenSecret: "test-token-secret" },
 		]);
 		expect(calls.fromRegistry).toEqual([DEFAULT_MODAL_IMAGE]);
+		// App resolution is a network call and must wait for the first create.
+		expect(calls.fromName).toEqual([]);
+	});
+
+	test("resolves the app lazily once across creates", async () => {
+		const { sandbox } = fakeSandbox();
+		const { module, calls } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create(createParams);
+		await client.create(createParams);
 		expect(calls.fromName).toEqual([
 			{ name: "isolate-test", params: { createIfMissing: true } },
 		]);
@@ -171,11 +181,10 @@ describe("createModalSandboxClient configuration", () => {
 		expect(calls.fromRegistry).toEqual(["oven/bun:1"]);
 	});
 
-	test("maps app resolution failures to PROVIDER_UNAVAILABLE", async () => {
+	test("maps app resolution failures to PROVIDER_UNAVAILABLE at first create", async () => {
 		const { module } = fakeSdk({ appError: new Error("app missing") });
-		await expect(
-			createModalSandboxClient(env, async () => module),
-		).rejects.toMatchObject({
+		const client = await createModalSandboxClient(env, async () => module);
+		await expect(client.create(createParams)).rejects.toMatchObject({
 			code: "PROVIDER_UNAVAILABLE",
 			message: "Modal app or image could not be resolved",
 		});

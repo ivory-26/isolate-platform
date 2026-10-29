@@ -142,6 +142,10 @@ export function createWorkerLoop(
 
 	async function processJob(job: JobRow): Promise<void> {
 		const jobLogger = logger.child({ jobId: job.id, jobType: job.type });
+		jobLogger.info("job claimed", {
+			attempt: job.attempts,
+			maxAttempts: job.maxAttempts,
+		});
 		const handler = handlersByType.get(job.type);
 		if (!handler) {
 			jobLogger.warn("no handler registered for job type", {
@@ -321,6 +325,13 @@ export function createWorkerLoop(
 				});
 		}, config.reaperIntervalMs);
 		reaper.unref?.();
+
+		logger.info("worker loop started", {
+			workerId: config.workerId,
+			pollIntervalMs: config.pollIntervalMs,
+			leaseSeconds: config.leaseSeconds,
+			jobTypes: [...handlersByType.keys()].join(","),
+		});
 
 		try {
 			while (!stopController.signal.aborted) {

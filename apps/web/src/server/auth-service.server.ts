@@ -59,6 +59,16 @@ function socialFailure(code: AuthFailureCode): SocialSignInResult {
 }
 
 /**
+ * Upstream codes are diagnostic labels, not messages. They are bounded and
+ * stripped to safe characters so a log line can never carry payload text.
+ */
+export function boundedCode(value: unknown): string {
+	const text = typeof value === "string" ? value : "";
+	const cleaned = text.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+	return cleaned.length > 0 ? cleaned : "UNKNOWN";
+}
+
+/**
  * The provider URL must be a plain public https URL. Anything else (relative,
  * userinfo, localhost, non-http) is discarded rather than handed to the
  * browser as a redirect.
@@ -118,6 +128,12 @@ export function createAuthService(deps: {
 	writeActiveOrganization(organizationId: OrganizationId): void;
 	/** The current request's own origin (test seam; never client input). */
 	requestOrigin(): string;
+	/**
+	 * Bounded diagnostics sink for upstream auth failures. It receives a stage
+	 * label and the upstream error CODE only — never a message, token or user
+	 * data. The browser still sees a generic failure.
+	 */
+	onUpstreamError?: (event: { stage: string; code: string }) => void;
 }) {
 	async function currentSession(): Promise<SessionView> {
 		const result = await deps.server.getSession();
@@ -163,10 +179,19 @@ export function createAuthService(deps: {
 					email: parsed.data.email,
 					password: parsed.data.password,
 				});
-				if (result.error)
+				if (result.error) {
+					deps.onUpstreamError?.({
+						stage: "email_signin",
+						code: boundedCode(result.error.code),
+					});
 					return authFailure(classifyUpstreamError(result.error.code));
+				}
 				return { ok: true };
-			} catch {
+			} catch (error) {
+				deps.onUpstreamError?.({
+					stage: "email_signin",
+					code: boundedCode(error instanceof Error ? error.name : "UNKNOWN"),
+				});
 				return authFailure("AUTH_UNAVAILABLE");
 			}
 		},
@@ -179,10 +204,19 @@ export function createAuthService(deps: {
 					email: parsed.data.email,
 					password: parsed.data.password,
 				});
-				if (result.error)
+				if (result.error) {
+					deps.onUpstreamError?.({
+						stage: "email_signup",
+						code: boundedCode(result.error.code),
+					});
 					return authFailure(classifyUpstreamError(result.error.code));
+				}
 				return { ok: true };
-			} catch {
+			} catch (error) {
+				deps.onUpstreamError?.({
+					stage: "email_signup",
+					code: boundedCode(error instanceof Error ? error.name : "UNKNOWN"),
+				});
 				return authFailure("AUTH_UNAVAILABLE");
 			}
 		},
@@ -195,20 +229,42 @@ export function createAuthService(deps: {
 		async startGoogleSignIn(input: unknown): Promise<SocialSignInResult> {
 			const parsed = socialProviderSchema.safeParse(input);
 			if (!parsed.success) return socialFailure("INVALID_INPUT");
-			const callbackURL = socialCallbackUrl(deps.requestOrigin());
-			if (!callbackURL) return socialFailure("AUTH_UNAVAILABLE");
+			const origin = deps.requestOrigin();
+			const callbackURL = socialCallbackUrl(origin);
+			if (!callbackURL) {
+				deps.onUpstreamError?.({
+					stage: "social_signin",
+					code: "UNUSABLE_REQUEST_ORIGIN",
+				});
+				return socialFailure("AUTH_UNAVAILABLE");
+			}
 			try {
 				const result = await deps.server.signIn.social({
 					provider: parsed.data.provider,
 					callbackURL,
 					disableRedirect: true,
 				});
-				if (result.error)
+				if (result.error) {
+					deps.onUpstreamError?.({
+						stage: "social_signin",
+						code: boundedCode(result.error.code),
+					});
 					return socialFailure(classifyUpstreamError(result.error.code));
+				}
 				const url = readAuthRedirectUrl(result.data);
-				if (!url) return socialFailure("AUTH_UNAVAILABLE");
+				if (!url) {
+					deps.onUpstreamError?.({
+						stage: "social_signin",
+						code: "UNUSABLE_PROVIDER_URL",
+					});
+					return socialFailure("AUTH_UNAVAILABLE");
+				}
 				return { ok: true, url };
-			} catch {
+			} catch (error) {
+				deps.onUpstreamError?.({
+					stage: "social_signin",
+					code: boundedCode(error instanceof Error ? error.name : "UNKNOWN"),
+				});
 				return socialFailure("AUTH_UNAVAILABLE");
 			}
 		},

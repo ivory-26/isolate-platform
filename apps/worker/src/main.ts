@@ -62,6 +62,13 @@ if (isMain) {
 		workerId: config.workerId,
 	});
 	const composition = await createConfiguredWorkerComposition(config, logger);
+	logger.info("worker adapters configured", {
+		sandboxProvider: composition.providerName,
+		inferenceProvider: composition.inferenceProvider,
+		queueBound: composition.queue !== undefined,
+		taskContextBound: composition.overrides.loadTaskContext !== undefined,
+		usageSinkBound: composition.overrides.usageSink !== undefined,
+	});
 	const loop = bootstrapWorkers({
 		config,
 		logger,

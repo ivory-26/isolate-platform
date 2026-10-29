@@ -1,5 +1,6 @@
 import "@tanstack/react-start/server-only";
 import { createDb, type PgSql } from "@isolate/db";
+import { createConsoleLogger } from "@isolate/shared";
 import type { AuthState } from "../features/auth/contracts";
 import {
 	readActiveOrganizationPreference,
@@ -31,6 +32,9 @@ let store: Promise<TaskStore> | undefined;
 let sql: PgSql | undefined;
 let settings: NeonAuthSettings | null | undefined;
 let authRuntime: AuthRuntime | undefined;
+
+/** Server-side diagnostics for auth failures (stage + code only). */
+const authLogger = createConsoleLogger("auth");
 
 function getSql(databaseUrl: string): PgSql {
 	sql ??= createDb(databaseUrl);
@@ -104,6 +108,10 @@ export function getAuthService() {
 		readActiveOrganization: readActiveOrganizationPreference,
 		writeActiveOrganization: writeActiveOrganizationPreference,
 		requestOrigin: getRequestOrigin,
+		onUpstreamError: (event) => {
+			// Stage + upstream code only: never a message, token or user data.
+			authLogger.warn("neon auth call failed", event);
+		},
 	});
 }
 

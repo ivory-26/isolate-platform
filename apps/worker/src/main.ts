@@ -6,19 +6,17 @@ import {
 import { loadWorkerConfig } from "./config";
 import type { JobHandler, WorkerDeps, WorkerLoop } from "./contracts";
 import { createUnavailableQueue, createWorkerLoop } from "./loop";
+import { createConfiguredWorkerComposition } from "./runtime-composition";
 
 /**
  * Worker entry point.
  *
- * `bootstrapWorkers` composes the real durable loop (see `loop.ts`). The
- * database-backed `QueueRepository` is owned by @isolate/db (Sprint A); until
- * it is bound here the loop runs against a fail-closed unavailable queue and
- * reports QUEUE_UNAVAILABLE per tick.
- *
- * The `run_task` handler is always registered from the offline composition
- * (`composition.ts`): it boots with zero provider env, defaults to
- * `NullProvider`, and only fails at execution time with a bounded
- * MISSING_CONFIG until W4-OPS injects real adapters via `taskExecution`.
+ * `bootstrapWorkers` composes the real durable loop (see `loop.ts`) and the
+ * `run_task` handler. `main` binds the configured composition first: the
+ * database queue, usage sink and task-context loader are bound whenever
+ * DATABASE_URL exists, and Modal/Baseten adapters only when their provider
+ * variables opt in. Without a database the loop still runs against the
+ * fail-closed unavailable queue.
  *
  * Signal handling: INT/TERM translate to `loop.stop()`; the loop aborts
  * every in-flight handler via its AbortSignal and resolves bounded.
@@ -63,7 +61,13 @@ if (isMain) {
 	const logger = createConsoleLogger("isolate-worker").child({
 		workerId: config.workerId,
 	});
-	const loop = bootstrapWorkers({ config, logger });
+	const composition = await createConfiguredWorkerComposition(config, logger);
+	const loop = bootstrapWorkers({
+		config,
+		logger,
+		queue: composition.queue,
+		taskExecution: composition.overrides,
+	});
 
 	let stopping = false;
 	const requestStop = (signal: string): void => {

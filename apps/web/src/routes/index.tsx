@@ -18,6 +18,15 @@ export const Route = createFileRoute("/")({
 	},
 	component: SubmitPage,
 });
+/** Textareas carry one value per line; blank lines are ignored. */
+function splitLines(value: FormDataEntryValue | null): string[] {
+	if (typeof value !== "string") return [];
+	return value
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+}
+
 function SubmitPage() {
 	const queryClient = useQueryClient();
 	const request = useRef<SubmitTaskInput | null>(null);
@@ -69,6 +78,9 @@ function SubmitPage() {
 								form.get("workflowDefinitionId") ?? "",
 							),
 							workflowVersion: Number(form.get("workflowVersion")),
+							goal: String(form.get("goal") ?? ""),
+							acceptanceCriteria: splitLines(form.get("acceptanceCriteria")),
+							fileOwnership: splitLines(form.get("fileOwnership")),
 							budget: {
 								maxAgentTurns: Number(form.get("maxAgentTurns")),
 								repairBudget: Number(form.get("repairBudget")),
@@ -78,7 +90,7 @@ function SubmitPage() {
 					);
 					if (!parsed.success) {
 						setValidationError(
-							"Enter a valid repository UUID, pinned workflow definition/version, task branch and bounded execution limits.",
+							"Enter a goal, a valid repository UUID, pinned workflow definition/version, task branch and bounded execution limits.",
 						);
 						return;
 					}
@@ -123,6 +135,33 @@ function SubmitPage() {
 						max={2147483647}
 						defaultValue={1}
 						required
+					/>
+					<label htmlFor="goal">Goal</label>
+					<textarea
+						id="goal"
+						name="goal"
+						required
+						maxLength={4000}
+						rows={3}
+						placeholder="What should the agent accomplish?"
+					/>
+					<label htmlFor="acceptanceCriteria">
+						Acceptance criteria (one per line)
+					</label>
+					<textarea
+						id="acceptanceCriteria"
+						name="acceptanceCriteria"
+						rows={3}
+						placeholder="All tests pass&#10;No files outside the ownership list change"
+					/>
+					<label htmlFor="fileOwnership">
+						File ownership (one path or glob per line)
+					</label>
+					<textarea
+						id="fileOwnership"
+						name="fileOwnership"
+						rows={3}
+						placeholder="apps/web/**"
 					/>
 					<label htmlFor="maxAgentTurns">Maximum agent turns</label>
 					<input

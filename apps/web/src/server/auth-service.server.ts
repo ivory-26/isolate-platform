@@ -19,9 +19,11 @@ import {
 	createOrganizationSchema,
 	type OrganizationActionResult,
 	type SessionView,
+	type SocialSignInResult,
 	selectOrganizationSchema,
 	signInSchema,
 	signUpSchema,
+	socialProviderSchema,
 } from "../features/auth/contracts";
 import { toIdentity } from "./auth-session.server";
 import { listCallerOrganizations } from "./membership-reader.server";
@@ -52,6 +54,57 @@ function classifyUpstreamError(code: unknown): AuthFailureCode {
 	return "AUTH_UNAVAILABLE";
 }
 
+function socialFailure(code: AuthFailureCode): SocialSignInResult {
+	return { ok: false, error: { code, message: authFailureMessages[code] } };
+}
+
+/**
+ * The provider URL must be a plain public https URL. Anything else (relative,
+ * userinfo, localhost, non-http) is discarded rather than handed to the
+ * browser as a redirect.
+ */
+export function readAuthRedirectUrl(data: unknown): string | null {
+	if (typeof data !== "object" || data === null) return null;
+	const candidate = (data as Record<string, unknown>).url;
+	if (typeof candidate !== "string" || candidate.length > 4096) return null;
+	let url: URL;
+	try {
+		url = new URL(candidate);
+	} catch {
+		return null;
+	}
+	if (
+		url.protocol !== "https:" ||
+		url.username !== "" ||
+		url.password !== "" ||
+		url.hostname === "localhost" ||
+		url.hostname.endsWith(".local") ||
+		!url.hostname.includes(".")
+	) {
+		return null;
+	}
+	return url.toString();
+}
+
+/** A same-origin callback built from the request, never from client input. */
+export function socialCallbackUrl(origin: string): string | null {
+	let parsed: URL;
+	try {
+		parsed = new URL(origin);
+	} catch {
+		return null;
+	}
+	if (
+		(parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+		parsed.username !== "" ||
+		parsed.password !== "" ||
+		parsed.origin !== origin
+	) {
+		return null;
+	}
+	return `${parsed.origin}/auth/callback`;
+}
+
 export function createAuthService(deps: {
 	server: NeonAuthServer;
 	memberships: MembershipRepository;
@@ -63,6 +116,8 @@ export function createAuthService(deps: {
 	}) => Promise<void>;
 	readActiveOrganization(): OrganizationId | undefined;
 	writeActiveOrganization(organizationId: OrganizationId): void;
+	/** The current request's own origin (test seam; never client input). */
+	requestOrigin(): string;
 }) {
 	async function currentSession(): Promise<SessionView> {
 		const result = await deps.server.getSession();
@@ -129,6 +184,32 @@ export function createAuthService(deps: {
 				return { ok: true };
 			} catch {
 				return authFailure("AUTH_UNAVAILABLE");
+			}
+		},
+		/**
+		 * Starts Google sign-in. The upstream flow stores a challenge cookie on
+		 * this origin (relayed by the SDK) and returns the provider URL; the
+		 * browser visits it and comes back to `/auth/callback`, where the
+		 * verifier is exchanged for first-party session cookies.
+		 */
+		async startGoogleSignIn(input: unknown): Promise<SocialSignInResult> {
+			const parsed = socialProviderSchema.safeParse(input);
+			if (!parsed.success) return socialFailure("INVALID_INPUT");
+			const callbackURL = socialCallbackUrl(deps.requestOrigin());
+			if (!callbackURL) return socialFailure("AUTH_UNAVAILABLE");
+			try {
+				const result = await deps.server.signIn.social({
+					provider: parsed.data.provider,
+					callbackURL,
+					disableRedirect: true,
+				});
+				if (result.error)
+					return socialFailure(classifyUpstreamError(result.error.code));
+				const url = readAuthRedirectUrl(result.data);
+				if (!url) return socialFailure("AUTH_UNAVAILABLE");
+				return { ok: true, url };
+			} catch {
+				return socialFailure("AUTH_UNAVAILABLE");
 			}
 		},
 		async signOut(): Promise<AuthActionResult> {

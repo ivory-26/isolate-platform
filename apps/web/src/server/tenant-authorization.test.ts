@@ -178,6 +178,7 @@ describe("auth service tenancy", () => {
 			writeActiveOrganization: (id) => {
 				stored = id;
 			},
+			requestOrigin: () => "http://localhost:3000",
 		});
 		return {
 			tenancy,

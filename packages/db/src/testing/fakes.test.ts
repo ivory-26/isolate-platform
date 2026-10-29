@@ -40,6 +40,9 @@ describe("InMemoryTaskRepository (TaskRepository contract)", () => {
 			max_duration_ms: 600000,
 		});
 		expect(first.worktree).toBe("task/demo");
+		expect(first.goal).toBe("");
+		expect(first.acceptance_criteria).toEqual([]);
+		expect(first.file_ownership).toEqual([]);
 
 		const second = await repo.create(input);
 		expect(second.id).toBe(first.id);

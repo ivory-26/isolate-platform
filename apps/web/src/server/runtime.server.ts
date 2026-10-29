@@ -15,6 +15,7 @@ import {
 } from "./caller-scope.server";
 import {
 	getNeonAuthServer,
+	getRequestOrigin,
 	type NeonAuthSettings,
 	readNeonAuthSettings,
 } from "./neon-auth.server";
@@ -102,6 +103,7 @@ export function getAuthService() {
 		ensureTenancy: runtime.ensureTenancy,
 		readActiveOrganization: readActiveOrganizationPreference,
 		writeActiveOrganization: writeActiveOrganizationPreference,
+		requestOrigin: getRequestOrigin,
 	});
 }
 

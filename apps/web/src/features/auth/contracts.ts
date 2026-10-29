@@ -16,6 +16,13 @@ export const signUpSchema = z.strictObject({
 export const selectOrganizationSchema = z.strictObject({
 	organizationId: z.uuid(),
 });
+/**
+ * Social providers the UI may start. Enumerated (not free text) so the
+ * server can never be asked to forward an arbitrary provider name.
+ */
+export const socialProviderSchema = z.strictObject({
+	provider: z.literal("google"),
+});
 export const createOrganizationSchema = z.strictObject({
 	name: z.string().trim().min(1).max(120),
 	slug: z
@@ -45,6 +52,14 @@ export const authFailureMessages = {
 export type AuthFailureCode = keyof typeof authFailureMessages;
 export type AuthActionResult =
 	| { ok: true }
+	| { ok: false; error: { code: AuthFailureCode; message: string } };
+/**
+ * Social sign-in is a redirect, not a credential exchange: the server returns
+ * the provider URL for the browser to visit. The URL is always validated as
+ * https before it leaves the server.
+ */
+export type SocialSignInResult =
+	| { ok: true; url: string }
 	| { ok: false; error: { code: AuthFailureCode; message: string } };
 export type SessionUser = {
 	id: string;

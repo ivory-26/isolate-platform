@@ -1,5 +1,6 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { AuthForm } from "../components/auth/AuthForm";
+import { GoogleSignInButton } from "../components/auth/GoogleSignInButton";
 import { authStateOptions } from "../features/auth/queries";
 
 export const Route = createFileRoute("/signup")({
@@ -24,6 +25,7 @@ function SignupPage() {
 				</p>
 			)}
 			<AuthForm mode="sign-up" />
+			{state.mode === "anonymous" && <GoogleSignInButton />}
 			<p>
 				Already registered? <Link to="/login">Sign in</Link>.
 			</p>

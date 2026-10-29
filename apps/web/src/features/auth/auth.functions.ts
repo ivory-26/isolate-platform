@@ -12,9 +12,11 @@ import {
 	createOrganizationSchema,
 	type OrganizationActionResult,
 	type SessionView,
+	type SocialSignInResult,
 	selectOrganizationSchema,
 	signInSchema,
 	signUpSchema,
+	socialProviderSchema,
 } from "./contracts";
 
 /**
@@ -53,6 +55,26 @@ export const signUp = createServerFn({ method: "POST" })
 		const runtime = service();
 		if (!runtime) return authFailure("AUTH_UNAVAILABLE");
 		return runtime.signUp(data);
+	});
+
+export const startGoogleSignIn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => {
+		const parsed = socialProviderSchema.safeParse(input);
+		if (!parsed.success) throw new Error("Unsupported sign-in provider.");
+		return parsed.data;
+	})
+	.handler(async ({ data }): Promise<SocialSignInResult> => {
+		setResponseHeader("Cache-Control", "private, no-store");
+		const runtime = service();
+		if (!runtime)
+			return {
+				ok: false,
+				error: {
+					code: "AUTH_UNAVAILABLE",
+					message: authFailureMessages.AUTH_UNAVAILABLE,
+				},
+			};
+		return runtime.startGoogleSignIn(data);
 	});
 
 export const signOut = createServerFn({ method: "POST" }).handler(

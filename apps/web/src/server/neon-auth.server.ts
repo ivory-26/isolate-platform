@@ -77,7 +77,12 @@ export function readNeonAuthSettings(
 	return parsed.success ? parsed.data : null;
 }
 
-function requestOrigin(): string {
+/**
+ * The request's own origin. Origin/Referer can be client-supplied, so callers
+ * use this only to build a same-origin callback URL that Neon must also trust;
+ * it never feeds identity or authorization decisions.
+ */
+export function getRequestOrigin(): string {
 	const headers = getRequestHeaders();
 	const origin = headers.get("origin");
 	if (origin) return origin;
@@ -104,7 +109,7 @@ export function createNeonAuthRequestContext(): RequestContext {
 			setCookie(name, value, toCookieOptions(options));
 		},
 		getHeader: (name) => getRequestHeaders().get(name) ?? null,
-		getOrigin: () => requestOrigin(),
+		getOrigin: () => getRequestOrigin(),
 		getFramework: () => "tanstack-start",
 	};
 }

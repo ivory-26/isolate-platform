@@ -3,10 +3,12 @@ import type {
 	AgentTurnRecord,
 	AgentUsage,
 	CodingAgentRuntimeFactory,
+	SandboxToolBackend,
 	TaskContext,
 } from "@isolate/mastra";
 import type {
 	CommandPolicy,
+	SandboxHandle,
 	SandboxProvider,
 	SandboxSpec,
 } from "@isolate/sandbox";
@@ -77,6 +79,15 @@ const UUID_PATTERN =
 export type TaskExecutionDeps = {
 	provider: SandboxProvider;
 	createRuntime: CodingAgentRuntimeFactory;
+	/**
+	 * Optional per-job sandbox binding. When present, the handler builds a
+	 * tool backend over the provisioned handle and passes it to the runtime
+	 * factory; without it the runtime runs tool-less.
+	 */
+	createSandboxBackend?: (input: {
+		sandbox: SandboxHandle;
+		signal: AbortSignal;
+	}) => SandboxToolBackend;
 	usageSink: UsageSink;
 	loadTaskContext(input: {
 		organizationId: OrganizationId;
@@ -283,6 +294,10 @@ export function createTaskExecutionHandler(
 				const handle = await deps.provider.create(spec);
 
 				try {
+					const sandboxBackend = deps.createSandboxBackend?.({
+						sandbox: handle,
+						signal: ctx.signal,
+					});
 					const runtime = deps.createRuntime({
 						caps: deps.caps,
 						onRecord: async (record) => {
@@ -310,6 +325,16 @@ export function createTaskExecutionHandler(
 								spentUsd += Math.max(0, usage.costUsd);
 							}
 						},
+						...(sandboxBackend === undefined
+							? {}
+							: {
+									sandboxBackend,
+									toolContext: {
+										organizationId: job.organizationId,
+										taskId: job.taskId,
+										scopes: [],
+									},
+								}),
 					});
 
 					const prompt = buildTaskPrompt(context);

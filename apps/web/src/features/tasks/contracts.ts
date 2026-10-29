@@ -13,6 +13,15 @@ export const submitTaskSchema = z.strictObject({
 		.regex(/^[a-zA-Z0-9][a-zA-Z0-9/_-]*$/)
 		.refine((branch) => !branch.includes("//") && !branch.endsWith("/")),
 	idempotencyKey: z.uuid(),
+	/** Authored task intent; the worker receives exactly this text. */
+	goal: z.string().trim().min(1).max(4000),
+	/** What "done" means; persisted with the task for the agent context. */
+	acceptanceCriteria: z
+		.array(z.string().trim().min(1).max(500))
+		.max(20)
+		.default([]),
+	/** Paths the agent may modify; everything else stays out of bounds. */
+	fileOwnership: z.array(z.string().trim().min(1).max(300)).max(50).default([]),
 	// Compile-at-submit: the caller pins one immutable authored version.
 	workflowDefinitionId: z.uuid(),
 	workflowVersion: workflowVersionSchema,

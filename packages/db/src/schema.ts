@@ -191,6 +191,12 @@ export type TaskRow = {
 		max_repair_attempts: number;
 		max_duration_ms: number;
 	}; // bounded execution (never unbounded loops)
+	/** Authored task intent; empty only for rows created before wave 6. */
+	goal: string;
+	/** What "done" means for this task; persisted at submit time. */
+	acceptance_criteria: string[];
+	/** Paths the agent may modify; everything else is out of bounds. */
+	file_ownership: string[];
 	created_by: UserId;
 	created_at: Date;
 	updated_at: Date;

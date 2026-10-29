@@ -761,4 +761,66 @@ describe("task execution handler — prompt and payload", () => {
 		});
 		expect(harness.provider.createCalls).toHaveLength(0);
 	});
+
+	test("binds the provisioned sandbox handle into the runtime factory", async () => {
+		const harness = makeHarness({ script: [{ output: "" }] });
+		const backend = {
+			readFile: async () => ({ content: "", truncated: false }),
+			listFiles: async () => [],
+			search: async () => [],
+			exec: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			}),
+			git: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			}),
+		};
+		let bound: SandboxHandle | undefined;
+		let observed: { sandboxBackend?: unknown; toolContext?: unknown } = {};
+		const original = harness.deps.createRuntime;
+		harness.deps.createSandboxBackend = ({ sandbox }) => {
+			bound = sandbox;
+			return backend;
+		};
+		harness.deps.createRuntime = (options) => {
+			observed = {
+				sandboxBackend: options.sandboxBackend,
+				toolContext: options.toolContext,
+			};
+			return original(options);
+		};
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict.outcome).toBe("complete");
+		expect(bound).toEqual({
+			id: "sbx_1",
+			workspaceRoot: POLICY.workspaceRoot,
+		});
+		expect(observed.sandboxBackend).toBe(backend);
+		expect(observed.toolContext).toEqual({
+			organizationId: ORG_ID,
+			taskId: TASK_ID,
+			scopes: [],
+		});
+	});
+
+	test("runs tool-less when no sandbox backend factory is configured", async () => {
+		const harness = makeHarness({ script: [{ output: "" }] });
+		let sawBackend = true;
+		const original = harness.deps.createRuntime;
+		harness.deps.createRuntime = (options) => {
+			sawBackend = options.sandboxBackend !== undefined;
+			return original(options);
+		};
+		await harness.handler.handle(harness.job, harness.ctx);
+		expect(sawBackend).toBe(false);
+	});
 });

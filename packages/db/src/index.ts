@@ -6,6 +6,7 @@ export * from "./repositories/membership-repository";
 export * from "./repositories/organization-repository";
 export * from "./repositories/queue-repository";
 export * from "./repositories/task-attempt-repository";
+export * from "./repositories/task-context-repository";
 export * from "./repositories/task-repository";
 export * from "./repositories/usage-repository";
 export * from "./repositories/user-repository";

@@ -55,7 +55,7 @@ export function buildTransitionValuesSql(
 export const TASK_TRANSITION_VALUES_SQL = buildTransitionValuesSql();
 
 const TASK_COLUMNS =
-	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, created_by, created_at, updated_at";
+	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, file_ownership, created_by, created_at, updated_at";
 
 /**
  * Statements. Plain string literals — no template interpolation anywhere.
@@ -64,9 +64,11 @@ const TASK_COLUMNS =
 const STMT = {
 	insert: `INSERT INTO tasks (
 		id, organization_id, repository_id, worktree, branch, status,
-		idempotency_key, budget_limits, created_by, created_at, updated_at
+		idempotency_key, budget_limits, goal, acceptance_criteria,
+		file_ownership, created_by, created_at, updated_at
 	) VALUES (
-		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb, $6, now(), now()
+		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb,
+		$6, $7::text::jsonb, $8::text::jsonb, $9, now(), now()
 	)
 	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	RETURNING ${TASK_COLUMNS}`,
@@ -110,6 +112,10 @@ export interface TaskRepository {
 			maxRepairAttempts: number;
 			maxDurationMs: number;
 		};
+		/** Task intent persisted for the worker's context loader. */
+		goal?: string;
+		acceptanceCriteria?: string[];
+		fileOwnership?: string[];
 		createdBy: string;
 	}): Promise<TaskRow>;
 	get(taskId: TaskId): Promise<TaskRow | null>;
@@ -156,6 +162,9 @@ export class PostgresTaskRepository implements TaskRepository {
 			maxRepairAttempts: number;
 			maxDurationMs: number;
 		};
+		goal?: string;
+		acceptanceCriteria?: string[];
+		fileOwnership?: string[];
 		createdBy: string;
 	}): Promise<TaskRow> {
 		requireNonEmpty(input.organizationId, "organizationId");
@@ -169,6 +178,18 @@ export class PostgresTaskRepository implements TaskRepository {
 			"maxRepairAttempts",
 		);
 		requirePositiveInt(input.budgetLimits.maxDurationMs, "maxDurationMs");
+		const goal = input.goal ?? "";
+		if (typeof goal !== "string") {
+			throw new Error("goal must be a string");
+		}
+		const acceptanceCriteria = requireStringArray(
+			input.acceptanceCriteria ?? [],
+			"acceptanceCriteria",
+		);
+		const fileOwnership = requireStringArray(
+			input.fileOwnership ?? [],
+			"fileOwnership",
+		);
 
 		// Row JSON keys are snake_case (mirrors the DB jsonb contract and the
 		// budget->>'max_duration_ms' scan); the TS-facing input is camelCase.
@@ -184,6 +205,9 @@ export class PostgresTaskRepository implements TaskRepository {
 			input.branch,
 			input.idempotencyKey,
 			JSON.stringify(budgetLimits),
+			goal,
+			JSON.stringify(acceptanceCriteria),
+			JSON.stringify(fileOwnership),
 			input.createdBy,
 		]);
 		const insertedRows = inserted as unknown as Record<string, unknown>[];
@@ -291,6 +315,13 @@ function mapTaskRow(row: Row): TaskRow {
 		budget_limits: parseJsonbColumn<TaskRow["budget_limits"]>(
 			row.budget_limits,
 		) as TaskRow["budget_limits"],
+		goal: row.goal as string,
+		acceptance_criteria: parseJsonbColumn<TaskRow["acceptance_criteria"]>(
+			row.acceptance_criteria,
+		) as TaskRow["acceptance_criteria"],
+		file_ownership: parseJsonbColumn<TaskRow["file_ownership"]>(
+			row.file_ownership,
+		) as TaskRow["file_ownership"],
 		created_by: row.created_by as TaskRow["created_by"],
 		created_at: row.created_at as Date,
 		updated_at: row.updated_at as Date,
@@ -313,4 +344,17 @@ export function requireNonNegativeInt(value: number, field: string): void {
 	if (!Number.isInteger(value) || value < 0) {
 		throw new Error(`${field} must be a non-negative integer`);
 	}
+}
+
+/** Bounded string list; empty entries are a caller bug, not a silent filter. */
+export function requireStringArray(value: unknown, field: string): string[] {
+	if (!Array.isArray(value)) {
+		throw new Error(`${field} must be an array of strings`);
+	}
+	for (const entry of value) {
+		if (typeof entry !== "string" || entry.trim().length === 0) {
+			throw new Error(`${field} must contain non-empty strings`);
+		}
+	}
+	return [...(value as string[])];
 }

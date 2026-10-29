@@ -3,6 +3,7 @@ import { asOrganizationId } from "@isolate/shared";
 import { createDb } from "./client";
 import { PostgresApprovalRepository } from "./repositories/approval-repository";
 import { PostgresQueueRepository } from "./repositories/queue-repository";
+import { PostgresTaskContextRepository } from "./repositories/task-context-repository";
 import { PostgresTaskRepository } from "./repositories/task-repository";
 import { PostgresUsageRepository } from "./repositories/usage-repository";
 import type { ApprovalRow, TaskRow } from "./schema";
@@ -82,6 +83,9 @@ test.skipIf(!hasDb)(
 					maxRepairAttempts: 2,
 					maxDurationMs: 3600000,
 				},
+				goal: "Add a live health endpoint",
+				acceptanceCriteria: ["tests pass", "no unrelated files change"],
+				fileOwnership: ["apps/web/**"],
 				createdBy: userRows[0]!.id as string,
 			};
 			const created: TaskRow = await tasks.create(createInput);
@@ -96,6 +100,40 @@ test.skipIf(!hasDb)(
 			expect(deduped.id).toBe(created.id);
 			expect(deduped.status).toBe("queued");
 			expect(deduped.budget_limits.max_agent_turns).toBe(5);
+
+			// Task context survives the round-trip and is tenant-scoped.
+			expect(created.goal).toBe("Add a live health endpoint");
+			expect(created.acceptance_criteria).toEqual([
+				"tests pass",
+				"no unrelated files change",
+			]);
+			expect(created.file_ownership).toEqual(["apps/web/**"]);
+			const context = await new PostgresTaskContextRepository(sql).get({
+				organizationId: orgId,
+				taskId: created.id,
+			});
+			expect(context).toMatchObject({
+				taskId: created.id,
+				organizationId: orgId,
+				goal: "Add a live health endpoint",
+				acceptanceCriteria: ["tests pass", "no unrelated files change"],
+				fileOwnership: ["apps/web/**"],
+				branch: `task/live-${unique}`,
+				repositoryProvider: "github",
+				repositoryFullName: fullName,
+				repositoryDefaultBranch: "main",
+				budgetLimits: {
+					max_agent_turns: 5,
+					max_repair_attempts: 2,
+					max_duration_ms: 3600000,
+				},
+			});
+			expect(
+				await new PostgresTaskContextRepository(sql).get({
+					organizationId: asOrganizationId(crypto.randomUUID()),
+					taskId: created.id,
+				}),
+			).toBeNull();
 
 			// State machine: legal move ok; stale expectation -> CONFLICT.
 			const moved = await tasks.transition({

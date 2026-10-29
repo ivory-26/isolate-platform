@@ -14,6 +14,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as OrganizationsRouteRouteImport } from './routes/organizations/route'
 import { Route as RunsRouteImport } from './routes/runs'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
 import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
@@ -43,6 +44,11 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OrganizationsIndexRoute = OrganizationsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -65,6 +71,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -74,6 +81,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -85,6 +93,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -97,6 +106,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/runs'
     | '/signup'
+    | '/auth/callback'
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/runs'
     | '/signup'
+    | '/auth/callback'
     | '/organizations/new'
     | '/organizations'
     | '/api/auth/$'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/runs'
     | '/signup'
+    | '/auth/callback'
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
@@ -127,6 +139,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   RunsRoute: typeof RunsRoute
   SignupRoute: typeof SignupRoute
+  AuthCallbackRoute: typeof AuthCallbackRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -165,6 +178,13 @@ declare module '@tanstack/react-router' {
       path: '/signup'
       fullPath: '/signup'
       preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/callback': {
+      id: '/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/organizations/': {
@@ -210,6 +230,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RunsRoute: RunsRoute,
   SignupRoute: SignupRoute,
+  AuthCallbackRoute: AuthCallbackRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

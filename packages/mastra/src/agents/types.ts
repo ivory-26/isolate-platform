@@ -1,5 +1,6 @@
 import { PlatformError } from "@isolate/shared";
 import { Agent, type ToolsInput } from "@mastra/core/agent";
+import type { SandboxToolBackend } from "../tools/sandbox-backend";
 
 /**
  * Task execution context handed to agents and workflow steps.
@@ -93,11 +94,24 @@ export type CodingAgentRuntime = {
  * Per-task runtime factory (wave 4). The worker supplies the record/usage
  * listeners and caps; the concrete model, tools and provider stay in the
  * composition root. Tests inject fake factories with the same shape.
+ *
+ * Wave 6 adds the per-job sandbox binding: the worker provisions the sandbox
+ * first, builds a `SandboxToolBackend` over that handle, and passes it here
+ * with the task ids. The factory wires the policy-gated tools to exactly that
+ * sandbox; no other task can reach it.
  */
 export type CodingAgentRuntimeFactoryOptions = {
 	onRecord?: (record: AgentTurnRecord) => Promise<void>;
 	onUsage?: AgentUsageListener;
 	caps?: AgentTurnCaps;
+	/** Sandbox-bound tool backend for this job (absent = no tools). */
+	sandboxBackend?: SandboxToolBackend;
+	/** Trusted ids the tool gate binds to; never model-supplied. */
+	toolContext?: {
+		organizationId: string;
+		taskId: string;
+		scopes?: readonly string[];
+	};
 };
 
 export type CodingAgentRuntimeFactory = (

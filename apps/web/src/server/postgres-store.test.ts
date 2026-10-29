@@ -67,6 +67,9 @@ function sqlFixture(
 			max_repair_attempts: 2,
 			max_duration_ms: 120000,
 		},
+		goal: request.goal,
+		acceptance_criteria: request.acceptanceCriteria,
+		file_ownership: request.fileOwnership,
 		created_by: scope.userId,
 		created_at: when,
 		updated_at: when,
@@ -220,7 +223,8 @@ describe("offline PostgreSQL adapter", () => {
 			h.request.workflowVersion,
 		]);
 		expect(h.calls[5].parameters[0]).toBe(scope.organizationId);
-		expect(h.calls[5].parameters[5]).toBe(scope.userId);
+		expect(h.calls[5].parameters[5]).toBe(h.request.goal);
+		expect(h.calls[5].parameters[8]).toBe(scope.userId);
 		expect(h.calls[6].parameters.slice(0, 3)).toEqual([
 			scope.organizationId,
 			taskId,

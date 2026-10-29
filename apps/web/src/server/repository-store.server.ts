@@ -17,6 +17,14 @@ import type {
 	WorkflowCompilationResult,
 } from "./workflow-compilation.server";
 
+/** Idempotent replays must match the original payload exactly, including lists. */
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+	return (
+		left.length === right.length &&
+		left.every((value, index) => value === right[index])
+	);
+}
+
 export function summarizeTask(task: TaskRow): TaskSummary {
 	return taskSummarySchema.parse({
 		id: task.id,
@@ -99,12 +107,18 @@ export function createRepositoryStore(deps: {
 				maxRepairAttempts: input.budget.repairBudget,
 				maxDurationMs: input.budget.jobTimeoutMs,
 			};
+			const goal = input.goal ?? "";
+			const acceptanceCriteria = input.acceptanceCriteria ?? [];
+			const fileOwnership = input.fileOwnership ?? [];
 			const task = await deps.tasks.create({
 				organizationId: scope.organizationId,
 				repositoryId: input.repositoryId,
 				branch: input.branch,
 				idempotencyKey: input.idempotencyKey,
 				budgetLimits,
+				goal,
+				acceptanceCriteria,
+				fileOwnership,
 				createdBy: scope.userId,
 			});
 			// create returns the existing row on races/idempotency hits. Validate
@@ -117,7 +131,10 @@ export function createRepositoryStore(deps: {
 				task.budget_limits.max_agent_turns !== budgetLimits.maxAgentTurns ||
 				task.budget_limits.max_repair_attempts !==
 					budgetLimits.maxRepairAttempts ||
-				task.budget_limits.max_duration_ms !== budgetLimits.maxDurationMs
+				task.budget_limits.max_duration_ms !== budgetLimits.maxDurationMs ||
+				task.goal !== goal ||
+				!sameList(task.acceptance_criteria, acceptanceCriteria) ||
+				!sameList(task.file_ownership, fileOwnership)
 			)
 				throw new ControlPlaneError("CONFLICT");
 			const job = await deps.queue.enqueue({

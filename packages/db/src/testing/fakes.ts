@@ -24,6 +24,7 @@ import {
 	requireNonEmpty,
 	requireNonNegativeInt,
 	requirePositiveInt,
+	requireStringArray,
 	type TaskRepository,
 	type TaskTransitionFailureCode,
 } from "../repositories/task-repository";
@@ -66,6 +67,18 @@ export class InMemoryTaskRepository implements TaskRepository {
 			"maxRepairAttempts",
 		);
 		requirePositiveInt(input.budgetLimits.maxDurationMs, "maxDurationMs");
+		const goal = input.goal ?? "";
+		if (typeof goal !== "string") {
+			throw new Error("goal must be a string");
+		}
+		const acceptanceCriteria = requireStringArray(
+			input.acceptanceCriteria ?? [],
+			"acceptanceCriteria",
+		);
+		const fileOwnership = requireStringArray(
+			input.fileOwnership ?? [],
+			"fileOwnership",
+		);
 
 		for (const row of this.rows.values()) {
 			if (
@@ -91,6 +104,9 @@ export class InMemoryTaskRepository implements TaskRepository {
 				max_repair_attempts: input.budgetLimits.maxRepairAttempts,
 				max_duration_ms: input.budgetLimits.maxDurationMs,
 			},
+			goal,
+			acceptance_criteria: acceptanceCriteria,
+			file_ownership: fileOwnership,
 			created_by: input.createdBy as TaskRow["created_by"],
 			created_at: now,
 			updated_at: now,

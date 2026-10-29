@@ -66,7 +66,7 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - Commit cross-lane contracts FIRST: `AgentUsage` + `onUsage` hook in `packages/mastra/src/agents/types.ts`; `SandboxToolBackend` interface (read/list/search/exec/git) for the tool layer; `UsageSink` shape consumed by the worker (implemented by W4-DB). Interfaces only, no implementations.
 - Verify provider facts against **installed types and published docs only** — no keyed call: `baseten` provider id and documented model id `meta-models/muse-spark-open`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git). The dated snapshot id is confirmed in Phase D with a single `GET /v1/models`.
 - **Do NOT provision, request, or test with Baseten/Modal credentials here.** Keys are Phase D, after A–C are green.
-- Status: **planned**
+- Status: **done** — commits `d0da5ff` (contracts: `UsageRecordInput`/`UsageSink` in `@isolate/shared`; `AgentUsage`/`AgentUsageListener`/`AgentTurnCaps`/`CodingAgentRuntimeFactory` + optional `AgentTurnRecord.usage` in `@isolate/mastra`; `SandboxToolBackend` in `tools/sandbox-backend.ts`) and `a80868e` (verified Modal 0.11.1/Baseten/Mastra facts + Phase-C acceptance design in DECISIONS). Full offline validate in the worktree: 660 pass / 2 skip / 0 fail, 8/8 typecheck, biome clean. No keyed calls.
 
 ### W4-DB — `packages/db/**` (owner: agent W4-DB, branch `task/w4-db`)
 - W4-B follow-up: normalize remaining `JSON.stringify(...)` → `::jsonb` writes to `::text::jsonb` (or object binds); add live `jsonb_typeof` assertions; verify SQL-side `budget_limits->>` scans still work.

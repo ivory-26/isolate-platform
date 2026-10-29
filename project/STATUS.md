@@ -1,16 +1,28 @@
 # Status
 
-Last updated: 2026-10-29 (wave 3 fully integrated, live-verified; wave 4 handover below)
+Last updated: 2026-10-29 (wave 4 provider plane merged and offline-green; no provider keys added)
 
-## Current: wave 3 complete — merged, migrated, validated
+## Current: wave 4 complete offline — Phase D/E (keys) not started
 
-- All five `task/w3-*` branches committed by the coordinator and merged into `main` with **zero conflicts** (`--no-ff`, one merge commit per branch). Worktree copies were reconciled by content hash before merging (see CHALLENGES: duplicated W3-D/W3-F work inside `w3-web`).
-- Root lockfile regenerated centrally (`bun install`); `apps/web` dependencies and `packages/sandbox` workspace are locked.
-- Full gates on `main`: biome 0 errors (9 pre-existing test warnings) · typecheck **8/8 projects** · **662 pass / 0 fail / 0 skip across 38 files** with live Neon enabled (offline: 660 pass / 2 skip).
-- Web production build green; client-bundle secret sweep green (22 checks over 4 client files).
-- CI now builds the web app and runs the client secret sweep in addition to lint/typecheck/tests.
-- Migration `0002_workflow_compilation.sql` **applied to Neon `isolate-platform`** (`divine-butterfly-60669535`) via `scripts/apply-migration.ts`; **20/20 tables verified**.
-- Live suites: 139/139 in `packages/db` (both Neon roundtrips). One integration defect fixed: JSON strings bound to `::jsonb` were double-encoded by the driver (masked in 0001 by `parseJsonbColumn`; exposed by the new `jsonb_typeof` CHECKs) — new repositories now bind `$n::text::jsonb` and the live test asserts DB-level JSON types.
+- All wave-4 lanes merged into `main` with `--no-ff`: W4-0 `10dc869`, W4-INF `15b04ef`, W4-DB `75b668a`, W4-SBX `a13d990` (+ lockfile `186e706`), W4-WRK `b25112e` (+ lockfile `aa60171`), W4-WEB `4e0a914`, W4-OPS (this integration commit).
+- **Zero provider credentials were used or requested.** Modal/Baseten credits remain untouched; Phase D (keys) and Phase E (one bounded live pass) await explicit user authorization.
+- Gates on `main`: biome 0 errors (10 pre-existing warnings) · typecheck **8/8 projects** · **869 pass / 0 fail across 51 files** with live Neon enabled (two identical runs) · web production build green · client secret sweep green (**26 checks**, includes `BASETEN_`, `MODAL_`, `inference.baseten.co`, `modal.com`).
+- **Key-less acceptance** (`bun run acceptance:offline`): PASS on submit → idempotent replay (one job) → worker claim → policy-gated tools (allowlisted read executes, `git.push_branch` denied before the backend) → one model usage row + one sandbox teardown row → `destroy` exactly once on success / throw / abort → complete / dead_letter / retry(LEASE_LOST) acks. Refuses to run if any `BASETEN_*`/`MODAL_*` variable is set; imports no provider SDK.
+- **Integration boundary (wave 5):** real adapters are implemented and tested but the worker composition stays injection-only. `loadTaskContext` has no DB source (tasks/compiled plans do not carry goal/acceptance/file ownership), and `CodingAgentRuntimeFactoryOptions` does not receive the provisioned sandbox handle, so `SandboxToolBackend` cannot be bound per job. Also, `createModalSandboxClient` resolves the Modal app at construction (network), so it must be built at Phase E with keys, never at offline boot. Details in `CHALLENGES.md` and `DECISIONS.md`.
+
+## Wave 4 deliverables (verified)
+
+- **W4-INF** — `basetenModelConfig` (fail-closed, https/no-credentials URL checks, no key echo), `defineCodingAgent` `tools`/`maxSteps`, `createMastraAgentRuntime` usage mapping (`totalUsage` → `AgentUsage`), cumulative token caps → `BUDGET_EXCEEDED`, tool-name-only recording, five read-only sandbox tools behind `wireSandboxTools` (strict Zod, denied tools never reach the backend), `git.read` in the deny-by-default policy. 42 tests.
+- **W4-DB** — all jsonb writes bind `$n::text::jsonb`; live `jsonb_typeof` regression suite plus `budget_limits->>` scans; `UsageRepository` with exact micro-dollar aggregation (`numeric(12,6)` strings, no float sums), in-memory fake on the same helpers, live Neon coverage. 158 tests (live included).
+- **W4-SBX** — `ModalSandboxProvider` behind `SandboxProvider` with an injected client, pre-create limit validation, egress deny → `blockNetwork: true`, combined UTF-8 output cap, abort → `CANCELLED`, idempotent destroy; server-only SDK factory with dynamic import. 184 tests, offline.
+- **W4-WRK** — bounded caps (per-turn/per-task tokens, sandbox seconds, USD, steps); `createTaskExecutionHandler` with exactly-once teardown on success/throw/abort, per-call usage rows, sandbox usage row after destroy, bounded verdict mapping; offline composition; 84 tests.
+- **W4-WEB** — `resolveCallerScope` (session + membership seams, UUID validation, tenant isolation), compile-at-submit with `WORKFLOW_REJECTED` issue surfacing, production DB deployments fail closed until a real session adapter exists; 158 tests + build + sweep.
+- **W4-OPS** — `scripts/acceptance-offline.ts`, client sweep patterns, full offline gates ×2, docs.
+
+## Wave 4 handover (superseded by the record above)
+
+Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; inference uses the existing OpenAI-compatible model object and sandboxing uses the existing `SandboxProvider` contract. **Keys are the last step:** every lane is implemented, tested and merged with `INFERENCE_PROVIDER=none` / `SANDBOX_PROVIDER=null`; user-supplied credentials arrive only in Phase D, after offline acceptance. Policy: [AGENTS.md](AGENTS.md#provider-credits-baseten--modal-strict). Full task specs and phase order live in [TASKS.md](TASKS.md#wave-4--provider-plane-baseten-inference--modal-sandboxes-planned-2026-10-29).
+
 
 ## Wave 3 deliverables (verified)
 
@@ -33,20 +45,9 @@ Last updated: 2026-10-29 (wave 3 fully integrated, live-verified; wave 4 handove
 - Local mode uses `@isolate/db/testing` fakes when `DATABASE_URL` is absent; Postgres mode uses `@isolate/db` server-side only. Workflow compilation service (scope → membership → policy → compile → persist/reject) is implemented server-side with a W4-owned authored-version reader seam.
 - 114 tests, typecheck, production build and client secret sweep green; no provider keys or DB URLs in client bundle.
 
-## Wave 4 handover (planned 2026-10-29: provider plane)
+## Wave 4 history (planning record)
 
-Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; inference uses the existing OpenAI-compatible model object and sandboxing uses the existing `SandboxProvider` contract. **Keys are the last step:** every lane is implemented, tested and merged with `INFERENCE_PROVIDER=none` / `SANDBOX_PROVIDER=null`; user-supplied credentials arrive only in Phase D, after offline acceptance. Policy: [AGENTS.md](AGENTS.md#provider-credits-baseten--modal-strict). Full task specs and phase order live in [TASKS.md](TASKS.md#wave-4--provider-plane-baseten-inference--modal-sandboxes-planned-2026-10-29).
-
-- **W4-0 (coordinator):** commit interface contracts; verify documented model id and Modal egress/image facts from installed types and docs (no keyed calls); design the key-less acceptance path.
-- **W4-DB (`packages/db`):** jsonb write normalization + `UsageRepository` over existing `usage_records` (no migration).
-- **W4-INF (`packages/mastra`):** Baseten model config, tools passed to `Agent`, `maxSteps`, usage callback, sandbox-backed typed tools through the policy gate; fake model only.
-- **W4-SBX (`packages/sandbox`):** `ModalSandboxProvider` (`modal@0.11.x`) with injected client and offline fake tests.
-- **W4-WRK (`apps/worker`):** task handler wiring provider + runtime + usage; always destroy in `finally`; abort/lease-safe; fake provider/runtime.
-- **W4-WEB (`apps/web`):** auth/`CallerScope` + compile-at-submit + rejection surfacing (W4-A/C).
-- **W4-OPS:** client sweep patterns (`BASETEN_`, `MODAL_`), full offline validate, docs, push on approval. CI never receives provider keys.
-- **Phase D–E (only after A–C green):** user adds keys → one `GET /v1/models` → exactly one Baseten completion (`max_tokens <= 16`) and one Modal sandbox (`echo`, ≤60 s) → measure `usage_records`, verify zero sandboxes, report spend.
-
-Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline. W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic. Nothing in wave 4 has been started yet.
+Wave 4 was planned as a provider plane with $100 Baseten and $100 Modal credits, keys last. All lanes were implemented and merged offline; Phase D (user adds keys) and Phase E (one bounded completion + one sandbox) remain unauthorized and unstarted. Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline. W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic.
 
 ## Repository
 - This repo (`isolate-platform`) contains ONLY event-week work (started Oct 27, 2026), fresh git history. The pre-event spike/compatibility MVP lives in a separate private repo and stays out of this history.

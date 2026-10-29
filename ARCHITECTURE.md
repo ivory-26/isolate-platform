@@ -210,6 +210,9 @@ The validation loop:
 
 Never define “complete the goal definitely” as an infinite loop. Completion means all required gates pass, an authorized human approves privileged actions, or the system explicitly stops with a documented blocker.
 
+Offline acceptance (`bun run acceptance:offline`, source `scripts/acceptance-offline.ts`) runs the lifecycle — submit → idempotent replay → claim → policy-gated tools → usage rows → sandbox destroy on success/throw/abort → ack — against package fakes with zero provider credentials. It refuses to start if any `BASETEN_*`/`MODAL_*` variable is present. Live provider calls are a separate, explicitly authorized, single-run phase; CI never receives keys.
+
+
 ## 10. Parallel agents and Git worktrees
 
 Use a task coordinator and a single integration owner for each integration branch/release.

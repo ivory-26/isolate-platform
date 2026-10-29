@@ -205,3 +205,18 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: a packaging defect in 1.3.10's dependency layout; separately, Windows `npx` cold start can exceed the MCP client's init timeout.
 - Correction: installed pinned local copies (`~/.qoder/mcp-servers/{context7,mastra-docs}`, mastra-docs pinned 1.3.9) and launch them with `node <dist/index.js>` instead of `npx`. Neon uses the hosted streamable-HTTP MCP with OAuth.
 - Prevention: pin MCP server versions and pre-install them locally on Windows; a local `node` entrypoint removes `npx` from the startup path entirely. Zed's config still uses `@latest` and is tracked as W4-H (user declined to change it).
+
+## 2026-10-29 — Wave 4 integration boundary: adapters are tested but not selected at boot
+- Symptom: W4-INF/SBX implement Baseten and Modal adapters and W4-WRK injects `SandboxProvider`/`CodingAgentRuntimeFactory`/`UsageSink`, but the worker's composition root still defaults to `NullProvider` + unconfigured runtime, so no real task can execute end-to-end yet.
+- Root cause (three independent seams):
+  1. **No task-context source.** `TaskContext` needs `goal`, `acceptanceCriteria` and `fileOwnership`; `tasks` and `compiled_plans` persist neither, and `CompiledWorkflowPlan` carries only graph structure. `loadTaskContext` therefore cannot be implemented without a task-intake schema (wave 5).
+  2. **No sandbox handle at the runtime factory.** `CodingAgentRuntimeFactoryOptions` exposes only `onRecord`/`onUsage`/`caps`; the handler provisions the sandbox but does not pass the handle, so `SandboxToolBackend` cannot be bound to the job's sandbox. Extending the contract is small but touches merged lanes and needs its own tests.
+  3. **Modal client construction is network-bound.** `createModalSandboxClient` calls `client.apps.fromName(...)` before returning, which would spend a Modal API call at worker boot. Building it eagerly in offline composition would violate the "no keys before code" rule.
+- Correction: keep composition injection-only and prove the full lifecycle with `scripts/acceptance-offline.ts` (fakes, zero credentials). Do not half-wire adapters that cannot run.
+- Prevention: treat "adapter implemented" and "composition wired" as separate DoD items; when a factory lacks a value it needs (here the sandbox handle), surface it during contract review rather than patching around it in the composition root.
+
+## 2026-10-29 — In-memory queue fakes require a claim before `ackFail`
+- Symptom: the acceptance script's throw/abort scenarios received `{ ok: false }` from `ackFail` even though the handler had run.
+- Root cause: the fake (like Postgres) only acknowledges jobs in `claimed` state owned by the caller; the script enqueued and immediately failed without claiming.
+- Correction: `claimNext` before `handle`, then `ackFail` with the claimed id. The success path already went through the real worker loop, which claims first.
+- Prevention: acceptance scripts must model the queue state machine, not just the handler; ack assertions should follow claim → handle → ack in that order.

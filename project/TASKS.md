@@ -72,6 +72,7 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - W4-B follow-up: normalize remaining `JSON.stringify(...)` → `::jsonb` writes to `::text::jsonb` (or object binds); add live `jsonb_typeof` assertions; verify SQL-side `budget_limits->>` scans still work.
 - New `UsageRepository` over the existing `usage_records` table: `record({organizationId, taskId, modelId, provider, promptTokens, completionTokens, costUsd})`, `sumByTask`, `sumByOrgSince`; in-memory fake on the same pure helpers; live test. **No migration** (`usage_records` already exists).
 - DoD: offline gates ×2; live suite green when `DATABASE_URL` is present; commit + report.
+- Status: **done** — commit `fe70346` (merge `75b668a`). Six jsonb write sites now bind `$n::text::jsonb`; live `jsonb_typeof` + `budget_limits->>` suite; exact micro-dollar `UsageRepository` + in-memory fake. Gates ×2: 154 pass / 4 skip offline; on `main` with Neon: 158 pass / 0 fail (live jsonb + usage rows green).
 
 ### W4-INF — `packages/mastra/**` (owner: agent W4-INF, branch `task/w4-inf`)
 - `basetenModelConfig(env)`: `{ providerId: "baseten", modelId: BASETEN_MODEL_ID (default meta-models/muse-spark-open), url: BASETEN_BASE_URL ?? "https://inference.baseten.co/v1", apiKey: BASETEN_API_KEY }`; fail closed with a bounded error when the key is absent (no silent fallback).
@@ -80,12 +81,14 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - Bounded loop: per-turn output-token cap, per-task token accumulator → `BUDGET_EXCEEDED` block; `maxSteps` finite.
 - Tests: fake Agent + fake backend only (no network); usage mapping, tool denial, cap exhaustion, tool-call recording.
 - DoD: offline gates ×2; commit + report.
+- Status: **done** — commit `55bb35c` (merge `15b04ef`). 42 tests / 140 expects ×2, tsc clean, biome clean; no keyed calls.
 
 ### W4-SBX — `packages/sandbox/**` (owner: agent W4-SBX, branch `task/w4-sbx`)
 - Add `modal` (pin `0.11.x`) to `packages/sandbox/package.json`; implement `ModalSandboxProvider` behind the existing `SandboxProvider` contract. Inject a `ModalSandboxClient` interface (create/exec/terminate) so tests never touch the network; construct the real `ModalClient` only in a server-only factory.
 - Map `SandboxSpec` → `SandboxCreateParams`: cpu, memoryMiB, lifetime `timeoutMs`, `idleTimeoutMs`, absolute `workdir`, `command: ["sleep","48h"]`; egress deny-by-default (`blockNetwork: true` unless a verified domain/CIDR allowlist is provably required for clone/install). Reject unsupported limits BEFORE create.
 - `execute`: `sb.exec(argv, { timeoutMs })`, capture stdout/stderr with caps, `wait()` exit code, map to `CommandResult`; abort propagates. `destroy`: idempotent terminate, tolerates already-gone.
 - Offline fake-client tests: mapping, pre-create rejection, timeout, output cap, destroy idempotency, no host process spawning.
+- Status: **done** — commit `db18988` (merge `a13d990`, lockfile `186e706`). 184 sandbox tests ×2; `external: ["modal"]` added to the barrel bundle assertion because the SDK's `detect-libc` embeds a `child_process` reference (first-party no-host-exec assertion unchanged).
 - **Offline only in this lane.** The live smoke is Phase E (after keys), single-run: smallest allowed CPU/memory (target 512 MiB), `timeoutMs <= 60000`, create → `echo` → terminate, assert cleanup. Never in CI, never repeated for debugging.
 - DoD: offline gates ×2; commit + report.
 
@@ -94,17 +97,20 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - `TaskExecutionHandler`: provision sandbox → bind tenant/task/run context → run bounded agent turns with sandbox tools → persist usage via injected `UsageSink` → **destroy in `finally`**; heartbeat during long work; abort → cancel + destroy; map failures to bounded verdicts. Idempotent under lease redelivery.
 - Tests: fake provider/runtime/usage sink; cleanup on success, throw and abort; retry classification; no secret/payload leakage into logs or state.
 - DoD: offline gates ×2; commit + report.
+- Status: **done** — commit `9c4eb3d` (merge `b25112e`, lockfile `aa60171`). 84 tests ×2. Divergence: `SandboxSpec` has no `idleTimeoutMs` on this branch, so the handler carries it for the adapter without forwarding; empty turn output is the completion protocol.
 
 ### W4-WEB — `apps/web/**` (owner: agent W4-WEB, branch `task/w4-web`)
 - W4-A: `resolveCallerScope` (session → org/user/memberships) with a test-only dev adapter; enforce on task submission and list handlers; tenant-isolation tests at the API boundary.
 - W4-C: compile at submit against `AuthoredWorkflowVersionReader`, persist the pinned plan, surface `rejection_issues` in the task response; keep `Cache-Control: private, no-store`; no provider keys or DB URLs in the client bundle.
 - Visual editor and approval queue move to wave 5 (same package, single writer).
 - DoD: build + client secret sweep + tests; commit + report.
+- Status: **done** — commit `c5fa6e1` (merge `4e0a914`). 158 tests ×2, build + 22-check sweep green. Contract change: submit now requires `workflowDefinitionId` + `workflowVersion`; receipts carry `compilation`; `WORKFLOW_REJECTED` added.
 
 ### W4-OPS — Coordinator integration (after all lanes report)
 - Extend `apps/web/scripts/check-client.ts` forbidden patterns with `BASETEN_`, `MODAL_`, `inference.baseten.co`, `modal.com`.
 - CI: **no provider keys and no live calls** (CI must stay free). Offline gates only; gitleaks triage; full `bun run validate`; docs (`STATUS`/`DECISIONS`/`CHALLENGES`/`TASKS`/`ARCHITECTURE`); push only with user approval.
 - Keep W4-H (pin Zed's Mastra docs MCP to 1.3.9) as opportunistic tooling.
+- Status: **done** — `scripts/acceptance-offline.ts` (+ `bun run acceptance:offline`) exercises submit → replay → claim → gated tools → usage → destroy(success/throw/abort) → ack with zero provider env, refusing to run if `BASETEN_*`/`MODAL_*` are set. Sweep patterns added. `main` gates: 869 pass / 0 fail ×2, 8/8 typecheck, biome 0 errors, web build + 26-check sweep. Real adapters remain injection-only (see CHALLENGES §Wave 4 integration boundary); Phase D/E not started.
 
 ### Dependency graph / parallelism
 `W4-0 contracts → {W4-DB, W4-INF, W4-SBX, W4-WEB in parallel} → W4-WRK (develops against interfaces + fakes, integrates after INF/SBX merge) → W4-OPS`.

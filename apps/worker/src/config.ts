@@ -21,6 +21,24 @@ export const workerConfigSchema = z.object({
 		(value) => (typeof value === "string" ? Number(value) : value),
 		sharedWorkerConfigSchema.shape.jobTimeoutMs,
 	),
+	// Per-turn / per-task spend caps (worker-local until promoted to shared).
+	// Every bound is finite and explicit: no unbounded model or sandbox run.
+	maxOutputTokensPerTurn: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(8192)
+		.default(1024),
+	maxTokensPerTask: z.coerce
+		.number()
+		.int()
+		.min(1_000)
+		.max(2_000_000)
+		.default(200_000),
+	maxSandboxSeconds: z.coerce.number().int().min(60).max(3600).default(900),
+	// USD; zero is allowed (spend disabled) but never negative or non-finite.
+	maxCostUsdPerTask: z.coerce.number().min(0).max(100).default(1),
+	maxAgentSteps: z.coerce.number().int().min(1).max(50).default(12),
 	databaseUrl: z.string().min(1).optional(),
 });
 
@@ -48,6 +66,21 @@ export function loadWorkerConfig(
 		...(env.WORKER_JOB_TIMEOUT_MS === undefined
 			? {}
 			: { jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS }),
+		...(env.WORKER_MAX_OUTPUT_TOKENS_PER_TURN === undefined
+			? {}
+			: { maxOutputTokensPerTurn: env.WORKER_MAX_OUTPUT_TOKENS_PER_TURN }),
+		...(env.WORKER_MAX_TOKENS_PER_TASK === undefined
+			? {}
+			: { maxTokensPerTask: env.WORKER_MAX_TOKENS_PER_TASK }),
+		...(env.WORKER_MAX_SANDBOX_SECONDS === undefined
+			? {}
+			: { maxSandboxSeconds: env.WORKER_MAX_SANDBOX_SECONDS }),
+		...(env.WORKER_MAX_COST_USD_PER_TASK === undefined
+			? {}
+			: { maxCostUsdPerTask: env.WORKER_MAX_COST_USD_PER_TASK }),
+		...(env.WORKER_MAX_AGENT_STEPS === undefined
+			? {}
+			: { maxAgentSteps: env.WORKER_MAX_AGENT_STEPS }),
 		...(env.DATABASE_URL === undefined
 			? {}
 			: { databaseUrl: env.DATABASE_URL }),

@@ -4,7 +4,8 @@
 	"type": "module",
 	"workspaces": ["apps/*", "packages/*"],
 	"scripts": {
-		"dev:worker": "cd apps/worker && bun --env-file ../../.env run dev",
+		"dev:web": "cd apps/web && bun --env-file=../../.env run dev",
+		"dev:worker": "cd apps/worker && bun --env-file=../../.env run dev",
 		"format": "biome format",
 		"lint": "biome lint",
 		"check": "biome check",

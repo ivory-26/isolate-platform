@@ -41,6 +41,7 @@ packages/integrations/ GitHub/MCP connector foundations
 | `bun run typecheck` | tsc per project (strict) |
 | `bun run test` | Bun test (live-DB tests skip without `DATABASE_URL`) |
 | `bun run validate` | check + typecheck + test |
+| `bun run dev:web` | web app at http://localhost:3000 (loads `.env` from the repo root) |
 | `bun run dev:worker` | worker (reads `.env` at repo root; create from `.env.example`) |
 
 CI: `.github/workflows/ci.yml` runs the same gates on every PR + push, with advisory gitleaks secret scanning.

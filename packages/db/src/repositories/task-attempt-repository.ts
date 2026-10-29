@@ -34,7 +34,7 @@ const STMT = {
 		now(), NULL, NULL
 	)
 	RETURNING ${ATTEMPT_COLUMNS}`,
-	finish: `UPDATE task_attempts SET finished_at = now(), outcome = $2::jsonb
+	finish: `UPDATE task_attempts SET finished_at = now(), outcome = $2::text::jsonb
 		WHERE id = $1 AND finished_at IS NULL
 		RETURNING ${ATTEMPT_COLUMNS}`,
 	countRepairAttempts: `SELECT COUNT(*)::int AS n FROM task_attempts

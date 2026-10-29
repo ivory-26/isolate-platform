@@ -6,6 +6,7 @@ import {
 	type OrganizationId,
 	type TaskId,
 	type TaskStatus,
+	type UsageRecordInput,
 } from "@isolate/shared";
 import type {
 	ApprovalRepository,
@@ -26,7 +27,15 @@ import {
 	type TaskRepository,
 	type TaskTransitionFailureCode,
 } from "../repositories/task-repository";
-import type { ApprovalRow, TaskRow } from "../schema";
+import {
+	aggregateUsageRows,
+	costUsdToMicros,
+	formatCostMicros,
+	type UsageRepository,
+	type UsageTotals,
+	validateUsageInput,
+} from "../repositories/usage-repository";
+import type { ApprovalRow, TaskRow, UsageRecordRow } from "../schema";
 
 /**
  * In-memory implementations of the repository contracts. They embed the SAME
@@ -448,6 +457,60 @@ export class InMemoryQueueRepository implements QueueRepository {
 
 function isSha256Hex(value: string): boolean {
 	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+/**
+ * In-memory spend ledger. Stores the SAME canonical cost strings the driver
+ * writes (`numeric(12,6)` semantics) and aggregates through the shared pure
+ * helper, so fake and driver totals cannot diverge.
+ */
+export class InMemoryUsageRepository implements UsageRepository {
+	private readonly rows: UsageRecordRow[] = [];
+
+	constructor(private readonly clock: () => Date = () => new Date()) {}
+
+	async record(input: UsageRecordInput): Promise<UsageRecordRow> {
+		validateUsageInput(input);
+		const micros = costUsdToMicros(input.costUsd);
+		const row: UsageRecordRow = {
+			id: newUuid(),
+			organization_id: input.organizationId,
+			task_id: input.taskId,
+			model_id: input.modelId,
+			provider: input.provider,
+			prompt_tokens: input.promptTokens,
+			completion_tokens: input.completionTokens,
+			cost_usd: micros === null ? null : formatCostMicros(micros),
+			created_at: this.clock(),
+		};
+		this.rows.push(row);
+		return { ...row };
+	}
+
+	async sumByTask(taskId: TaskId): Promise<UsageTotals> {
+		requireNonEmpty(taskId, "taskId");
+		return aggregateUsageRows(
+			this.rows.filter((row) => row.task_id === taskId),
+		);
+	}
+
+	async sumByOrgSince(
+		organizationId: OrganizationId,
+		since: Date,
+	): Promise<UsageTotals> {
+		requireNonEmpty(organizationId, "organizationId");
+		if (!(since instanceof Date) || Number.isNaN(since.getTime())) {
+			throw new Error("since must be a valid Date");
+		}
+		const sinceMs = since.getTime();
+		return aggregateUsageRows(
+			this.rows.filter(
+				(row) =>
+					row.organization_id === organizationId &&
+					row.created_at.getTime() >= sinceMs,
+			),
+		);
+	}
 }
 
 function cloneApproval(row: ApprovalRow): ApprovalRow {

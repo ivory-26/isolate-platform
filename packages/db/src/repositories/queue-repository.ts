@@ -114,7 +114,7 @@ const STMT = {
 		organization_id, task_id, type, payload, status, attempts,
 		max_attempts, not_before, enqueue_uuid_key, created_at
 	) VALUES (
-		$1, $2, $3, $4::jsonb, 'pending', 0, $5, COALESCE($6::timestamptz, now()), $7, now()
+		$1, $2, $3, $4::text::jsonb, 'pending', 0, $5, COALESCE($6::timestamptz, now()), $7, now()
 	)
 	ON CONFLICT (organization_id, enqueue_uuid_key) DO NOTHING
 	RETURNING ${JOB_COLUMNS}`,

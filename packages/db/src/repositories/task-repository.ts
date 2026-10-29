@@ -66,7 +66,7 @@ const STMT = {
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, created_by, created_at, updated_at
 	) VALUES (
-		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::jsonb, $6, now(), now()
+		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb, $6, now(), now()
 	)
 	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	RETURNING ${TASK_COLUMNS}`,

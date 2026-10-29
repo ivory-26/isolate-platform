@@ -4,6 +4,7 @@ import { createDb } from "./client";
 import { PostgresApprovalRepository } from "./repositories/approval-repository";
 import { PostgresQueueRepository } from "./repositories/queue-repository";
 import { PostgresTaskRepository } from "./repositories/task-repository";
+import { PostgresUsageRepository } from "./repositories/usage-repository";
 import type { ApprovalRow, TaskRow } from "./schema";
 
 /**
@@ -230,5 +231,175 @@ test.skipIf(!hasDb)(
 		}
 	},
 	// Neon connect + TLS handshake can exceed Bun's 5s default on cold pools.
+	120000,
+);
+
+test.skipIf(!hasDb)(
+	"Neon live: usage rows bind exact jsonb-unrelated numerics and aggregate",
+	async () => {
+		const sql = createDb(process.env.DATABASE_URL!);
+		const suffix = crypto.randomUUID().slice(0, 8);
+		const slug = `live-w4db-usage-${suffix}`;
+		const email = `live-w4db-usage-${suffix}@example.test`;
+		const fullName = `live-w4db-usage-${suffix}/repo`;
+		let orgUuid: string | null = null;
+
+		try {
+			const ready = (await sql.unsafe(
+				"SELECT to_regclass('public.usage_records') AS t",
+				[],
+			)) as Array<Record<string, unknown>>;
+			if (!ready[0]?.t) {
+				return; // migration 0001 not applied: clean skip
+			}
+
+			const orgRows = (await sql.unsafe(
+				"INSERT INTO organizations (name, slug) VALUES ($1, $2) RETURNING id",
+				[slug, slug],
+			)) as Array<Record<string, unknown>>;
+			orgUuid = orgRows[0].id as string;
+			const userRows = (await sql.unsafe(
+				"INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id",
+				[email, "W4-DB Usage Live"],
+			)) as Array<Record<string, unknown>>;
+			const repoRows = (await sql.unsafe(
+				`INSERT INTO repositories (organization_id, provider, external_full_name, default_branch)
+					VALUES ($1, 'github', $2, 'main') RETURNING id`,
+				[orgUuid, fullName],
+			)) as Array<Record<string, unknown>>;
+			await sql.unsafe(
+				"INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, 'member')",
+				[orgUuid, userRows[0].id],
+			);
+
+			const orgId = asOrganizationId(orgUuid);
+			const tasks = new PostgresTaskRepository(sql);
+			const usage = new PostgresUsageRepository(sql);
+			const task = await tasks.create({
+				organizationId: orgId,
+				repositoryId: repoRows[0].id as string,
+				branch: `task/usage-${suffix}`,
+				idempotencyKey: `usage-${suffix}`,
+				budgetLimits: {
+					maxAgentTurns: 5,
+					maxRepairAttempts: 2,
+					maxDurationMs: 3600000,
+				},
+				createdBy: userRows[0].id as string,
+			});
+
+			const first = await usage.record({
+				organizationId: orgId,
+				taskId: task.id,
+				provider: "baseten",
+				modelId: "meta-models/muse-spark-open",
+				promptTokens: 100,
+				completionTokens: 20,
+				costUsd: 0.1,
+			});
+			expect(first.prompt_tokens).toBe(100);
+			expect(first.cost_usd).toBe("0.100000");
+			await usage.record({
+				organizationId: orgId,
+				taskId: task.id,
+				provider: "baseten",
+				modelId: "meta-models/muse-spark-open",
+				promptTokens: 50,
+				completionTokens: 5,
+				costUsd: 0.2,
+			});
+
+			const byTask = await usage.sumByTask(task.id);
+			expect(byTask).toEqual({
+				promptTokens: 150,
+				completionTokens: 25,
+				totalTokens: 175,
+				costUsd: "0.300000",
+			});
+			expect(
+				await usage.sumByOrgSince(orgId, new Date(Date.now() - 3600_000)),
+			).toEqual(byTask);
+			expect(
+				await usage.sumByOrgSince(orgId, new Date(Date.now() + 3600_000)),
+			).toEqual({
+				promptTokens: 0,
+				completionTokens: 0,
+				totalTokens: 0,
+				costUsd: null,
+			});
+
+			// Exact storage: no binary-float tail, and column types are the
+			// numeric/integer types (json has no part in this table).
+			const raw = (await sql.unsafe(
+				`SELECT cost_usd::text AS cost_usd FROM usage_records
+					WHERE organization_id = $1::uuid ORDER BY cost_usd ASC`,
+				[orgId],
+			)) as Array<Record<string, unknown>>;
+			expect(raw.map((row) => row.cost_usd)).toEqual(["0.100000", "0.200000"]);
+			const types = (await sql.unsafe(
+				`SELECT DISTINCT
+					pg_typeof(cost_usd)::text AS cost_usd_type,
+					pg_typeof(prompt_tokens)::text AS prompt_tokens_type,
+					pg_typeof(completion_tokens)::text AS completion_tokens_type
+				FROM usage_records WHERE organization_id = $1::uuid`,
+				[orgId],
+			)) as Array<Record<string, unknown>>;
+			expect(types).toEqual([
+				{
+					cost_usd_type: "numeric",
+					prompt_tokens_type: "integer",
+					completion_tokens_type: "integer",
+				},
+			]);
+		} finally {
+			const teardown: Array<[string, unknown[]]> = [
+				[
+					"DELETE FROM tool_invocations WHERE organization_id = $1::uuid",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM audit_events WHERE organization_id = $1::uuid",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM usage_records WHERE organization_id = $1::uuid",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM jobs WHERE task_id IN (SELECT id FROM tasks WHERE organization_id = $1::uuid)",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE organization_id = $1::uuid)",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM run_events WHERE task_id IN (SELECT id FROM tasks WHERE organization_id = $1::uuid)",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM artifacts WHERE task_id IN (SELECT id FROM tasks WHERE organization_id = $1::uuid)",
+					[orgUuid],
+				],
+				[
+					"DELETE FROM workflow_runs WHERE task_id IN (SELECT id FROM tasks WHERE organization_id = $1::uuid)",
+					[orgUuid],
+				],
+				["DELETE FROM tasks WHERE organization_id = $1::uuid", [orgUuid]],
+				["DELETE FROM repositories WHERE external_full_name = $1", [fullName]],
+				["DELETE FROM memberships WHERE organization_id = $1::uuid", [orgUuid]],
+				["DELETE FROM users WHERE email = $1", [email]],
+				["DELETE FROM organizations WHERE slug = $1", [slug]],
+			];
+			for (const [statement, params] of teardown) {
+				try {
+					await sql.unsafe(statement, params);
+				} catch {
+					// Best effort only; cleanup must not mask the test failure.
+				}
+			}
+			await sql.end({ timeout: 5 });
+		}
+	},
 	120000,
 );

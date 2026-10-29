@@ -31,8 +31,10 @@ function SubmitPage() {
 			<aside>
 				Local demo requires explicit development/test mode, WEB_LOCAL_DEMO=true
 				and no database configuration. Demo repository:{" "}
-				<code>10000000-0000-4000-8000-000000000003</code>. Data is temporary; no
-				worker executes it.
+				<code>10000000-0000-4000-8000-000000000003</code>; demo workflow:{" "}
+				<code>10000000-0000-4000-8000-000000000004</code> version <code>1</code>
+				. Data is temporary; no worker executes it. Submissions compile the
+				pinned version before a task is created.
 			</aside>
 			<form
 				onSubmit={(event) => {
@@ -45,6 +47,10 @@ function SubmitPage() {
 							repositoryId: String(form.get("repositoryId") ?? ""),
 							branch: String(form.get("branch") ?? ""),
 							idempotencyKey: crypto.randomUUID(),
+							workflowDefinitionId: String(
+								form.get("workflowDefinitionId") ?? "",
+							),
+							workflowVersion: Number(form.get("workflowVersion")),
 							budget: {
 								maxAgentTurns: Number(form.get("maxAgentTurns")),
 								repairBudget: Number(form.get("repairBudget")),
@@ -54,7 +60,7 @@ function SubmitPage() {
 					);
 					if (!parsed.success) {
 						setValidationError(
-							"Enter a valid repository UUID, task branch and bounded execution limits.",
+							"Enter a valid repository UUID, pinned workflow definition/version, task branch and bounded execution limits.",
 						);
 						return;
 					}
@@ -79,6 +85,24 @@ function SubmitPage() {
 						required
 						maxLength={120}
 						defaultValue="task/web-demo"
+					/>
+					<label htmlFor="workflowDefinitionId">Workflow definition ID</label>
+					<input
+						id="workflowDefinitionId"
+						name="workflowDefinitionId"
+						required
+						placeholder="Workflow definition UUID"
+						defaultValue="10000000-0000-4000-8000-000000000004"
+					/>
+					<label htmlFor="workflowVersion">Pinned workflow version</label>
+					<input
+						id="workflowVersion"
+						name="workflowVersion"
+						type="number"
+						min={1}
+						max={2147483647}
+						defaultValue={1}
+						required
 					/>
 					<label htmlFor="maxAgentTurns">Maximum agent turns</label>
 					<input
@@ -149,12 +173,27 @@ function SubmitPage() {
 							<h2>Task queued</h2>
 							<p>
 								Task <code>{mutation.data.value.task.id}</code> is{" "}
-								{mutation.data.value.task.status}.
+								{mutation.data.value.task.status}. Compiled plan{" "}
+								<code>{mutation.data.value.compilation.compiledPlanId}</code> is
+								pinned for this submission.
 							</p>
 							<Link to="/runs">View tasks and runs</Link>
 						</section>
 					) : (
-						<p role="alert">{mutation.data.error.message}</p>
+						<>
+							<p role="alert">{mutation.data.error.message}</p>
+							{mutation.data.error.code === "WORKFLOW_REJECTED" &&
+								mutation.data.error.issues && (
+									<ul>
+										{mutation.data.error.issues.map((issue) => (
+											<li key={`${issue.code}:${issue.path}:${issue.message}`}>
+												{issue.message} <code>{issue.path}</code>{" "}
+												<small>{issue.code}</small>
+											</li>
+										))}
+									</ul>
+								)}
+						</>
 					))}
 			</div>
 		</main>

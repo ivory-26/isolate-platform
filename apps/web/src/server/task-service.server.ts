@@ -10,6 +10,8 @@ import {
 	submitTaskSchema,
 	type TaskSummary,
 	type ValidatedSubmission,
+	type WorkflowRejectionIssue,
+	workflowRejectionIssuesSchema,
 } from "../features/tasks/contracts";
 
 export type CallerScope = { organizationId: OrganizationId; userId: UserId };
@@ -21,7 +23,11 @@ export interface TaskStore {
 	listLatest(scope: CallerScope, limit: number): Promise<TaskSummary[]>;
 }
 export class ControlPlaneError extends Error {
-	constructor(readonly code: FailureCode) {
+	constructor(
+		readonly code: FailureCode,
+		/** Already sanitized by the compilation boundary; bounded again below. */
+		readonly issues?: readonly WorkflowRejectionIssue[],
+	) {
 		super(failureMessages[code]);
 	}
 }
@@ -29,6 +35,13 @@ const scopeSchema = z.strictObject({
 	organizationId: z.uuid(),
 	userId: z.uuid(),
 });
+function boundedIssues(
+	error: ControlPlaneError,
+): WorkflowRejectionIssue[] | undefined {
+	if (error.code !== "WORKFLOW_REJECTED" || !error.issues) return undefined;
+	const parsed = workflowRejectionIssuesSchema.safeParse(error.issues);
+	return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
+}
 export function createTaskService(deps: {
 	// Only a trusted server-side identity adapter may supply this context.
 	resolveScope: () => Promise<CallerScope>;
@@ -45,8 +58,17 @@ export function createTaskService(deps: {
 		} catch (error) {
 			const code =
 				error instanceof ControlPlaneError ? error.code : "UNAVAILABLE";
+			const issues =
+				error instanceof ControlPlaneError ? boundedIssues(error) : undefined;
 			// Never serialize driver errors, request data, stacks, or credentials.
-			return { ok: false, error: { code, message: failureMessages[code] } };
+			return {
+				ok: false,
+				error: {
+					code,
+					message: failureMessages[code],
+					...(issues ? { issues } : {}),
+				},
+			};
 		}
 	}
 	return {

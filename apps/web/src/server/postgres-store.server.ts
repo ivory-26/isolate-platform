@@ -1,12 +1,17 @@
 import "@tanstack/react-start/server-only";
 import {
 	type PgSql,
+	PostgresCompiledPlanRepository,
 	PostgresQueueRepository,
 	PostgresTaskRepository,
+	PostgresWorkflowRejectionRepository,
+	PostgresWorkflowVersionRepository,
 } from "@isolate/db";
+import type { SubmissionReceipt } from "../features/tasks/contracts";
 import { taskSummarySchema } from "../features/tasks/contracts";
 import { createRepositoryStore } from "./repository-store.server";
-import type { TaskStore } from "./task-service.server";
+import { createSubmissionCompiler } from "./submission-compilation.server";
+import { ControlPlaneError, type TaskStore } from "./task-service.server";
 
 export const repositoryOwnershipSql =
 	"SELECT id FROM repositories WHERE organization_id = $1 AND id = $2 LIMIT 1";
@@ -57,26 +62,54 @@ export function createPostgresStore(sql: PgSql): TaskStore {
 	return {
 		listLatest,
 		async submit(scope, input) {
-			// Task and queue writes commit together. Existing repository constructors
-			// require PgSql; transactions provide the same bound unsafe API.
-			return sql.begin(async (transaction) => {
-				const connection = transaction as unknown as PgSql;
-				return createRepositoryStore({
-					tasks: new PostgresTaskRepository(connection),
-					queue: new PostgresQueueRepository(connection),
-					repositoryBelongsToOrganization: async (
-						organizationId,
-						repositoryId,
-					) =>
-						(
-							await connection.unsafe(repositoryOwnershipSql, [
+			// Ownership, compilation artifacts, task and queue writes commit together.
+			// A rejection is not an error for the records: the sanitized rejection
+			// history must survive, while no task or job may be written.
+			let rejection: ControlPlaneError | undefined;
+			const receipt = await sql.begin<SubmissionReceipt | null>(
+				async (transaction) => {
+					const connection = transaction as unknown as PgSql;
+					const compileSubmission = createSubmissionCompiler({
+						getRepositories: async () => ({
+							authoredVersions: new PostgresWorkflowVersionRepository(
+								connection,
+							),
+							compiledPlans: new PostgresCompiledPlanRepository(connection),
+							rejections: new PostgresWorkflowRejectionRepository(connection),
+						}),
+					});
+					try {
+						return await createRepositoryStore({
+							tasks: new PostgresTaskRepository(connection),
+							queue: new PostgresQueueRepository(connection),
+							repositoryBelongsToOrganization: async (
 								organizationId,
 								repositoryId,
-							])
-						).length === 1,
-					listLatest,
-				}).submit(scope, input);
-			});
+							) =>
+								(
+									await connection.unsafe(repositoryOwnershipSql, [
+										organizationId,
+										repositoryId,
+									])
+								).length === 1,
+							listLatest,
+							compileSubmission,
+						}).submit(scope, input);
+					} catch (error) {
+						if (
+							error instanceof ControlPlaneError &&
+							error.code === "WORKFLOW_REJECTED"
+						) {
+							rejection = error;
+							return null;
+						}
+						throw error;
+					}
+				},
+			);
+			if (rejection) throw rejection;
+			if (receipt === null) throw new ControlPlaneError("UNAVAILABLE");
+			return receipt;
 		},
 	};
 }

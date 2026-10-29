@@ -10,6 +10,8 @@
 	},
 	"dependencies": {
 		"@isolate/db": "workspace:*",
+		"@isolate/mastra": "workspace:*",
+		"@isolate/sandbox": "workspace:*",
 		"@isolate/shared": "workspace:*",
 		"zod": "^4.6.7"
 	}

@@ -76,3 +76,79 @@ describe("worker config", () => {
 		);
 	});
 });
+
+describe("worker config — task execution caps", () => {
+	test("defaults are bounded and deterministic", () => {
+		const config = workerConfigSchema.parse({});
+		expect(config.maxOutputTokensPerTurn).toBe(1024);
+		expect(config.maxTokensPerTask).toBe(200_000);
+		expect(config.maxSandboxSeconds).toBe(900);
+		expect(config.maxCostUsdPerTask).toBe(1);
+		expect(config.maxAgentSteps).toBe(12);
+	});
+
+	test("env strings coerce for every cap", () => {
+		const config = loadWorkerConfig({
+			WORKER_MAX_OUTPUT_TOKENS_PER_TURN: "2048",
+			WORKER_MAX_TOKENS_PER_TASK: "1500000",
+			WORKER_MAX_SANDBOX_SECONDS: "1200",
+			WORKER_MAX_COST_USD_PER_TASK: "2.5",
+			WORKER_MAX_AGENT_STEPS: "25",
+		});
+		expect(config.maxOutputTokensPerTurn).toBe(2048);
+		expect(config.maxTokensPerTask).toBe(1_500_000);
+		expect(config.maxSandboxSeconds).toBe(1200);
+		expect(config.maxCostUsdPerTask).toBe(2.5);
+		expect(config.maxAgentSteps).toBe(25);
+	});
+
+	test.each([
+		["maxOutputTokensPerTurn", 1],
+		["maxOutputTokensPerTurn", 8192],
+		["maxTokensPerTask", 1_000],
+		["maxTokensPerTask", 2_000_000],
+		["maxSandboxSeconds", 60],
+		["maxSandboxSeconds", 3600],
+		["maxCostUsdPerTask", 0],
+		["maxCostUsdPerTask", 100],
+		["maxAgentSteps", 1],
+		["maxAgentSteps", 50],
+	])("accepts boundary %s=%d", (field, value) => {
+		const parsed = workerConfigSchema.parse({
+			[field]: value,
+		}) as unknown as Record<string, number>;
+		expect(parsed[field]).toBe(value);
+	});
+
+	test.each([
+		["maxOutputTokensPerTurn", 0],
+		["maxOutputTokensPerTurn", 8193],
+		["maxOutputTokensPerTurn", 1.5],
+		["maxTokensPerTask", 999],
+		["maxTokensPerTask", 2_000_001],
+		["maxSandboxSeconds", 59],
+		["maxSandboxSeconds", 3601],
+		["maxCostUsdPerTask", -0.01],
+		["maxCostUsdPerTask", 100.01],
+		["maxAgentSteps", 0],
+		["maxAgentSteps", 51],
+	])("rejects out-of-bounds %s=%d", (field, value) => {
+		expect(workerConfigSchema.safeParse({ [field]: value }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects non-finite and non-numeric cap env values without echoing them", () => {
+		for (const [name, value] of [
+			["WORKER_MAX_OUTPUT_TOKENS_PER_TURN", "Infinity"],
+			["WORKER_MAX_TOKENS_PER_TASK", "not-a-number"],
+			["WORKER_MAX_SANDBOX_SECONDS", "NaN"],
+			["WORKER_MAX_COST_USD_PER_TASK", "Infinity"],
+			["WORKER_MAX_AGENT_STEPS", "1e3"],
+		] as const) {
+			expect(() => loadWorkerConfig({ [name]: value })).toThrow(
+				"worker config invalid: check WORKER_* environment values",
+			);
+		}
+	});
+});

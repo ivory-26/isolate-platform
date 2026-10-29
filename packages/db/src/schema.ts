@@ -92,6 +92,78 @@ export type WorkflowVersionRow = {
 	created_at: Date;
 };
 
+/** Serializable compiler contract; no db -> compiler dependency.
+ * Graph/policy validation belongs to the compiler; persistence checks the pin.
+ */
+export type CompiledWorkflowPlan = {
+	workflowId: string;
+	versionPinned: number;
+	planId: string;
+	entryNodeIds: string[];
+	steps: Array<{
+		nodeId: string;
+		type:
+			| "task.agent"
+			| "tool.call"
+			| "approval.gate"
+			| "condition.switch"
+			| "validate.loop";
+		order: number;
+		config:
+			| { agentId: string; promptTemplateId: string }
+			| { tool: string }
+			| { action: string; risk: "low" | "medium" | "high" }
+			| { branches: string[] }
+			| { maxAttempts: number };
+	}>;
+	edges: Array<{
+		from: string;
+		to: string;
+		when?: {
+			left: string;
+			operator: "eq" | "ne" | "truthy";
+			right: string | boolean | number;
+		};
+	}>;
+};
+
+/**
+ * Compiled plan for a pinned workflow version (migration 0002). Plans are
+ * IMMUTABLE per (organization_id, workflow_definition_id, workflow_version):
+ * the UNIQUE constraint backs `CompiledPlanRepository.save` conflict
+ * semantics, so version edits always create a new version.
+ */
+export type CompiledPlanRow = {
+	id: string;
+	organization_id: OrganizationId;
+	workflow_definition_id: WorkflowDefinitionId;
+	// The authored version the plan was compiled against (1-based integer).
+	workflow_version: number;
+	// Compiled artifact; validated by @isolate/workflow-schema.
+	plan: CompiledWorkflowPlan;
+	created_at: Date;
+};
+
+/** Compiler issue shape; string codes allow new compiler rejection classes. */
+export type WorkflowRejectionIssue = {
+	path: string;
+	code: string;
+	message: string;
+};
+
+/**
+ * Append-only validation rejection history (migration 0002). Many rows may
+ * exist per pinned version over time; newest first via listLatest.
+ */
+export type WorkflowRejectionRow = {
+	id: string;
+	organization_id: OrganizationId;
+	workflow_definition_id: WorkflowDefinitionId;
+	workflow_version: number;
+	issues: WorkflowRejectionIssue[];
+	created_at: Date;
+};
+
 export type TaskStatusDb =
 	| "queued"
 	| "planning"

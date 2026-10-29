@@ -60,10 +60,10 @@ try {
 		 ('organizations','users','memberships','repositories','integrations',
 		 'integration_permissions','workflow_definitions','workflow_versions','tasks','task_attempts',
 		 'workflow_runs','run_events','artifacts','approvals','tool_invocations','audit_events',
-		 'usage_records','jobs')
+		 'usage_records','jobs','compiled_plans','rejection_issues')
 		 ORDER BY table_name`,
 	);
-	logger.info(`tables verified: ${Array.isArray(applied) ? applied.length : "?"} of 18 planned`);
+	logger.info(`tables verified: ${Array.isArray(applied) ? applied.length : "?"} of 20 planned`);
 } finally {
 	sql.end({ timeout: 5 });
 }

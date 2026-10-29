@@ -15,7 +15,7 @@ const COLUMNS =
 const STMT = {
 	record: `INSERT INTO rejection_issues (
 		organization_id, workflow_definition_id, workflow_version, issues
-	) SELECT $1, $2, $3, $4::jsonb FROM workflow_definitions d
+	) SELECT $1, $2, $3, $4::text::jsonb FROM workflow_definitions d
 		JOIN workflow_versions v ON v.definition_id = d.id
 		WHERE d.organization_id = $1 AND d.id = $2 AND v.version = $3
 	RETURNING ${COLUMNS}`,

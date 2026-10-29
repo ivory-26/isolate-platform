@@ -16,7 +16,7 @@ const PLAN_COLUMNS =
 const STMT = {
 	save: `INSERT INTO compiled_plans (
 		organization_id, workflow_definition_id, workflow_version, plan
-	) SELECT $1, $2, $3, $4::jsonb FROM workflow_definitions d
+	) SELECT $1, $2, $3, $4::text::jsonb FROM workflow_definitions d
 		JOIN workflow_versions v ON v.definition_id = d.id
 		WHERE d.organization_id = $1 AND d.id = $2 AND v.version = $3
 	ON CONFLICT (organization_id, workflow_definition_id, workflow_version) DO NOTHING

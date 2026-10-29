@@ -36,7 +36,7 @@ test.skipIf(!hasDb)(
 				);
 			}
 			await sql.unsafe(
-				"INSERT INTO organizations (id, name, slug) VALUES ($1, 'W3-D A', $1::text), ($2, 'W3-D B', $2::text)",
+				"INSERT INTO organizations (id, name, slug) VALUES ($1::uuid, 'W3-D A', $1::text), ($2::uuid, 'W3-D B', $2::text)",
 				[orgA, orgB],
 			);
 			await sql.unsafe(
@@ -126,7 +126,7 @@ test.skipIf(!hasDb)(
 
 			// Bypass repositories to verify database-enforced tenant/version FKs.
 			const insertPlan =
-				"INSERT INTO compiled_plans (organization_id, workflow_definition_id, workflow_version, plan) VALUES ($1, $2, $3, $4::jsonb)";
+				"INSERT INTO compiled_plans (organization_id, workflow_definition_id, workflow_version, plan) VALUES ($1, $2, $3, $4::text::jsonb)";
 			for (const bad of [
 				{ ...pin, organizationId: orgB },
 				{ ...pin, workflowVersion: 3 },
@@ -141,7 +141,7 @@ test.skipIf(!hasDb)(
 				).rejects.toMatchObject({ code: "23503" });
 				await expect(
 					sql.unsafe(
-						"INSERT INTO rejection_issues (organization_id, workflow_definition_id, workflow_version, issues) VALUES ($1, $2, $3, $4::jsonb)",
+						"INSERT INTO rejection_issues (organization_id, workflow_definition_id, workflow_version, issues) VALUES ($1, $2, $3, $4::text::jsonb)",
 						[
 							bad.organizationId,
 							bad.workflowDefinitionId,

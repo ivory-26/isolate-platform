@@ -1,6 +1,7 @@
 import type { Result } from "@isolate/shared";
 import { newId } from "@isolate/shared";
 import { nodeAdjacency, tarjanComponents } from "./graph";
+import { parseDefinitionShape } from "./shape";
 import type {
 	CompiledWorkflow,
 	CompileOptions,
@@ -10,7 +11,8 @@ import type {
 import { validateDefinitionParts } from "./validate";
 
 /**
- * Compiles a validated, version-pinned definition into an execution plan:
+ * Compiles unknown authored JSON into a typed, version-pinned execution plan:
+ * - guards the outer and nested graph shapes before traversal/version checks;
  * - refuses any input that has not passed the full validation registry;
  * - optionally refuses mismatched versions (MISSING_VERSION) so a run always
  *   executes exactly the definition version it pinned at start;
@@ -26,9 +28,12 @@ import { validateDefinitionParts } from "./validate";
  * identical apart from planId.
  */
 export function compileWorkflow(
-	def: WorkflowDefinition,
+	input: unknown,
 	options: CompileOptions = {},
 ): Result<CompiledWorkflow, WorkflowIssue[]> {
+	const parsed = parseDefinitionShape(input);
+	if (!parsed.ok) return parsed;
+	const def = parsed.value;
 	if (
 		options.expectedVersion !== undefined &&
 		options.expectedVersion !== def.version
@@ -39,7 +44,7 @@ export function compileWorkflow(
 				{
 					path: "version",
 					code: "MISSING_VERSION",
-					message: `definition version ${def.version} does not match the pinned version ${options.expectedVersion}`,
+					message: "definition version does not match the pinned version",
 				},
 			],
 		};

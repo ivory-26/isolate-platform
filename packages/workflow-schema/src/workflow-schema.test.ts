@@ -167,7 +167,7 @@ describe("node config registry", () => {
 		} satisfies AgentTaskConfig);
 	});
 
-	test("undeclared field is rejected as UNSAFE_CONFIG on the exact key", () => {
+	test("undeclared field is rejected as UNSAFE_CONFIG at the config boundary", () => {
 		const issues: WorkflowIssue[] = [];
 		const parsed = parseNodeConfig(
 			"validate.loop",
@@ -177,7 +177,7 @@ describe("node config registry", () => {
 		) as ValidateLoopConfig | undefined;
 		expect(parsed).toBeUndefined();
 		expect(codes(issues)).toEqual(["UNSAFE_CONFIG"]);
-		expect(issues[0]?.path).toBe("nodes[0].config.prompt");
+		expect(issues[0]?.path).toBe("nodes[0].config");
 	});
 
 	test("type mismatch is rejected as INVALID_TYPE", () => {
@@ -320,7 +320,7 @@ describe("validateDefinition — rejected shapes", () => {
 		}
 	});
 
-	test("undeclared config field → UNSAFE_CONFIG on the exact key", () => {
+	test("undeclared config field → UNSAFE_CONFIG without echoing the key", () => {
 		const def = linearDefinition();
 		def.nodes[0].config = {
 			...def.nodes[0].config,
@@ -331,9 +331,7 @@ describe("validateDefinition — rejected shapes", () => {
 		if (!result.ok) {
 			expect(codes(result.error)).toContain("UNSAFE_CONFIG");
 			expect(
-				result.error.some(
-					(issue) => issue.path === "nodes[0].config.inlinePrompt",
-				),
+				result.error.some((issue) => issue.path === "nodes[0].config"),
 			).toBe(true);
 		}
 	});
@@ -452,7 +450,7 @@ describe("validateDefinition — rejected shapes", () => {
 			expect(
 				result.error.some(
 					(issue) =>
-						issue.path === "edges[0].when" &&
+						issue.path === "edges[0].when.right" &&
 						issue.message.includes("regex-free"),
 				),
 			).toBe(true);
@@ -538,7 +536,7 @@ describe("validateDefinition — rejected shapes", () => {
 			expect(
 				result.error.some(
 					(issue) =>
-						issue.message.includes('branch "retry"') &&
+						issue.path === "nodes.config.branches" &&
 						issue.message.includes("no outgoing edge"),
 				),
 			).toBe(true);
@@ -773,11 +771,11 @@ describe("validateDefinition — reachability", () => {
 				(issue) => issue.code === "UNREACHABLE_REQUIRED_STEP",
 			);
 			expect(unreachables).toHaveLength(3);
-			for (const id of ["p", "q", "fed"]) {
-				expect(
-					unreachables.some((issue) => issue.message.includes(`"${id}"`)),
-				).toBe(true);
-			}
+			expect(unreachables.map((issue) => issue.path)).toEqual([
+				"nodes[3].id",
+				"nodes[4].id",
+				"nodes[5].id",
+			]);
 		}
 	});
 
@@ -943,7 +941,7 @@ describe("compileWorkflow — version pinning", () => {
 				{
 					path: "version",
 					code: "MISSING_VERSION",
-					message: "definition version 1 does not match the pinned version 999",
+					message: "definition version does not match the pinned version",
 				},
 			]);
 		}

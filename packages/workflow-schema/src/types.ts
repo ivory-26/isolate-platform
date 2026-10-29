@@ -7,6 +7,11 @@ import type { Result } from "@isolate/shared";
  * registry, and kept independent of Mastra implementation details. Each run
  * pins the definition version it was compiled from: later edits can never
  * silently change an active execution.
+ *
+ * WorkflowDefinition describes parsed graph data, not proof that an authored
+ * value is valid. Public validation/compilation accept unknown; callers pass
+ * JSON directly without asserting this type. Success provides typed values,
+ * while malformed/unsupported JSON returns WorkflowIssue[] without throwing.
  */
 
 export const NODE_TYPES = [
@@ -25,8 +30,18 @@ export type ApprovalRiskLevel = (typeof APPROVAL_RISK_LEVELS)[number];
 export const EDGE_OPERATORS = ["eq", "ne", "truthy"] as const;
 export type EdgeOperator = (typeof EDGE_OPERATORS)[number];
 
+/**
+ * Suggested slug grammar for authoring node ids (kebab/snake slugs).
+ *
+ * This is not the validator acceptance grammar: to preserve existing graph
+ * support, validation only requires non-empty, dot-free node ids. Mastra treats
+ * dots as resume path separators, so dotted ids are rejected without rewriting
+ * ids or edge references; other dot-free characters remain supported.
+ */
+export const NODE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export type WorkflowNode = {
-	id: string; // stable, unique within the graph
+	id: string; // stable, unique within the graph; non-empty and dot-free
 	type: NodeType;
 	label: string;
 	// Declared input/output schemas are Zod-JSON drafts; node registry validates.
@@ -47,6 +62,7 @@ export type WorkflowEdge = {
 	};
 };
 
+/** Parsed graph shape; semantic/config checks still gate public success. */
 export type WorkflowDefinition = {
 	id: string;
 	name: string;
@@ -99,11 +115,13 @@ export type ValidationOptions = {
  * Validation failures are structured issues, never thrown.
  *
  * Codes beyond the original six (UNAUTHORIZED_TOOL, MISSING_VERSION) were
- * added by Sprint B-3; the original codes keep their meaning.
+ * added by Sprint B-3; the original codes keep their meaning. INVALID_NODE_ID
+ * separately classifies dotted node ids that break Mastra resume routing.
  */
 export type WorkflowIssueCode =
 	| "MISSING_NODE"
 	| "DUPLICATE_ID"
+	| "INVALID_NODE_ID"
 	| "UNREACHABLE_REQUIRED_STEP"
 	| "INVALID_TYPE"
 	| "UNSAFE_CONFIG"
@@ -112,13 +130,16 @@ export type WorkflowIssueCode =
 	| "MISSING_VERSION";
 
 export type WorkflowIssue = {
-	path: string; // e.g. "edges[2].to"
+	/** "$" for the root; otherwise declared fields/indices, e.g. edges[2].to.
+	 * Unknown-field issues point at their container, never the authored key. */
+	path: string;
 	code: WorkflowIssueCode;
+	/** Diagnostic text does not reflect authored keys or values. */
 	message: string;
 };
 
 export type ValidatedDefinition = {
-	/** Definition in validated, normalized form (validated configs attached). */
+	/** Parsed graph; normalized registry configs are available in configs. */
 	definition: WorkflowDefinition;
 	/** Zod-parsed, per-node validated config keyed by node id. */
 	configs: Map<string, NodeConfig>;
@@ -159,7 +180,8 @@ export type CompiledWorkflow = {
 export type CompileOptions = ValidationOptions & {
 	/**
 	 * When supplied, the definition version must equal it exactly; a mismatch
-	 * is reported as MISSING_VERSION and the compile is refused. Callers pass
+	 * is reported as MISSING_VERSION after shape checks, before registry/policy
+	 * checks, and compilation is refused. Callers pass
 	 * the version stored when the run was created.
 	 */
 	expectedVersion?: number;

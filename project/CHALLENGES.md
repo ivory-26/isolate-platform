@@ -264,3 +264,9 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Correction: the lockfile update is committed on `task/w5-auth` because CI installs with `--frozen-lockfile` — a branch that ships a dependency without its lockfile entry cannot pass the pipeline. The coordinator must reconcile the three deltas.
 - Prevention: when a lane legitimately owns a root-file change, commit it on that lane and say so explicitly in the report, so the coordinator reconciles instead of assuming the lane broke the lockfile.
 
+
+## 2026-10-29 — W5-AUTH: making the auth gate mandatory broke the wave-4 offline acceptance script
+- Symptom: after merging `main` (which carried W4-OPS's `scripts/acceptance-offline.ts`), `bun run acceptance:offline` failed at "first submission compiles and enqueues". CI runs that script, so the pipeline would have gone red.
+- Root cause: two of the wave-5 changes are **breaking by design** — `CallerScope` now requires `role`, and `createSubmissionCompiler` now requires `authorizeMembership` (it used to default to `async () => true`). The acceptance script was written against the pre-wave-5 contract and did not supply either. It failed at runtime, not at compile time, because `scripts/` is not covered by `scripts/typecheck-all.ts` — the acceptance script is not a typechecked project.
+- Correction: the acceptance script's demo scope now carries `role: "owner"` (the demo identity owns the demo organization) and it passes an `authorizeMembership` that admits only that identity inside that organization. `bun run acceptance:offline` passes again.
+- Prevention: when a shared contract gains a **required** member, check every consumer — including scripts that no typecheck project covers. A required dependency with no permissive default is the right shape for an authorization gate, but it means the blast radius includes code that CI only executes. Run the scripts CI runs, not just the typecheck and the test suite.

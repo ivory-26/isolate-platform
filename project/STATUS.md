@@ -17,7 +17,8 @@ Last updated: 2026-10-29 (wave 5 — authentication & tenant access — implemen
 
 1. **Add the deployment origin to the Neon trusted-domain list.** `neon auth` reports `trusted_domains: []` and `allow_localhost: true`. Better Auth's CSRF origin check will reject sign-in from any non-localhost origin. The domain must be registered via the Neon MCP (`add_auth_trusted_domain`) before hosting.
 2. **Social login cannot complete yet** — the shared `google` OAuth provider has `client_id: null`, so it was never configured for our origin. Email/password sign-up works (`allow_sign_up: true`, no email verification required).
-3. **Reconcile the shared root `bun.lock`.** W5 adds `@neondatabase/auth`; W4-SBX and W4-WRK also carry uncommitted lockfile deltas. CI installs with `--frozen-lockfile`, so the lockfile must merge cleanly.
+3. **~~Reconcile the shared root `bun.lock`.~~ Done** — `main` was merged into `task/w5-auth` (`b4366b1`), so the lockfile now carries wave 4's Modal/Mastra entries **and** wave 5's `@neondatabase/auth`. `bun install --frozen-lockfile` exits 0. `main` is an ancestor of `task/w5-auth`, so the coordinator can fast-forward with **zero conflicts**.
+4. **Cross-lane repair applied.** Wave 5 made `CallerScope.role` and `createSubmissionCompiler`'s `authorizeMembership` required; W4-OPS's `scripts/acceptance-offline.ts` (which CI runs) did not supply them and failed at runtime. Fixed in `b4366b1`; `bun run acceptance:offline` passes.
 
 ## Previous: wave 4 complete offline — Phase D/E (keys) not started
 

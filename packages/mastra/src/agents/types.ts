@@ -1,4 +1,5 @@
-import { Agent } from "@mastra/core/agent";
+import { PlatformError } from "@isolate/shared";
+import { Agent, type ToolsInput } from "@mastra/core/agent";
 
 /**
  * Task execution context handed to agents and workflow steps.
@@ -123,8 +124,31 @@ export function defineCodingAgent(
 		id: string;
 		name: string;
 		instructions: string;
+		/**
+		 * Trusted, policy-wired tool collection (see `wireSandboxTools`). The
+		 * model only sees tool metadata; execution still passes the policy gate.
+		 */
+		tools?: ToolsInput;
+		/**
+		 * Default agentic-loop bound. Runtime callers override this per turn from
+		 * `AgentTurnCaps`; the installed d.ts has no top-level Agent config
+		 * `maxSteps`, so this maps to `defaultOptions.maxSteps`.
+		 */
+		maxSteps?: number;
 	},
 ): Agent {
+	if (config.maxSteps !== undefined) {
+		if (
+			typeof config.maxSteps !== "number" ||
+			!Number.isFinite(config.maxSteps) ||
+			config.maxSteps <= 0
+		) {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"maxSteps must be a finite positive number",
+			);
+		}
+	}
 	return new Agent({
 		id: config.id,
 		name: config.name,
@@ -135,5 +159,9 @@ export function defineCodingAgent(
 			url: model.url,
 			apiKey: model.apiKey,
 		},
+		...(config.tools === undefined ? {} : { tools: config.tools }),
+		...(config.maxSteps === undefined
+			? {}
+			: { defaultOptions: { maxSteps: config.maxSteps } }),
 	});
 }

@@ -21,7 +21,12 @@ jobs:
         run: bun run check
       - name: Typecheck all workspaces
         run: bun run typecheck
-      # Production build returns when the post-kickoff web app scaffold lands.
+      - name: Web production build
+        working-directory: apps/web
+        run: bun run build
+      - name: Web client secret sweep
+        working-directory: apps/web
+        run: bun run check:client
       - name: Tests (live-DB integration auto-skips without DATABASE_URL)
         run: bun run test
 

@@ -152,3 +152,31 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: `bun.lock` is a single root file shared by every worktree — the one file class AGENTS.md reserves for the coordinator. W4-SBX and W4-WRK also carry uncommitted `bun.lock` changes (Modal / Mastra dependencies), so the coordinator must reconcile the three lockfile deltas rather than let the last merge win.
 - Alternatives rejected: committing the app change without the lockfile (CI's `--frozen-lockfile` install fails, so the branch would be unmergeable); vendoring the SDK (the dependency is already published and version-pinned).
 
+## 2026-10-29 — W6: task context is persisted on `tasks`, not derived from the compiled plan
+
+- Decision: migration `0004_task_context.sql` adds `tasks.goal`, `tasks.acceptance_criteria` (jsonb array) and `tasks.file_ownership` (jsonb array). Submission persists them; the worker's `loadTaskContext` reads them in one tenant-scoped join with `repositories`.
+- Rationale: the compiled plan describes *how* the workflow runs, not *what* "done" means. Goal/acceptance/ownership are authored task inputs, and the prompt builder needs exactly those. Persisting them on the task row also makes a redelivered job reproduce the same context.
+- Consequences: `submitTaskSchema` requires a goal and bounds the arrays. Existing rows default to `''`/`[]`, which the worker still executes (the prompt says "none provided").
+- Alternatives rejected: stuffing the fields into the job payload (a mutable queue row is not the system of record); deriving them from `compiled_plans.plan` (the plan has no goal/ownership semantics); a separate `task_contexts` table (one row per task with no independent lifecycle).
+
+## 2026-10-29 — W6: the worker binds one sandbox backend per job through the runtime factory
+
+- Decision: `CodingAgentRuntimeFactoryOptions` gains `sandboxBackend` and `toolContext`. The handler builds the backend from the handle it just provisioned and passes it with the job's organization/task ids; the Baseten factory wires `wireSandboxTools(backend).forTask(...)`.
+- Rationale: tools must be bound to exactly one sandbox and one task. Putting the handle in the factory options keeps the handler provider-agnostic and closes the wave-4 gap where `SandboxToolBackend` had no handle to bind.
+- Consequences: the backend sends every call through `executeCommand`, so the injected `CommandPolicy` still decides executable, argv shape, timeout, output cap and egress. The default policy allows `cat`, `ls`, `grep`, read-only `git` shapes and `bun test`/`bun run test|typecheck|lint`; everything else is `POLICY_DENIED` before the provider sees it.
+- Alternatives rejected: giving the tool layer a `SandboxProvider` directly (the model-adjacent layer would own provisioning); one global backend (leaks handles across tasks).
+
+## 2026-10-29 — W6: Google sign-in uses the proxied callback exchange, not a direct SDK redirect
+
+- Decision: `startGoogleSignIn` asks the server SDK for a provider URL (`disableRedirect: true`) with a same-origin `callbackURL` of `/auth/callback`. The browser visits Google; Neon returns to `/auth/callback` with the session verifier; `processAuthMiddleware` exchanges it for first-party session cookies, which the route relays as raw `Set-Cookie` headers.
+- Rationale: the SDK and the cookie secret must stay server-side, and the OAuth challenge cookie must be first-party. The verifier exchange is the SDK's documented completion step for a proxied flow.
+- Consequences: the app origin must be in Neon's trusted-domain list (`http://localhost:3000` added for development). Production uses the deployment origin plus either Neon's shared Google provider (development) or own Google credentials with `{NEON_AUTH_BASE_URL}/callback/google` as the Google redirect URI.
+- Alternatives rejected: letting the browser talk to the Neon host directly (third-party cookies, SDK in the client bundle); trusting a client-supplied `callbackURL` (open redirect).
+
+## 2026-10-29 — W6: no cross-schema foreign key between `public.users` and `neon_auth.user`
+
+- Decision: the identity bridge stays a shared UUID value; the repository does not add `public.users.id REFERENCES neon_auth.user(id)`.
+- Rationale: `neon_auth` is Neon-managed and may be re-created or altered without a migration in this repo. A cross-schema FK would make test databases without that schema fail and couple platform migrations to an external lifecycle.
+- Consequences: the invariant is enforced by `toIdentity` (UUID parse) and `users.email UNIQUE`. `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep real FKs to `public.users`.
+- Alternatives rejected: mirroring auth tables into `public` (two identity stores); writing to `neon_auth` (forbidden); a mapping table (the id is already the same value).
+

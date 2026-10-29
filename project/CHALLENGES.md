@@ -270,3 +270,27 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: two of the wave-5 changes are **breaking by design** — `CallerScope` now requires `role`, and `createSubmissionCompiler` now requires `authorizeMembership` (it used to default to `async () => true`). The acceptance script was written against the pre-wave-5 contract and did not supply either. It failed at runtime, not at compile time, because `scripts/` is not covered by `scripts/typecheck-all.ts` — the acceptance script is not a typechecked project.
 - Correction: the acceptance script's demo scope now carries `role: "owner"` (the demo identity owns the demo organization) and it passes an `authorizeMembership` that admits only that identity inside that organization. `bun run acceptance:offline` passes again.
 - Prevention: when a shared contract gains a **required** member, check every consumer — including scripts that no typecheck project covers. A required dependency with no permissive default is the right shape for an authorization gate, but it means the blast radius includes code that CI only executes. Run the scripts CI runs, not just the typecheck and the test suite.
+
+## 2026-10-29 — W6: `createModalSandboxClient` resolved the Modal app at construction
+- Symptom: constructing the server-only Modal client performed `apps.fromName(...)`, a network call, so an offline boot or CI import could not build the client without credentials and connectivity.
+- Root cause: app resolution was part of the factory body, not of the first `create`.
+- Correction: the factory now records a memoized `resolveApp()` promise; `create` awaits it, and a failure is not memoized so a later retry can succeed. Tests assert construction performs no `fromName`, and that two creates resolve the app once.
+- Prevention: a constructor must not perform I/O that its offline contract forbids. Separate "build the client" from "resolve remote resources", especially when a fake client sits behind the same interface.
+
+## 2026-10-29 — W6: the worker had no persisted source for `loadTaskContext`
+- Symptom: the task-execution handler called an injected loader that the composition root left unconfigured (MISSING_CONFIG). Tasks carried no goal, acceptance criteria or file ownership, so no DB query could have produced a context.
+- Root cause: wave 4 designed the seam but never added the task inputs to the schema; the compiled plan is not a task-intent record.
+- Correction: migration `0004_task_context.sql` adds the three fields, submission persists them, `PostgresTaskContextRepository` performs a tenant-scoped task⋈repository read, and the worker maps it to `TaskContext`, failing closed on missing/terminal/foreign rows.
+- Prevention: a loader seam is only complete when its data source exists. Check the producer (submission) and consumer (worker) against the row contract before declaring the interface done.
+
+## 2026-10-29 — W6: OAuth returns to the browser, not to the server function that started it
+- Symptom: calling `signIn.social` server-side produced a provider URL, but the return trip is a top-level navigation to the app; nothing on the app side exchanged the verifier for a session cookie.
+- Root cause: the SDK's proxied flow completes in middleware (`processAuthMiddleware`) on a page load, not in the initiating call.
+- Correction: a dedicated `/auth/callback` server route runs `processAuthMiddleware`, relays its `Set-Cookie` values and redirects to the cleaned URL. The initiation call builds the callback from the request origin and returns only a validated https provider URL.
+- Prevention: for a redirect-based protocol, test the *return* leg (verifier + challenge cookie), not only the outgoing URL. The challenge cookie is set by the proxied call and must be first-party for the exchange to work.
+
+## 2026-10-29 — W6: `CodingAgentRuntimeFactoryOptions` had no sandbox handle
+- Symptom: the real Baseten factory could create an agent but could not wire the sandbox tools, because the only per-job input was the caps/recording listeners.
+- Root cause: wave 4 kept the factory provider-agnostic by omission; the handle existed only inside the handler.
+- Correction: the handler now builds a policy-gated `SandboxToolBackend` from the provisioned handle and passes it plus the trusted task ids to the factory; the factory wires `wireSandboxTools(...).forTask(...)`.
+- Prevention: when a per-job resource is created by one layer and needed by another, put it in the interface between them explicitly; "provider-agnostic" must not mean "resource-free".

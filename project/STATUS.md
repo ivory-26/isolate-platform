@@ -1,8 +1,24 @@
 # Status
 
-Last updated: 2026-10-29 (wave 5 — authentication & tenant access — implemented on `task/w5-auth`, committed, **not pushed**; wave 4 provider plane merged and offline-green, no provider keys added)
+Last updated: 2026-10-29 (wave 6 — auth completion + real adapter integration — committed on `task/w6-finish`, **not pushed**; migration `0004` and keyed acceptance pending)
 
-## Current: wave 5 complete — Neon Managed Better Auth wired in, tenant isolation enforced
+## Current: wave 6 — Google sign-in, task intent persisted, real adapters bound
+
+- **Google sign-in** is wired end to end through the first-party proxy. The server asks Neon Auth for a provider URL (`disableRedirect: true`) with a same-origin `/auth/callback`; the browser visits Google; Neon returns the session verifier and the challenge cookie; `/auth/callback` runs `processAuthMiddleware`, relays the exchange cookies and redirects. The provider URL is validated as public https, and the callback is built from the request origin, never from client input.
+- **Neon config**: the shared `google` provider is enabled on `br-steep-poetry-ar5iwdkb`; `http://localhost:3000` is now a trusted domain. A production origin and (for production) own Google client credentials remain deployment steps.
+- **Task intent is persisted**: migration `0004_task_context.sql` adds `tasks.goal`, `tasks.acceptance_criteria` and `tasks.file_ownership`. Submission collects them; `PostgresTaskContextRepository` serves the worker's `loadTaskContext` from one tenant-scoped task⋈repository read, failing closed on missing/terminal/foreign rows.
+- **The wave-4 boundary is closed**: `CodingAgentRuntimeFactoryOptions` now receives the per-job `sandboxBackend` and trusted task ids; the worker builds a policy-gated `SandboxToolBackend` over the provisioned handle. The real worker composition binds the Postgres queue, usage sink and context loader, selects Modal only when opted in (app resolution stays lazy, no network at boot), and selects Baseten only when keyed. Every provider choice fails closed.
+- **Data relations**: `public.users` ↔ `neon_auth.user` stay bridged by the same UUID (no cross-schema FK; `neon_auth` is Neon-owned). `memberships.user_id`, `tasks.created_by`, `tasks.repository_id` and `repositories.organization_id` keep real intra-platform FKs; identity mirroring runs on every session read, and `users.email UNIQUE` prevents two identities claiming one address.
+- Gates on `task/w6-finish` (offline): biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **946 pass / 0 fail / 4 skip across 59 files** · web production build green · client sweep **30 checks** · production smoke green · `acceptance:offline` PASS.
+
+### Wave 6 open items (need the user)
+
+1. **Apply migration `0004_task_context.sql`** to Neon `isolate-platform` (the in-session MCP write was blocked by the environment's safety classifier). Code and tests are ready; the live suite and keyed acceptance need the columns.
+2. **Provide Baseten + Modal keys** for the bounded Phase D/E pass: one `GET /v1/models`, one completion (`max_tokens <= 16`, no tools), one Modal sandbox (`echo`, ≤60 s, terminate immediately), read `usage_records`, verify zero sandboxes remain. Caps are already enforced by config.
+3. **Live Google consent** must be exercised once by the user (the app only verified initiation/exchange logic offline). The shared provider needs no local Google credentials; production needs own credentials and the deployment origin in the trusted-domain list.
+4. Merge `task/w6-finish` → `main` after the live pass.
+
+## Previous: wave 5 complete — Neon Managed Better Auth wired in, tenant isolation enforced
 
 - **Identity**: Neon Managed Better Auth (`@neondatabase/auth@0.7.0-beta`) is the web app's identity provider. The browser never talks to the auth host: a server-only route proxies `/api/auth/*` and rewrites the `__Secure-neon-auth.*` cookies onto our origin, so the SDK and the cookie secret stay server-side and no third-party cookie is involved.
 - **The id is the tenancy bridge**: Neon Auth issues `uuid` user ids and `public.users.id` is a `uuid`, so the authenticated id *is* the platform user id. `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep pointing at the session's owner — no second mapping table.
@@ -13,10 +29,10 @@ Last updated: 2026-10-29 (wave 5 — authentication & tenant access — implemen
 - Migration `0003_auth_identity.sql` (`memberships_user_id_idx`) **applied to Neon `isolate-platform`** and verified via `pg_indexes`. The Neon-owned `neon_auth` schema is never written by this repo.
 - Gates on `task/w5-auth`: biome **0 errors** repo-wide (10 pre-existing `noNonNullAssertion` warnings in `packages/db` test files) · typecheck **8/8 projects** · **903 pass / 0 fail / 4 skip across 53 files**, twice, identical · web production build green · client secret sweep green (26 checks over 17 client files) · production smoke green (307 → `/login` for the three tenant routes, 200 + `no-store` for `/login`).
 
-### Wave 5 open items (need the user)
+### Wave 5 open items (status after wave 6)
 
-1. **Add the deployment origin to the Neon trusted-domain list.** `neon auth` reports `trusted_domains: []` and `allow_localhost: true`. Better Auth's CSRF origin check will reject sign-in from any non-localhost origin. The domain must be registered via the Neon MCP (`add_auth_trusted_domain`) before hosting.
-2. **Social login cannot complete yet** — the shared `google` OAuth provider has `client_id: null`, so it was never configured for our origin. Email/password sign-up works (`allow_sign_up: true`, no email verification required).
+1. **Deployment origin** — `http://localhost:3000` is now registered as a trusted domain; the production origin is still a deployment step.
+2. **Social login** — resolved in wave 6: the shared `google` provider issues an authorize URL and the app completes the proxied callback exchange. Live consent must be exercised once by the user.
 3. **~~Reconcile the shared root `bun.lock`.~~ Done** — `main` was merged into `task/w5-auth` (`b4366b1`), so the lockfile now carries wave 4's Modal/Mastra entries **and** wave 5's `@neondatabase/auth`. `bun install --frozen-lockfile` exits 0. `main` is an ancestor of `task/w5-auth`, so the coordinator can fast-forward with **zero conflicts**.
 4. **Cross-lane repair applied.** Wave 5 made `CallerScope.role` and `createSubmissionCompiler`'s `authorizeMembership` required; W4-OPS's `scripts/acceptance-offline.ts` (which CI runs) did not supply them and failed at runtime. Fixed in `b4366b1`; `bun run acceptance:offline` passes.
 

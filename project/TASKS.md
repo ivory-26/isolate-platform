@@ -166,6 +166,34 @@ Started 2026-10-29. Goal: a signed-in caller sees only their own organization's 
 
 ### Status: **done — committed on `task/w5-auth`, not pushed**
 
+## Wave 6 — Auth completion + real adapter integration (branch `task/w6-finish`, worktree `../worktrees-platform/w6-finish`)
+
+Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth story (Google sign-in, task intent in the DB) and remove the wave-4 integration boundary so the real Baseten/Modal adapters can be selected at boot once keys exist.
+
+### W6-AUTH — Google OAuth end to end
+- Server service: `startGoogleSignIn` (provider enumerated to `google`), same-origin `callbackURL` built from the request origin, `disableRedirect: true`, provider URL validated as public https.
+- Return leg: `/auth/callback` runs `processAuthMiddleware`, relays the exchange `Set-Cookie` values and redirects; failures land on `/login?authError=...`.
+- UI: "Continue with Google" on `/login` and `/signup`; no SDK in the client bundle.
+- Neon: shared `google` provider confirmed; trusted domain `http://localhost:3000` added via MCP. Production origin and own Google credentials remain a deployment step.
+- Status: **done (code + unit tests)** — live Google consent not exercised in this session.
+
+### W6-DB — Task context persisted and loaded
+- Migration `0004_task_context.sql`: `goal text`, `acceptance_criteria jsonb`, `file_ownership jsonb` with array CHECKs (additive; existing rows default to `''`/`[]`).
+- `submitTaskSchema` requires a goal and bounds both lists; the form collects them one-per-line.
+- `PostgresTaskContextRepository` joins task → repository under one `organization_id`; the worker maps to `TaskContext` and fails closed on missing/terminal/foreign rows.
+- Status: **code done; migration apply pending user approval** (the MCP write was blocked in this session).
+
+### W6-WRK — Sandbox handle binding + real composition
+- `CodingAgentRuntimeFactoryOptions` gains `sandboxBackend` + `toolContext`; the handler builds it from the provisioned handle.
+- `SandboxToolBackend` implementation over `executeCommand` with a conservative workspace policy.
+- `createBasetenRuntimeFactory`, DB queue/usage/task-context composition, Modal provider selection (lazy app resolution) and fail-closed provider selection.
+- Status: **done** — offline fakes only; no keyed calls.
+
+### W6-OPS — Validation and keyed acceptance (pending keys)
+- Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip, web build + 30-check sweep + smoke, `acceptance:offline` PASS.
+- Pending: apply `0004`, run the live Neon suite, then Phase D/E (one Baseten completion, one Modal sandbox) with user-supplied keys and cap enforcement; read `usage_records`, destroy sandboxes, update docs.
+- Merge `task/w6-finish` → `main` after acceptance.
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

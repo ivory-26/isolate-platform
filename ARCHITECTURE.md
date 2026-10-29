@@ -74,8 +74,12 @@ Implemented in wave 3 (`apps/web`): TanStack Start + Router + Query with two rou
 
 Authentication (wave 5): the web app uses **Neon Managed Better Auth** (`@neondatabase/auth`) as its identity provider. The browser never contacts the auth host. A server-only route (`routes/api.auth.$.tsx`) proxies `/api/auth/*` upstream and rewrites the session cookies onto this origin (`__Secure-neon-auth.*`), so the Better Auth SDK and the cookie secret stay server-side and no third-party cookie is involved. The route file declares only `server.handlers`, which prunes it from the client route tree, and server functions are compiled to RPC stubs — the client-bundle sweep asserts that `@neondatabase/auth`, `better-auth`, `neonauth` and `__Secure-neon-auth` never appear in the browser build.
 
+Google sign-in (wave 6): `startGoogleSignIn` runs server-side, builds a same-origin `callbackURL` from the request origin, and asks the SDK for a provider URL with `disableRedirect: true`. The browser navigates to Google; Neon returns to `/auth/callback` with a session verifier and the first-party challenge cookie; that server route runs `processAuthMiddleware` to exchange the verifier for session cookies and relays the raw `Set-Cookie` values. The returned provider URL must be public https. The app origin must be registered in Neon's trusted-domain list (`http://localhost:3000` for development; the deployment origin before hosting). The shared Google provider needs no local credentials; production should use its own Google client with `{NEON_AUTH_BASE_URL}/callback/google` as the redirect URI.
+
 ### Worker
 Run a separate TypeScript process. It claims jobs, applies idempotency, starts and monitors executions, invokes Mastra workflows, persists status/events, handles cancellation/timeouts, and cleans up sandboxes. Use a durable queue or a database-backed queue with atomic claiming, retries, dead-letter handling, and duplicate protection. Select the concrete queue implementation in an ADR before relying on it.
+
+Composition (wave 6): `apps/worker/src/runtime-composition.ts` binds the Postgres queue (`PostgresQueueRepository`), the `UsageSink` over `usage_records`, and the DB-backed `loadTaskContext`. Provider selection is explicit and fail-closed: `SANDBOX_PROVIDER=modal` requires both Modal tokens and builds the lazy Modal client; `INFERENCE_PROVIDER=baseten` requires the Baseten key and builds the Mastra runtime factory. With no database the loop stays on the unavailable queue; with no provider flags the offline `NullProvider`/unconfigured runtime remain the defaults.
 
 ### Mastra agents and workflows
 - **Agents** reason within a defined role and receive only the tools they need.
@@ -88,12 +92,16 @@ Begin with one coding agent and one explicit workflow. Add planner/reviewer agen
 
 Provider plan (wave 4): the coding agent runs on Baseten Model APIs (`https://inference.baseten.co/v1`, `BASETEN_API_KEY`, `meta-models/muse-spark-open`) through Mastra's existing OpenAI-compatible model object; `@mastra/core` stays pinned and tool calls are Mastra-native. Usage is recorded per call in `usage_records` and bounded by per-task token/step/time caps. No provider SDK is imported by the web app or the browser bundle.
 
+Per-job tool binding (wave 6): the worker provisions the sandbox first, builds a `SandboxToolBackend` over that handle (every call passes `executeCommand` with the trusted `CommandPolicy`), and passes it plus the job's organization/task ids to `CodingAgentRuntimeFactoryOptions`. The factory wires `wireSandboxTools(...).forTask(...)`, so one agent turn can reach exactly one sandbox and one task. Without a backend the runtime runs tool-less.
+
 ### Sandbox
 Run all untrusted repository commands in a disposable cloud sandbox or VM. The sandbox receives only scoped, short-lived credentials required for its task. Enforce execution timeout, CPU/memory limits, output limits, network egress policy, and cleanup. The worker host and web server must never execute untrusted project scripts.
 
 A Git worktree is a workspace convenience, not a security boundary. For independent parallel tasks, use separate sandboxes and branches/worktrees. Never allow concurrent writers to mutate the same checkout or branch without an explicit coordination protocol.
 
 Execution provider (wave 4): `packages/sandbox` defines a deny-by-default `SandboxProvider` (`create/execute/destroy`) with `NullProvider` as the default. `ModalSandboxProvider` (`modal@0.11.x`) provisions one disposable Modal sandbox per task with explicit CPU/memory/lifetime/idle limits, network denied unless an allowlist is required, argv-only execution, bounded output, and idempotent teardown in every exit path. Command policy (timeout, arg shape, output cap, egress intent) stays in trusted platform code and is applied before the provider is called; the provider never falls back to a local process. Live Modal tests are opt-in and intentionally tiny.
+
+Boot safety (wave 6): `createModalSandboxClient` resolves the Modal app lazily on the first `create` (memoized), so constructing the provider at worker boot performs no network I/O. The worker's default workspace policy allows `cat`, `ls`, `grep`, a small set of read-only `git` shapes and `bun test`/`bun run test|typecheck|lint`; any other argv is `POLICY_DENIED` before the provider runs.
 
 ## 4. Suggested folder conventions
 
@@ -168,6 +176,11 @@ Identity and tenancy (wave 5):
 - `public.organizations` + `public.memberships` remain the source of truth for tenancy. Better Auth's organization plugin is **not** used for tenancy: Neon runs it server-side for its own UI, and it cannot express the platform's `viewer` role.
 - `memberships` PK is `(organization_id, user_id)`, which cannot serve the reverse "which organizations may this caller see?" lookup. `0003_auth_identity.sql` adds `memberships_user_id_idx (user_id)`.
 - Tenancy is enforced in application code via `organization_id = $1` on every read and write; **there is no row-level security**. Isolation is therefore a property of the service layer, and every repository query must keep the organization predicate.
+- There is deliberately **no cross-schema foreign key** from `public.users.id` to `neon_auth.user.id`: the auth schema is Neon-managed and may be re-created independently. The shared UUID plus `users.email UNIQUE` enforce the same invariant without coupling migrations to Neon's lifecycle.
+
+Task execution context (wave 6, `0004_task_context.sql`):
+- `tasks.goal` (text), `tasks.acceptance_criteria` (jsonb array) and `tasks.file_ownership` (jsonb array) are the authored "what to do / what done means / what may change" inputs. Existing rows default to `''`/`[]`.
+- `PostgresTaskContextRepository` joins `tasks` to `repositories` under one `organization_id` and returns a neutral row; the worker maps it to `TaskContext` and fails closed on missing, terminal or foreign tasks. The compiled plan remains the immutable "how", not the task intent.
 
 ## 6. Workflow definition and compilation
 
@@ -257,6 +270,12 @@ Authentication boundary (wave 5):
 - **Membership is re-checked inside the write transaction.** The compilation service owns a mandatory `authorizeMembership` dependency; it may not be opened unconditionally, and it runs within the same transaction as the task and queue inserts.
 - The **cookie secret and auth base URL are server-only environment values**. They are never exposed to the browser, never logged, and never placed in a fixture. The browser-side secret sweep (`scripts/check-client.ts`) asserts this for the built bundle.
 
+OAuth and sandbox binding boundary (wave 6):
+- **The OAuth callback is not an identity input.** `/auth/callback` only relays the SDK's verifier exchange; it does not parse a user id, email, or organization from the query. A failed exchange redirects to `/login?authError=...` with no detail.
+- **The provider URL is validated before redirect**: absolute https, no userinfo, no localhost/`.local`, and a dotted hostname. A malformed response is `AUTH_UNAVAILABLE`, never a browser redirect.
+- **The callback is built from the request origin, not from the client**, and the origin must be in Neon's trusted-domain list. An unregistered origin cannot complete sign-in; that is a deployment checklist item, not a runtime fallback.
+- **The sandbox handle never reaches the model or the tool gate as a capability.** The worker builds the backend after provisioning, passes it only to the runtime factory, and every tool call still passes `executeCommand` with the trusted policy (executable, argv shape, timeout, output cap, egress). Denied commands never reach the provider.
+
 ## 12. Integration points and decisions to verify
 
 - TanStack Start server handlers call control-plane services, not agent logic directly.
@@ -266,4 +285,7 @@ Authentication boundary (wave 5):
 - Confirm the current Mastra storage adapter supports Neon/PostgreSQL and the intended connection mode before implementation.
 - Verify provider facts against installed types before coding: Baseten model id against `GET /v1/models`; Modal egress fields (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) and image capabilities against `modal`'s d.ts. Record divergences in `project/DECISIONS.md`.
 - Record any material choice in `project/DECISIONS.md` and update this document in the same PR when boundaries or data flows change.
-- The Neon Auth host's **trusted-origin list is empty** and `allow_localhost` is enabled. The deployment origin must be added as a trusted domain before a non-localhost deployment can complete a state-changing auth call; Better Auth rejects the cross-origin request otherwise. Verify with `neon auth` after each domain change.
+- The Neon Auth host's **trusted-origin list** now includes `http://localhost:3000` (development). The deployment origin must be added before a non-localhost deployment can start or complete sign-in; Better Auth rejects the cross-origin request otherwise. Verify with the Neon MCP (`list_auth_trusted_domains`) after each change.
+- The worker's real composition lives in `apps/worker/src/runtime-composition.ts`: queue, usage sink, task-context loader, provider selection and runtime factory. It is the only place that opts into Baseten/Modal; adapters stay behind `@isolate/mastra` / `@isolate/sandbox` interfaces.
+- The Modal client resolves its app on the first `create`, never at construction, so a keyed worker boot performs no provider network call and offline/CI boots cannot reach Modal.
+- Google sign-in is a two-leg flow: `startGoogleSignIn` (server URL request) and `/auth/callback` (verifier exchange). When changing either leg, test both — the return leg carries the challenge cookie and the session verifier.

@@ -83,3 +83,24 @@ Dated; one entry per decision: decision — rationale — alternatives rejected.
 - Decision: a wave must be fully implemented, tested, built, merged and offline-green with `INFERENCE_PROVIDER=none` / `SANDBOX_PROVIDER=null` **before** any Baseten or Modal credential is supplied. Keyed activity is restricted to a single bounded acceptance pass: one `GET /v1/models`, one completion (`max_tokens <= 16`, no tools), one sandbox (`echo`, ≤60 s, smallest limits, terminated), optional bounded end-to-end only with separate approval. No exploratory, benchmark, load, or retry-loop calls; no live calls in CI; measured spend must be read from `usage_records` and reported. Canonical policy: `AGENTS.md` §Provider credits.
 - Rationale: the credits are finite, shared, and granted per person; most integration bugs are adapter/mapping/policy bugs that fakes catch for free. Making keys the last step converts the default failure mode from "spend to discover" into "pass offline gates, then verify once." It also keeps CI free and reproducible for contributors without accounts.
 - Alternatives rejected: provisioning keys at sprint start for convenience (spends on scaffolding mistakes and invites exploratory calls); allowing agents to "just run one" live test when blocked (unbounded by repetition); relying on dashboard alerts only (lagging and not enforced at the call site).
+
+## 2026-10-29 — W4-0 verified provider facts (docs + d.ts only, no keyed calls)
+
+Verified against the published `modal@0.11.1` tarball `dist/index.d.ts`, Baseten Model APIs docs, Mastra docs, and the installed `@mastra/core@1.79.0` d.ts. No credential was read, requested, or used.
+
+- **Modal JS (`modal@0.11.1`; Node 22+):** `import { ModalClient } from "modal"`; `new ModalClient({ tokenId, tokenSecret })` (also falls back to `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET`). Create needs an **App**: `client.apps.fromName(name)` then `client.sandboxes.create(app, image, params)`; image from `client.images.fromRegistry("node:22-bookworm")` (synchronous, registry pull). Params: `cpu`, `memoryMiB` (not bytes), `timeoutMs`, `idleTimeoutMs`, `command: string[]`, `workdir`, `env`. Network is `blockNetwork: true` by default-able flag plus `outboundDomainAllowlist: string[]` / `outboundCidrAllowlist: string[]` — there is **no** `cidrAllowlist` and no `network: {...}` object in 0.11.1 (Context7 autodocs disagree; the d.ts wins). `sandbox.exec(argv, { timeoutMs })` returns a `ContainerProcess` **with streams**; read via `readText()`, exit code via `proc.wait(): Promise<number>` (no `.exitCode`). `timeoutMs` defaults to 0 (unbounded) — always pass one. `terminate()` is **not documented as idempotent**; the adapter must guard per handle.
+- **Baseten:** OpenAI-compatible base `https://inference.baseten.co/v1`, chat at `/chat/completions`, model list at `GET /v1/models`, `Authorization: Bearer <key>`; documented model id `meta-models/muse-spark-open`; usage fields `usage.prompt_tokens` / `usage.completion_tokens` / `usage.total_tokens`. The dated snapshot id remains unconfirmed until Phase D's single `GET /v1/models`.
+- **Mastra 1.79:** `agent.generate(prompt, { maxSteps })` (finite, default 5); `generate()` returns `{ text, totalUsage, toolCalls, toolResults, steps }`; `totalUsage` is `{ inputTokens, outputTokens, totalTokens, ... }`. Tool-call entries are chunk-shaped (`payload.toolName`), so the runtime must read names from the concrete result shape rather than cast blindly.
+- **Image choice:** `node:22-bookworm` (full, not `-slim`) — must ship `git` for the git helpers; `oven/bun:1` is acceptable only if a probe shows git present. Image is a constant, not repo-controlled.
+- **Sandbox env:** `MODAL_APP_NAME` and `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET` are server-only worker env; the web app and client bundle never see them.
+
+### Key-less acceptance path (Phase C, designed here)
+
+`scripts/acceptance-offline.ts` runs with `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`, and asserts no `BASETEN_*`/`MODAL_*` variable is set. It composes production services with package fakes and asserts, in order:
+1. submission through the control-plane service validates and enqueues exactly one `run_task` job (idempotent replay yields the same job);
+2. the worker loop claims the job and runs the task handler;
+3. agent turns run through the policy-gated tools: an allowlisted read executes against the fake backend, a non-allowlisted/approval-band tool is denied and never reaches the backend;
+4. the injected usage sink receives one row per model call and the sandbox-teardown row;
+5. `destroy` is observed exactly once on success, thrown handler error, and abort;
+6. the job ends in the expected ack state (complete / retry / dead_letter) and the queue shows no in-flight lease.
+No provider SDK is imported and no network call is made; the script exits non-zero on any assertion.

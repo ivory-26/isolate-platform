@@ -146,6 +146,7 @@ export function wirePlatformTools(
 		"repo.read_file",
 		"repo.list_files",
 		"repo.search",
+		"git.read",
 		"git.commit_local",
 		"git.push_branch",
 		"github.create_pull_request",

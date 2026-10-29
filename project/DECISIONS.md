@@ -105,6 +105,14 @@ Verified against the published `modal@0.11.1` tarball `dist/index.d.ts`, Baseten
 6. the job ends in the expected ack state (complete / retry / dead_letter) and the queue shows no in-flight lease.
 No provider SDK is imported and no network call is made; the script exits non-zero on any assertion.
 
+## 2026-10-29 — W4-OPS integration decisions
+
+- **Offline acceptance lives at `scripts/acceptance-offline.ts` and is runnable as `bun run acceptance:offline`.** It imports production control-plane and worker modules via relative paths (root scripts cannot resolve `@isolate/*` specifiers because the root package declares no workspace dependencies; per-package `node_modules` symlinks make the nested imports resolve). It refuses to start when any `BASETEN_*`/`MODAL_*` variable is present or when `INFERENCE_PROVIDER`/`SANDBOX_PROVIDER` hold non-offline values.
+- **The acceptance uses fakes at the package boundaries, not at the service boundaries.** Submission goes through `createTaskService` + `createRepositoryStore` + `createSubmissionCompiler` with in-memory task/queue/compilation repositories; execution goes through the real `createWorkerLoop` + `createTaskExecutionHandler`; tools go through the real `wireSandboxTools` policy gate with a recording fake backend. This exercises the seams that can regress without touching a provider.
+- **`destroy` is asserted by counting, and usage by row shape.** Success expects exactly one model row (`baseten`, 10/5 tokens, null cost) and one sandbox row (`recording-fake`, `sandbox:1x512`, null tokens); throw expects only the teardown row; abort is driven by a false heartbeat (lease loss) so teardown happens before any model call. Costs stay null because no trusted price table is configured — the script must not invent a price.
+- **Client sweep patterns now include `BASETEN_`, `MODAL_`, `inference.baseten.co`, `modal.com`** in addition to the existing key/DB/private-key patterns, for 26 checks over the built client bundle.
+- **Composition remains injection-only.** Real adapters are not selected at boot: task context has no DB source, the runtime factory receives no sandbox handle, and Modal client construction performs an API call. These are tracked in `CHALLENGES.md` as wave-5 integration work, not papered over with partial wiring.
+
 ## 2026-10-29 — W5-AUTH: Neon Managed Better Auth is the identity provider; the id is the tenancy bridge
 
 Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep-poetry-ar5iwdkb`) with the Neon MCP: `auth_provider = "better_auth"`, `owned_by = "neon"`, base URL `https://ep-lucky-night-arkvt9aj.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth`, JWKS at `…/auth/.well-known/jwks.json`. The Neon-managed `neon_auth` schema holds `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`, `jwks`, `project_config`; `user.id` is a `uuid` with `gen_random_uuid()` default.
@@ -143,3 +151,4 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Decision: `apps/web` gained a runtime dependency (`@neondatabase/auth@0.7.0-beta`), so the root `bun.lock` is updated on `task/w5-auth`. CI installs with `--frozen-lockfile`, so the lockfile **must** be committed for the pipeline to pass.
 - Rationale: `bun.lock` is a single root file shared by every worktree — the one file class AGENTS.md reserves for the coordinator. W4-SBX and W4-WRK also carry uncommitted `bun.lock` changes (Modal / Mastra dependencies), so the coordinator must reconcile the three lockfile deltas rather than let the last merge win.
 - Alternatives rejected: committing the app change without the lockfile (CI's `--frozen-lockfile` install fails, so the branch would be unmergeable); vendoring the SDK (the dependency is already published and version-pinned).
+

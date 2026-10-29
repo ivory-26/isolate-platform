@@ -29,6 +29,11 @@ jobs:
         run: bun run check:client
       - name: Tests (live-DB integration auto-skips without DATABASE_URL)
         run: bun run test
+      - name: Offline acceptance (zero provider credentials)
+        env:
+          INFERENCE_PROVIDER: none
+          SANDBOX_PROVIDER: null
+        run: bun run acceptance:offline
 
   secret-scan:
     name: secret scan (gitleaks)

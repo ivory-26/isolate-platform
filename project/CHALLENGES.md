@@ -206,6 +206,21 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Correction: installed pinned local copies (`~/.qoder/mcp-servers/{context7,mastra-docs}`, mastra-docs pinned 1.3.9) and launch them with `node <dist/index.js>` instead of `npx`. Neon uses the hosted streamable-HTTP MCP with OAuth.
 - Prevention: pin MCP server versions and pre-install them locally on Windows; a local `node` entrypoint removes `npx` from the startup path entirely. Zed's config still uses `@latest` and is tracked as W4-H (user declined to change it).
 
+## 2026-10-29 — Wave 4 integration boundary: adapters are tested but not selected at boot
+- Symptom: W4-INF/SBX implement Baseten and Modal adapters and W4-WRK injects `SandboxProvider`/`CodingAgentRuntimeFactory`/`UsageSink`, but the worker's composition root still defaults to `NullProvider` + unconfigured runtime, so no real task can execute end-to-end yet.
+- Root cause (three independent seams):
+  1. **No task-context source.** `TaskContext` needs `goal`, `acceptanceCriteria` and `fileOwnership`; `tasks` and `compiled_plans` persist neither, and `CompiledWorkflowPlan` carries only graph structure. `loadTaskContext` therefore cannot be implemented without a task-intake schema (wave 5).
+  2. **No sandbox handle at the runtime factory.** `CodingAgentRuntimeFactoryOptions` exposes only `onRecord`/`onUsage`/`caps`; the handler provisions the sandbox but does not pass the handle, so `SandboxToolBackend` cannot be bound to the job's sandbox. Extending the contract is small but touches merged lanes and needs its own tests.
+  3. **Modal client construction is network-bound.** `createModalSandboxClient` calls `client.apps.fromName(...)` before returning, which would spend a Modal API call at worker boot. Building it eagerly in offline composition would violate the "no keys before code" rule.
+- Correction: keep composition injection-only and prove the full lifecycle with `scripts/acceptance-offline.ts` (fakes, zero credentials). Do not half-wire adapters that cannot run.
+- Prevention: treat "adapter implemented" and "composition wired" as separate DoD items; when a factory lacks a value it needs (here the sandbox handle), surface it during contract review rather than patching around it in the composition root.
+
+## 2026-10-29 — In-memory queue fakes require a claim before `ackFail`
+- Symptom: the acceptance script's throw/abort scenarios received `{ ok: false }` from `ackFail` even though the handler had run.
+- Root cause: the fake (like Postgres) only acknowledges jobs in `claimed` state owned by the caller; the script enqueued and immediately failed without claiming.
+- Correction: `claimNext` before `handle`, then `ackFail` with the claimed id. The success path already went through the real worker loop, which claims first.
+- Prevention: acceptance scripts must model the queue state machine, not just the handler; ack assertions should follow claim → handle → ack in that order.
+
 ## 2026-10-29 — W5-AUTH: a new statement in the submit transaction silently broke every write-path test
 - Symptom: three `apps/web` Postgres-store tests failed — "ownership, compile, task and queue writes share one transaction", "enqueue error rolls back transaction and returns a safe error", and "rejection commits sanitized history but writes no task or job". All three returned `FORBIDDEN` where a success / `UNAVAILABLE` / `WORKFLOW_REJECTED` outcome was expected.
 - Root cause: the new `activeMembershipSql` membership check was added to the submit transaction, but the SQL fixture's `execute()` dispatcher has no branch for it. The fixture threw "Unexpected fixture statement", which the store caught and turned into "not a member" — i.e. a *fixture* gap presented as an *authorization* failure.
@@ -248,3 +263,4 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: `bun.lock` is a root file that every worktree writes; AGENTS.md reserves it for the coordinator, but a new runtime dependency forces a lockfile update on the owning lane.
 - Correction: the lockfile update is committed on `task/w5-auth` because CI installs with `--frozen-lockfile` — a branch that ships a dependency without its lockfile entry cannot pass the pipeline. The coordinator must reconcile the three deltas.
 - Prevention: when a lane legitimately owns a root-file change, commit it on that lane and say so explicitly in the report, so the coordinator reconciles instead of assuming the lane broke the lockfile.
+

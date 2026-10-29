@@ -193,7 +193,7 @@ Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth st
 - Offline: biome 0 errors (10 pre-existing warnings), 8/8 typecheck, 946 pass / 0 fail / 4 skip ×2, web build + 30-check sweep + smoke, `acceptance:offline` PASS (`--no-env-file`).
 - Live Neon: migration `0004` applied and verified; full suite 950 pass / 0 fail.
 - Keyed acceptance (one run): models 20 listed / target present → one completion HTTP 200, 148 prompt + 16 completion tokens, no tools → one Modal sandbox 0.125 CPU / 512 MiB / 60 s, `echo` exit 0, terminated → usage rows recorded, printed and cleaned. No trusted price configured, so cost stays null.
-- Status: **done** — live pass complete; Google consent remains a user browser check. Merge `task/w6-finish` → `main`.
+- Status: **done** — live pass complete; branch fast-forwarded into `main` (`8cd5260`). Google consent remains a user browser check.
 
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.

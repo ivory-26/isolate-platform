@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-29 (wave 6 — auth completion + real adapter integration — committed on `task/w6-finish`, **not pushed**; migration `0004` and keyed acceptance pending)
+Last updated: 2026-10-29 (wave 6 merged to `main` at `8cd5260`; live provider acceptance complete; Google consent is the remaining browser check)
 
 ## Current: wave 6 — Google sign-in, task intent persisted, real adapters bound
 
@@ -16,7 +16,7 @@ Last updated: 2026-10-29 (wave 6 — auth completion + real adapter integration 
 ### Wave 6 open items (need the user)
 
 1. **Live Google consent** must be exercised once by the user (the app only verified initiation/exchange logic offline). The shared provider needs no local Google credentials; production needs own credentials and the deployment origin in the trusted-domain list.
-2. Merge `task/w6-finish` → `main` (the live pass is complete).
+2. **Push is not performed** (project protocol). `main` is local at `8cd5260`; CI greenness on the remote is unverified until the user pushes.
 
 ## Previous: wave 5 complete — Neon Managed Better Auth wired in, tenant isolation enforced
 

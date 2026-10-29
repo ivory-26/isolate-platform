@@ -51,10 +51,21 @@ Budget context: $100 Baseten credits (Muse Spark Open only) and $100 Modal credi
 
 Ground rules (unchanged): one writable owner per package per wave; one worktree + `task/w4-*` branch per agent; root files (`package.json`, root `bun.lock`, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package; commit on the branch before reporting; never push; never read/print `.env*`.
 
-### W4-0 — Coordinator pre-work (contracts + provisioning, no feature code)
+**Credit rule (strict):** Baseten and Modal keys are the LAST step. Every lane must be implemented, tested, built and merged with `INFERENCE_PROVIDER=none` and `SANDBOX_PROVIDER=null` before any key exists. No exploratory or benchmark calls; live acceptance is one bounded run with explicit user approval. Full policy: [`AGENTS.md`](../AGENTS.md) §Provider credits.
+
+### Execution order (strict — keys last)
+
+1. **Phase A — contracts + lanes (no keys):** interfaces committed first; W4-DB/W4-INF/W4-SBX/W4-WEB developed in parallel with fakes only.
+2. **Phase B — merge + offline gates:** all lanes merged; `INFERENCE_PROVIDER=none SANDBOX_PROVIDER=null bun run validate` green ×2; worker dry-run with fake provider/runtime; web build + client sweep green.
+3. **Phase C — offline acceptance:** task lifecycle exercised end-to-end with `NullProvider` + fake runtime and **zero provider credentials in the environment**. The scripted acceptance must assert: web submit validates and enqueues → worker claims → fake agent turns run through the policy-gated tools → usage sink receives rows → sandbox `destroy` is called on success, throw and abort → job acks with the expected verdict. No `BASETEN_*`/`MODAL_*` env is set and no provider SDK is invoked.
+4. **Phase D — user adds keys (only after A–C are green):** user supplies credentials; first keyed action is a single `GET /v1/models` to confirm the exact Muse Spark Open snapshot id (no completion tokens). Do not run completions in this phase.
+5. **Phase E — minimal live acceptance (one approval, one pass):** exactly one Baseten completion (`max_tokens <= 16`, no tools) and exactly one Modal sandbox (`echo`, ≤60 s, smallest limits, terminated immediately). Optional bounded end-to-end only with a separate explicit approval (`<= 2` turns, `<= 512` output tokens, sandbox `<= 5` min).
+6. **Phase F — close-out:** read `usage_records` and report measured spend; verify zero sandboxes running; update docs; destroy temporary keys only with user approval.
+
+### W4-0 — Coordinator pre-work (contracts only, NO keys)
 - Commit cross-lane contracts FIRST: `AgentUsage` + `onUsage` hook in `packages/mastra/src/agents/types.ts`; `SandboxToolBackend` interface (read/list/search/exec/git) for the tool layer; `UsageSink` shape consumed by the worker (implemented by W4-DB). Interfaces only, no implementations.
-- Verify provider facts against installed packages before lanes start: `baseten` provider id and `meta-models/muse-spark-open` against `GET https://inference.baseten.co/v1/models`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git).
-- Provision: Baseten key + credits confirmed; Modal token pair + `modal` app; secrets live only in the worker/server env (never committed, never printed).
+- Verify provider facts against **installed types and published docs only** — no keyed call: `baseten` provider id and documented model id `meta-models/muse-spark-open`; Modal egress field (`outboundDomainAllowlist` vs `blockNetwork`/`cidrAllowlist`) against the installed `modal` d.ts; image choice (`node:22-bookworm` or `oven/bun:1`, must include git). The dated snapshot id is confirmed in Phase D with a single `GET /v1/models`.
+- **Do NOT provision, request, or test with Baseten/Modal credentials here.** Keys are Phase D, after A–C are green.
 - Status: **planned**
 
 ### W4-DB — `packages/db/**` (owner: agent W4-DB, branch `task/w4-db`)
@@ -75,8 +86,8 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 - Map `SandboxSpec` → `SandboxCreateParams`: cpu, memoryMiB, lifetime `timeoutMs`, `idleTimeoutMs`, absolute `workdir`, `command: ["sleep","48h"]`; egress deny-by-default (`blockNetwork: true` unless a verified domain/CIDR allowlist is provably required for clone/install). Reject unsupported limits BEFORE create.
 - `execute`: `sb.exec(argv, { timeoutMs })`, capture stdout/stderr with caps, `wait()` exit code, map to `CommandResult`; abort propagates. `destroy`: idempotent terminate, tolerates already-gone.
 - Offline fake-client tests: mapping, pre-create rejection, timeout, output cap, destroy idempotency, no host process spawning.
-- Opt-in live smoke only (`MODAL_LIVE=1` + token env): 1 CPU / 512 MiB / 60 s, create → `echo` → terminate, assert cleanup. Skipped by default and in CI.
-- DoD: offline gates ×2; live smoke evidence when tokens are provided; commit + report.
+- **Offline only in this lane.** The live smoke is Phase E (after keys), single-run: smallest allowed CPU/memory (target 512 MiB), `timeoutMs <= 60000`, create → `echo` → terminate, assert cleanup. Never in CI, never repeated for debugging.
+- DoD: offline gates ×2; commit + report.
 
 ### W4-WRK — `apps/worker/**` (owner: agent W4-WRK, branch `task/w4-wrk`)
 - Composition root: `NullProvider` unless `SANDBOX_PROVIDER=modal`; Baseten config only when `INFERENCE_PROVIDER=baseten`. No direct `modal` import and no provider SDK outside the adapters.
@@ -92,7 +103,7 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 
 ### W4-OPS — Coordinator integration (after all lanes report)
 - Extend `apps/web/scripts/check-client.ts` forbidden patterns with `BASETEN_`, `MODAL_`, `inference.baseten.co`, `modal.com`.
-- CI: optional/manual live smokes (never on PRs), gitleaks triage, full `bun run validate`, docs (`STATUS`/`DECISIONS`/`CHALLENGES`/`TASKS`/`ARCHITECTURE`), push only with user approval.
+- CI: **no provider keys and no live calls** (CI must stay free). Offline gates only; gitleaks triage; full `bun run validate`; docs (`STATUS`/`DECISIONS`/`CHALLENGES`/`TASKS`/`ARCHITECTURE`); push only with user approval.
 - Keep W4-H (pin Zed's Mastra docs MCP to 1.3.9) as opportunistic tooling.
 
 ### Dependency graph / parallelism
@@ -100,9 +111,11 @@ Ground rules (unchanged): one writable owner per package per wave; one worktree 
 W4-WRK must NOT wait for adapters to be finished: it codes to `SandboxProvider`/`CodingAgentRuntime` and fake implementations, then swaps in the real ones at integration.
 
 ### Cost guardrails (both credits)
-- Baseten: `maxOutputTokens` per turn, per-task token accumulator, existing `max_agent_turns`/`max_duration_ms`; one `usage_records` row per model call with cost from a config price table (no hardcoded guess); block at cap.
-- Modal: default 1 CPU / 1 GiB / 15 min lifetime / 5 min idle, no GPU, per-task sandbox-seconds cap, concurrency cap, destroy in `finally`; record sandbox usage rows (provider `modal`, model_id `sandbox:<cpu>x<mem>`, estimated `cost_usd`).
-- Live tests are opt-in, tiny, and skipped by default; they are the only paths allowed to spend credits.
+Policy of record: [`AGENTS.md`](../AGENTS.md) §Provider credits. Keys exist only in Phase D–E; every other phase runs with providers disabled.
+- Baseten: `maxOutputTokens` per turn (`<= 16` for acceptance, small bounded value for product use), per-task token accumulator, existing `max_agent_turns`/`max_duration_ms`; one `usage_records` row per model call with cost from a config price table (no hardcoded guess); block at cap. Exactly one completion in Phase E.
+- Modal: default 1 CPU / 1 GiB / 15 min lifetime / 5 min idle, no GPU, per-task sandbox-seconds cap, concurrency cap, destroy in `finally`; record sandbox usage rows (provider `modal`, model_id `sandbox:<cpu>x<mem>`, estimated `cost_usd`). Exactly one sandbox in Phase E.
+- Live tests are opt-in, tiny, single-run, and never run in CI; they are the only paths allowed to spend credits.
+- After each keyed run: read `usage_records`, report measured spend, verify zero running sandboxes. No retries after success; no cap increases to make a test pass.
 
 ### Deferred to wave 5
 - Visual workflow editor (React Flow) + approval queue UI; GitHub App / scoped token broker for clone+PR; Mastra `Workspace`/LSP evaluation (native workspace sandbox package is not published: `@mastra/workspace-sandbox-computesdk` returns 404 as of 2026-10-29); deploy pipeline.

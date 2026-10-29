@@ -4,7 +4,7 @@
 
 An autonomous DevSecOps control plane: accept an engineering task, plan and implement a change with a Mastra agent runtime inside a durable worker, validate it through a bounded repair loop, and emit reviewable pull requests — with policy gates, approvals, and audit at every boundary.
 
-**Stack**: Bun workspaces · TypeScript · Mastra (`@mastra/core`) as agent/workflow runtime · Neon PostgreSQL as system of record (data plane) · Zod everywhere · Biome · Bun test · Groq/OpenRouter (model-agnostic).
+**Stack**: Bun workspaces · TypeScript · Mastra (`@mastra/core`) as agent/workflow runtime · Neon PostgreSQL as system of record (data plane) · Zod everywhere · Biome · Bun test · OpenAI-compatible model providers (Baseten Muse Spark Open planned for the provider plane).
 
 ## What is built in this repo (event week)
 
@@ -48,3 +48,7 @@ CI: `.github/workflows/ci.yml` runs the same gates on every PR + push, with advi
 ## Environment
 
 Copy `.env.example` → `.env` (never commit it). Values are loaded server-side only; no secret ever reaches browser code, model prompts, or logs (redaction is enforced in shared logging).
+
+## Provider credits (strict)
+
+Baseten (Muse Spark Open) and Modal (sandboxes) are credit-funded and shared. **API keys are the last step of a wave:** all code, fakes, tests, builds and merges must pass with `INFERENCE_PROVIDER=none` and `SANDBOX_PROVIDER=null` before any credential is added. Live verification is one bounded acceptance pass; no exploratory, benchmark, or retry-loop calls; CI never receives provider keys. Full policy: `AGENTS.md` §Provider credits.

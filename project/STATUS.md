@@ -35,15 +35,16 @@ Last updated: 2026-10-29 (wave 3 fully integrated, live-verified; wave 4 handove
 
 ## Wave 4 handover (planned 2026-10-29: provider plane)
 
-Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; inference uses the existing OpenAI-compatible model object and sandboxing uses the existing `SandboxProvider` contract. Full task specs, ownership and dependency graph live in [TASKS.md](TASKS.md#wave-4--provider-plane-baseten-inference--modal-sandboxes-planned-2026-10-29).
+Grants: $100 Baseten credits (Muse Spark Open only) and $100 Modal credits. Mastra core stays `@mastra/core@1.79.0`; inference uses the existing OpenAI-compatible model object and sandboxing uses the existing `SandboxProvider` contract. **Keys are the last step:** every lane is implemented, tested and merged with `INFERENCE_PROVIDER=none` / `SANDBOX_PROVIDER=null`; user-supplied credentials arrive only in Phase D, after offline acceptance. Policy: [AGENTS.md](AGENTS.md#provider-credits-baseten--modal-strict). Full task specs and phase order live in [TASKS.md](TASKS.md#wave-4--provider-plane-baseten-inference--modal-sandboxes-planned-2026-10-29).
 
-- **W4-0 (coordinator):** commit interface contracts; verify `meta-models/muse-spark-open` via `GET /v1/models`; verify Modal egress/image facts against the installed d.ts; provision keys (server-only).
+- **W4-0 (coordinator):** commit interface contracts; verify documented model id and Modal egress/image facts from installed types and docs (no keyed calls); design the key-less acceptance path.
 - **W4-DB (`packages/db`):** jsonb write normalization + `UsageRepository` over existing `usage_records` (no migration).
-- **W4-INF (`packages/mastra`):** Baseten model config, tools passed to `Agent`, `maxSteps`, usage callback, sandbox-backed typed tools through the policy gate.
-- **W4-SBX (`packages/sandbox`):** `ModalSandboxProvider` (`modal@0.11.x`) with injected client, offline fake tests, opt-in live smoke.
-- **W4-WRK (`apps/worker`):** task handler wiring provider + runtime + usage; always destroy in `finally`; abort/lease-safe.
+- **W4-INF (`packages/mastra`):** Baseten model config, tools passed to `Agent`, `maxSteps`, usage callback, sandbox-backed typed tools through the policy gate; fake model only.
+- **W4-SBX (`packages/sandbox`):** `ModalSandboxProvider` (`modal@0.11.x`) with injected client and offline fake tests.
+- **W4-WRK (`apps/worker`):** task handler wiring provider + runtime + usage; always destroy in `finally`; abort/lease-safe; fake provider/runtime.
 - **W4-WEB (`apps/web`):** auth/`CallerScope` + compile-at-submit + rejection surfacing (W4-A/C).
-- **W4-OPS:** client sweep patterns (`BASETEN_`, `MODAL_`), optional live smokes, full validate, docs, push on approval.
+- **W4-OPS:** client sweep patterns (`BASETEN_`, `MODAL_`), full offline validate, docs, push on approval. CI never receives provider keys.
+- **Phase D–E (only after A–C green):** user adds keys → one `GET /v1/models` → exactly one Baseten completion (`max_tokens <= 16`) and one Modal sandbox (`echo`, ≤60 s) → measure `usage_records`, verify zero sandboxes, report spend.
 
 Deferred to wave 5: visual editor + approval queue UI, GitHub App token broker, Mastra `Workspace`/LSP evaluation, deploy pipeline. W4-H (pin Zed's Mastra docs MCP to 1.3.9) remains opportunistic. Nothing in wave 4 has been started yet.
 

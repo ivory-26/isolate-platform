@@ -232,6 +232,7 @@ Use `project/TASKS.md`, `project/STATUS.md`, `project/DECISIONS.md`, and `projec
 - Keep logs useful but redact tokens, private keys, personal data, and sensitive source excerpts.
 - Defend against prompt injection from source files, issues, documentation, and tool responses.
 - Set timeouts, resource limits, output limits, retry limits, and spend limits.
+- Treat credit-funded providers (Baseten, Modal) as scarce: implement and test against fakes first; credentials are added only after offline acceptance, live verification is a single bounded pass, and measured spend is read from `usage_records`. Policy of record: `AGENTS.md` §Provider credits. CI never receives provider keys.
 - Record actor, tenant, run, tool, arguments (redacted), policy decision, result, duration, and correlation IDs.
 - Add cancellation and cleanup paths for every long-running execution.
 - Test tenant isolation and authorization at API and repository layers.

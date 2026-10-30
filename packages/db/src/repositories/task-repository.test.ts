@@ -216,6 +216,34 @@ test("createRetry copies the boundary, links retry_of and increments depth", asy
 	expect((await repo.get(source.id))?.status).toBe("failed");
 });
 
+test("recordPullRequest is tenant-scoped and persists number and url", async () => {
+	const repo = new InMemoryTaskRepository();
+	const source = await failedSource(repo);
+	const url = "https://github.com/example/repo/pull/12";
+	const updated = await repo.recordPullRequest({
+		organizationId: orgA,
+		taskId: source.id,
+		pullRequestNumber: 12,
+		pullRequestUrl: url,
+	});
+	expect(updated).toMatchObject({
+		pull_request_number: 12,
+		pull_request_url: url,
+	});
+	expect((await repo.get(source.id))?.pull_request_number).toBe(12);
+
+	// A foreign organization can neither write nor read another tenant's task.
+	expect(
+		await repo.recordPullRequest({
+			organizationId: orgB,
+			taskId: source.id,
+			pullRequestNumber: 99,
+			pullRequestUrl: "https://github.com/example/repo/pull/99",
+		}),
+	).toBeNull();
+	expect((await repo.get(source.id))?.pull_request_number).toBe(12);
+});
+
 test("createRetry replay returns the same task and exactly one row", async () => {
 	const repo = new InMemoryTaskRepository();
 	const source = await failedSource(repo);

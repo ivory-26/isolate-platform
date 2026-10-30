@@ -124,6 +124,10 @@ const STMT = {
 	get: `SELECT ${TASK_COLUMNS} FROM tasks WHERE id = $1`,
 	getByIdempotencyKey: `SELECT ${TASK_COLUMNS} FROM tasks
 		WHERE organization_id = $1 AND idempotency_key = $2`,
+	recordPullRequest: `UPDATE tasks
+		SET pull_request_number = $3, pull_request_url = $4, updated_at = now()
+		WHERE id = $1 AND organization_id = $2
+		RETURNING ${TASK_COLUMNS}`,
 	listByStatus: `SELECT ${TASK_COLUMNS} FROM tasks
 		WHERE status = $1 ORDER BY created_at DESC LIMIT $2`,
 	// Guard is fully server-side: status must equal the caller's expected
@@ -212,6 +216,16 @@ export interface TaskRepository {
 	 * budget caps). `failed` stays terminal: this inserts a NEW row.
 	 */
 	createRetry(input: TaskRetryInput): Promise<TaskRetryResult>;
+	/**
+	 * Persists the created pull request on the task. Returns null when the task
+	 * is absent or belongs to another organization (no cross-tenant write).
+	 */
+	recordPullRequest(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		pullRequestNumber: number;
+		pullRequestUrl: string;
+	}): Promise<TaskRow | null>;
 }
 
 /** Pure transition guard used by the driver path and by contract-test fakes. */
@@ -396,6 +410,28 @@ export class PostgresTaskRepository implements TaskRepository {
 		}
 		// Status changed between the UPDATE and this read (lost race).
 		return { ok: false, code: "CONFLICT" };
+	}
+
+	async recordPullRequest(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		pullRequestNumber: number;
+		pullRequestUrl: string;
+	}): Promise<TaskRow | null> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		requirePositiveInt(input.pullRequestNumber, "pullRequestNumber");
+		requireNonEmpty(input.pullRequestUrl, "pullRequestUrl");
+		if (input.pullRequestUrl.length > 512) {
+			throw new Error("pullRequestUrl must be at most 512 characters");
+		}
+		const rows = (await this.sql.unsafe(STMT.recordPullRequest, [
+			input.taskId,
+			input.organizationId,
+			input.pullRequestNumber,
+			input.pullRequestUrl,
+		])) as unknown as Record<string, unknown>[];
+		return rows.length === 0 ? null : mapTaskRow(rows[0]);
 	}
 
 	async listExpiredOverBudget(): Promise<TaskRow[]> {

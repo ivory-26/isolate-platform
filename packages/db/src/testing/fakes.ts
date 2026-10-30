@@ -191,6 +191,33 @@ export class InMemoryTaskRepository implements TaskRepository {
 		return { ok: true, task: { ...row } };
 	}
 
+	async recordPullRequest(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		pullRequestNumber: number;
+		pullRequestUrl: string;
+	}): Promise<TaskRow | null> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		requirePositiveInt(input.pullRequestNumber, "pullRequestNumber");
+		requireNonEmpty(input.pullRequestUrl, "pullRequestUrl");
+		if (input.pullRequestUrl.length > 512) {
+			throw new Error("pullRequestUrl must be at most 512 characters");
+		}
+		const row = this.rows.get(input.taskId);
+		if (!row || row.organization_id !== input.organizationId) {
+			return null;
+		}
+		const updated: TaskRow = {
+			...row,
+			pull_request_number: input.pullRequestNumber,
+			pull_request_url: input.pullRequestUrl,
+			updated_at: new Date(),
+		};
+		this.rows.set(input.taskId, updated);
+		return { ...updated };
+	}
+
 	async listExpiredOverBudget(): Promise<TaskRow[]> {
 		const now = Date.now();
 		const out: TaskRow[] = [];

@@ -470,6 +470,21 @@ Lanes are defined now so future agents can claim them without re-deriving contex
 ### W11-OPS — Coordinator
 - Merge green lanes, apply any migration with user approval, run full validate ×2, extend `acceptance:offline` where behaviour changed, update STATUS/CHALLENGES, and confirm the wave-9 live proofs still hold.
 
+### Wave 11 execution record (2026-10-30)
+
+| Lane | Commit | Coordinator gates (×2) |
+|---|---|---|
+| W11-PLAN | `2101dca` → merge `e9df7e1` | biome clean · typecheck 8/8 · 80 mastra tests |
+| W11-OBS | `1299ff7` → merge `4a16950` | biome clean · typecheck 8/8 · 272 worker tests · `acceptance:offline` PASS |
+| W11-STORE | `d919f77` → merge `b4c700e` | biome 0 errors · typecheck 8/8 · 278 db tests (9 live skips) |
+| W11-STORE2 | in progress | pending |
+
+Contracts `20b2a02` (`BlobStore`, `CostPriceTable` + exact cost helpers, `RunSummary`); runtime-of-record docs `081aa9a`.
+
+**Migration `0008_blob_store.sql` applied (2026-10-30, user-approved)** and the live suite ran immediately after: round-trip, `(organization_id, sha256)` dedupe to one row, foreign-org read `null`, oversize rejected before any write, `octet_length(bytes) = byte_size` — **1 pass / 0 fail**.
+
+**Notes**: W11-OBS changed two root scripts (`scripts/acceptance-offline.ts`, `scripts/acceptance-github.ts`) by exactly one field rename (`sandboxPriceTable` → `priceTable`) so they still run after the contract change; the coordinator accepted the exception and verified both scripts.
+
 ## Wave 12 — Product surface (web UI) and deployment decision (planned; the user has design input)
 
 - **Does not start without the user's design direction.** It includes the design-system/token pass, run detail, approvals, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).

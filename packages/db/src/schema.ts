@@ -258,11 +258,14 @@ export type ArtifactRow = {
 	task_id: TaskId;
 	organization_id: OrganizationId;
 	kind: ArtifactKind;
-	// Opaque reference into object storage; never inline large blobs in Neon.
+	// Opaque reference into object storage; wave 7 uses `inline:<sha256>`.
 	storage_ref: string;
 	content_type: string;
 	byte_size: number;
 	sha256: string;
+	// Bounded inline payload (migration 0005, <= 256 KiB UTF-8 bytes) or NULL
+	// for metadata-only artifacts that live in object storage.
+	content: string | null;
 	created_at: Date;
 };
 

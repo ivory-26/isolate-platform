@@ -1,10 +1,13 @@
 export * from "./client";
 export * from "./repositories/approval-repository";
+export * from "./repositories/artifact-repository";
 export * from "./repositories/audit-repository";
 export * from "./repositories/compiled-plan-repository";
+export * from "./repositories/execution-lifecycle";
 export * from "./repositories/membership-repository";
 export * from "./repositories/organization-repository";
 export * from "./repositories/queue-repository";
+export * from "./repositories/repository-repository";
 export * from "./repositories/task-attempt-repository";
 export * from "./repositories/task-context-repository";
 export * from "./repositories/task-repository";
@@ -16,3 +19,4 @@ export * from "./repositories/workflow-run-repository";
 export * from "./repositories/workflow-version-repository";
 export * from "./roles";
 export type * from "./schema";
+export * from "./testing/execution-truth-fakes";

@@ -518,6 +518,7 @@ User decision (2026-10-30): finish backend hardening and evaluate the DevSecOps 
 | H12-1 | `d2f21c9` → merge `e1f9424` | biome clean · typecheck 8/8 · 223 web tests · build · 30-check sweep |
 | H12-2 | `def8254` → merge `bcb8a8b` | biome 0 errors · typecheck 8/8 · 576 db+worker tests · acceptance PASS |
 | H12-3 | `e80f36c` → merge `23cfe35` | docs only — `docs/devsecops-connectors.md` (937 lines, 66 sources, phased plan, risk register) |
+| H12-4 | `61b84d9` → merge `b5125e0` | biome clean · typecheck 8/8 · 432 shared+integrations+web tests · build · 33-check sweep · smoke |
 
 Coordinator integration after the merges: both handlers now **wait** on a `pending` approval (bounded retry, no task transition) instead of failing or consuming the job, and the pre-enqueued follow-up uses `APPROVAL_FOLLOW_UP_MAX_ATTEMPTS = 60`; tests added for both handlers. Documented in DECISIONS and CHALLENGES, including the queue-backoff clarification.
 

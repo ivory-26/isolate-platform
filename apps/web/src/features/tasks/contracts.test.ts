@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	decideApprovalSchema,
+	MAX_SUBMITTED_ACCEPTANCE_CHECKS,
 	retryTaskSchema,
 	submitTaskSchema,
 } from "./contracts";
@@ -14,12 +15,100 @@ const base = {
 	budget: { maxAgentTurns: 12, repairBudget: 2, jobTimeoutMs: 120000 },
 };
 
+const checks = [
+	{ kind: "path_exists", path: "apps/web/src/features/tasks/contracts.ts" },
+	{
+		kind: "content_matches",
+		path: "package.json",
+		pattern: '"type": "module"',
+	},
+	{ kind: "command_exit_zero", command: "bun run validate" },
+] as const;
+
 describe("submitTaskSchema task context", () => {
 	test("requires a goal and defaults the lists to empty", () => {
 		const parsed = submitTaskSchema.parse({ ...base, goal: "  Add health  " });
 		expect(parsed.goal).toBe("Add health");
 		expect(parsed.acceptanceCriteria).toEqual([]);
+		expect(parsed.acceptanceChecks).toEqual([]);
 		expect(parsed.fileOwnership).toEqual([]);
+	});
+
+	test("accepts bounded machine-checkable acceptance criteria", () => {
+		const parsed = submitTaskSchema.parse({
+			...base,
+			goal: "ok",
+			acceptanceChecks: [...checks],
+		});
+		expect(parsed.acceptanceChecks).toEqual([...checks]);
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				acceptanceChecks: Array.from(
+					{ length: MAX_SUBMITTED_ACCEPTANCE_CHECKS },
+					() => ({ kind: "path_exists", path: "README.md" }),
+				),
+			}).success,
+		).toBe(true);
+	});
+
+	test("rejects more checks than the bound", () => {
+		expect(MAX_SUBMITTED_ACCEPTANCE_CHECKS).toBe(32);
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				acceptanceChecks: Array.from(
+					{ length: MAX_SUBMITTED_ACCEPTANCE_CHECKS + 1 },
+					() => ({ kind: "path_exists", path: "README.md" }),
+				),
+			}).success,
+		).toBe(false);
+	});
+
+	test("rejects absolute, traversal and overlong check paths", () => {
+		for (const path of [
+			"/etc/passwd",
+			"../outside.md",
+			"apps/../../outside.md",
+			"a".repeat(401),
+			"",
+		])
+			expect(
+				submitTaskSchema.safeParse({
+					...base,
+					goal: "ok",
+					acceptanceChecks: [{ kind: "path_exists", path }],
+				}).success,
+			).toBe(false);
+	});
+
+	test("rejects unknown fields on the submission and inside a check", () => {
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				acceptanceChecks: [
+					{ kind: "path_exists", path: "README.md", shell: "rm -rf /" },
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				acceptanceChecks: [{ kind: "shell", command: "rm -rf /" }],
+			}).success,
+		).toBe(false);
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				acceptanceChecks: checks.map((check) => ({ ...check })),
+				acceptanceChecksRaw: "smuggled",
+			}).success,
+		).toBe(false);
 	});
 
 	test("rejects a blank goal and unknown fields", () => {

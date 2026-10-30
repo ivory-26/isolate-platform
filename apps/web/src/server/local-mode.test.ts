@@ -110,4 +110,34 @@ describe("explicit local-only fake policy", () => {
 			),
 		).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
 	});
+	test("development store round-trips machine-checkable acceptance criteria", async () => {
+		const store = createDevelopmentStore({
+			nodeEnv: "test",
+			localDemo: "true",
+		});
+		const service = createTaskService({
+			resolveScope: async () => scope,
+			getStore: async () => store,
+		});
+		const request = input({
+			acceptanceChecks: [
+				{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
+				{ kind: "content_matches", path: "README.md", pattern: "# Isolate" },
+				{ kind: "command_exit_zero", command: "bun run validate" },
+			],
+		});
+		const first = await service.submit(request);
+		// Idempotent replay compares the stored row, proving the fake persisted
+		// the checks instead of silently dropping them.
+		const replay = await service.submit(request);
+		if (!first.ok || !replay.ok)
+			throw new Error("Expected idempotent receipts");
+		expect(replay.value.task.id).toBe(first.value.task.id);
+		expect(
+			await service.submit({
+				...request,
+				acceptanceChecks: [{ kind: "path_exists", path: "CHANGED.md" }],
+			}),
+		).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
+	});
 });

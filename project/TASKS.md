@@ -370,6 +370,28 @@ W8-WRK codes only against the shared contracts plus fakes until `runValidationCo
 - Workflow editor (React Flow), object storage for full patches, multi-agent/planner-reviewer topology, hosting/deploy pipeline, RLS, automatic repair turns.
 - Live inference beyond the single close-out acceptance; no retries after success.
 
+### Wave 8 execution record (2026-10-30)
+
+Contracts `c44f2bb` (shared review schemas, `task.retried`, `create_pull_request` job type) and decisions `849bb22` landed on `main` before any lane. All five lanes reported, were independently re-gated twice, and merged with `--no-ff`:
+
+| Lane | Commit | Coordinator gates (×2) |
+|---|---|---|
+| W8-DB | `27e4ac5` | biome 0 errors / 10 warnings · typecheck 8/8 · 232 db tests (6 live skips) |
+| W8-VAL | `88e5e5c` | biome clean · typecheck 8/8 · 353 sandbox tests |
+| W8-GH | `3fa5e87` | biome clean · typecheck 8/8 · 94 integrations tests |
+| W8-WRK | `fee0bfe` | biome clean · typecheck 8/8 · 196 worker tests |
+| W8-CTL | `73fddcb` | biome clean · typecheck 8/8 · 212 web tests · build · 30-check sweep |
+
+Merge commits: `a2c4e1e` (DB), `546551a` (VAL), `d27f4e2` (GH), `cfe1c2f` (WRK), `9f9d2c4` (CTL). Coordinator integration after the merges: `99c711c` declared the `@isolate/shared` workspace dependency that `packages/sandbox` had reached into by relative path; `3e2455e` added `TaskRepository.recordPullRequest` (driver, fake, tenant-scoped test) so the PR stage persists instead of only emitting an event; `39ffe2c` extended the offline acceptance.
+
+**Post-merge `main`**: biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · **1398 pass / 0 fail / 6 skip** offline ×2 · **1398 pass / 0 fail with live Neon** after `0006` · web build + 30-check sweep + smoke · `acceptance:offline` PASS with 7 scenarios.
+
+**Migration applied (2026-10-30, user-approved)**: `0006_review_surface.sql` via `scripts/apply-migration.ts` (13 statements, all migrations idempotent), 20/20 tables verified. Neon MCP verification: `repositories.validation_command text`, `repositories.validation_timeout_ms integer default 300000`, `tasks.pull_request_number integer`, `tasks.pull_request_url text`, `tasks.retry_of uuid`, `tasks.retry_depth integer default 0`; CHECKs `repositories_validation_command_length_check`, `repositories_validation_timeout_ms_range_check`, `tasks_pull_request_url_length_check`, `tasks_retry_depth_range_check`; `jobs_type_check` accepts `create_pull_request`; `tasks_retry_of_idx` present.
+
+**Acceptance scenarios now covered offline** (`bun run acceptance:offline`, zero provider credentials): submit/replay → claim → gated tools → usage → destroy → ack; throw and abort teardown; **validation passed** (`bun test` exit 0 → `review_ready`); **validation failed** (exit 1 → `failed`, log artifact, no push); **pull request** (approved + SHA match → PR recorded → `pull_request_created`); **retry** (failed task → same-boundary new task → one `run_task` → replay stable).
+
+**Deliberately not done**: no live GitHub or inference call (user deferred the live PR to a later request); no web UI (routes/components/styles untouched). Wave 9 owns the design system, run detail, approvals page and repository onboarding.
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

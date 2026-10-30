@@ -1,8 +1,28 @@
 # Status
 
-Last updated: 2026-10-30 (wave 7 merged, migrated, and live-accepted end to end on `ivory-26/agent-bank`; branch pushed, no PR)
+Last updated: 2026-10-30 (wave 8 merged, migration `0006` applied and verified; offline + live Neon gates green; no live PR by request)
 
-## Current: wave 7 — Execution truth (merged, migrated, live pass complete)
+## Current: wave 8 — Review close: validation gate, PR approval, rerun (merged, migrated, offline-complete)
+
+Wave 8 turns `review_ready` into a reviewable outcome: the repository's configured validation command runs in the same sandbox before anything is pushed, a failure ends the task with a bounded report, opening a pull request is a **second** human approval bound to the exact commit, and a person can rerun failed work inside the same task boundary. **Scope decision (user): backend only — no web UI this wave.**
+
+- **Merged on `main`** (`--no-ff`, zero conflicts): W8-DB `27e4ac5`, W8-VAL `88e5e5c`, W8-GH `3fa5e87`, W8-WRK `fee0bfe`, W8-CTL `73fddcb`. Contracts `c44f2bb`; decisions `849bb22`; coordinator integration `99c711c` (`@isolate/shared` dependency declared in `packages/sandbox`), `3e2455e` (`TaskRepository.recordPullRequest`), `39ffe2c` (acceptance coverage). Merge commits `a2c4e1e`, `546551a`, `d27f4e2`, `cfe1c2f`, `9f9d2c4`.
+- **Migration `0006_review_surface.sql` applied to Neon `isolate-platform` / `br-steep-poetry-ar5iwdkb` (2026-10-30, user-approved)** via `scripts/apply-migration.ts` after a read-only precondition check showed none of the columns present; 20/20 tables verified. Verified via the Neon MCP: `repositories.validation_command text`, `validation_timeout_ms integer default 300000`, `tasks.pull_request_number|pull_request_url|retry_of|retry_depth default 0`, the four CHECK constraints, `tasks_retry_of_idx`, and `jobs_type_check` now accepting `create_pull_request`.
+- **Validation gate**: `runValidationCommand` (`packages/sandbox`) tokenizes an operator-authored command **without a shell**, refuses metacharacters/unknown executables/out-of-range timeouts before any provider call, runs with egress deny, and returns the shared `ValidationReport` plus a bounded log. The handler runs it after the diff gate and before push, stores a `log_bundle` artifact and `validation.started/finished` with `stage: "command"`; a failure transitions `validating → failed`, writes no push, and is a non-retryable `VALIDATION_FAILED`. No configured command keeps the wave-7 meaning and records `skipped`.
+- **PR stage**: after a successful push the worker reads HEAD, requests a second approval (`github.create_pull_request`) bound to `{repositoryFullName, headBranch, baseBranch, headSha}`, records the payload on `approval.requested`, and moves `review_ready → awaiting_approval`. A `create_pull_request` job verifies approved + SHA + target, verifies the remote head, creates at most one PR (idempotent), persists number/URL via `TaskRepository.recordPullRequest`, and moves `awaiting_approval → pull_request_created` with `pr.created`.
+- **Rerun instead of repair**: a failed validation is never auto-repaired. `retryTask` (`apps/web` server-side, capability-gated before storage) creates a **new** task copying the failed task's boundary (repository, goal, acceptance criteria, file ownership, budget caps), links `retry_of`, increments `retry_depth` (bounded 3), records `task.retried` + `task.enqueued`, and enqueues exactly one `run_task`; replay is stable and enqueues nothing. `decideApproval` approves/rejects with the same capability gate, writes an audit row + `approval.decided`, and enqueues one `resume_task` (push) or `create_pull_request` (PR) — rejection fails the task and enqueues nothing.
+- **No UI**: `apps/web` routes, components and styles are untouched; the client sweep is unchanged at 30 checks. The approval buttons, run-detail timeline and repository onboarding page are wave 9, together with the design system.
+- **Gates on `main`**: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **1398 pass / 0 fail / 6 skip** offline, twice, identical · **1398 pass / 0 fail with live Neon** after `0006` · web production build green · client sweep **30 checks** · production smoke green (307 → `/login`) · `acceptance:offline` PASS with **7 scenarios** (success, throw, abort, validation-passed, validation-failed, pull-request, retry).
+
+### Wave 8 open items (need the user)
+
+1. **Live PR acceptance deferred by the user** (2026-10-30). No GitHub or provider call was made in this wave; the PR path is proven by 94 connector tests, 196 worker tests and the offline acceptance. When wanted: one bounded run on `ivory-26/agent-bank`.
+2. **Wave 9 = the product surface**: design system, run detail (`/runs/$taskId`), approvals page, repository onboarding, navigation — built on the server actions that now exist.
+3. **Approval decision is not a distributed transaction**: `decide` (with its audit row) commits before the follow-up job is enqueued. A queue failure at that instant leaves an approved row with no job; replay returns `CONFLICT`. Documented in `CHALLENGES.md`; recovery today is an operator re-enqueue.
+4. **Validation-image coverage**: `bun test` / `bun run <script>` are image-safe; `npm`/`pytest`/`cargo`/`go` are allowlisted but not preflighted in the sandbox image, so a missing binary surfaces as a failed report (exit 127) rather than a provisioning error.
+5. **Evidence branch**: `task/w7-live-da35089b` on `ivory-26/agent-bank` remains from wave 7; delete it when it is no longer needed.
+
+## Previous: wave 7 — Execution truth (merged, migrated, live pass complete)
 
 Wave 7 closes the five gaps that stopped an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. A task can now be planned, cloned, edited, committed, recorded and paused at a human approval gate before push.
 

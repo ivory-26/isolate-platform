@@ -390,3 +390,31 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: protocol hardening was applied globally but only clone opted the https transport back in; push over an `https://github.com` remote would be denied or fail before credentials were used.
 - Correction: `pushBranch` passes `-c protocol.https.allow=always` before `push`, matching clone. The push test asserts the flag and still asserts no force flag.
 - Prevention: when a global hardening option denies by default, every allowed transport path (clone, fetch, push) must opt back in explicitly.
+
+## 2026-10-30 — W8: a lane reached into another package's source rather than declaring a dependency
+
+- Symptom: `packages/sandbox/src/validation` imported `ValidationReport` via `../../../shared/src/types/review`. Every scoped gate passed (Biome, tsc, 353 tests), because TypeScript resolves the path.
+- Root cause: the lane needed the shared type but `packages/sandbox` did not declare `@isolate/shared`, and the root lockfile is coordinator-owned, so the agent worked around the missing dependency instead of reporting it.
+- Correction: `packages/sandbox/package.json` now declares `"@isolate/shared": "workspace:*"`, the imports use the package specifier, and the coordinator regenerated `bun.lock`. When rewriting the import by string replacement, the shorter pattern matched first and left `../@isolate/shared` — the full-repo Biome check caught it, not the scoped one.
+- Prevention: a cross-package import inside a package that does not declare that workspace dependency is a contract violation, not a style issue. Scoped gates cannot see it; the full `bunx biome check .` and a dependency audit can. Agents must stop and report when a dependency would require the root lockfile.
+
+## 2026-10-30 — W8: validation tests must filter run events by stage
+
+- Symptom: the new acceptance scenario asserted that the last `validation.finished` carried `status: "passed"` and got `undefined`.
+- Root cause: three distinct events share the `validation.finished` type — the command gate (`stage: "command"`), the diff artifact report (`stage: "diff"`, emitted after the command gate), and the skipped path. The last one in the stream was the diff report.
+- Correction: the assertions filter on `data.stage === "command"`. The worker's own tests already filtered; only the new acceptance script assumed ordering.
+- Prevention: a shared event type with a `stage` discriminator must always be filtered by that discriminator in assertions, never by position in the stream.
+
+## 2026-10-30 — W8: an approval decision and its follow-up job are two transactions
+
+- Symptom (design review, not yet observed live): `decideApproval` commits the decision + audit row, then enqueues `resume_task` or `create_pull_request`. `ApprovalRepository.decide` opens its own `sql.begin`, so postgres.js cannot nest it inside a wider transaction.
+- Consequence: a queue failure between the two leaves an `approved` row with no job. The task sits at `awaiting_approval`; re-deciding returns `CONFLICT`, so recovery needs an operator re-enqueue.
+- Why it is recorded rather than fixed: the window requires a database error during the request, and every alternative (enqueue-before-decide, or a job-reconciliation sweeper) changes the approval contract and belongs to a deliberate change with its own tests.
+- Prevention: when a human decision must trigger work, decide whether the queue row or the decision is the source of truth before writing the two writes. A reconciliation job (pending approvals without a follow-up job) is the wave-9 candidate.
+
+## 2026-10-30 — W8: live suites read the new columns before the migration exists
+
+- Symptom: after merging the wave-8 lanes but before applying `0006`, `bun run validate` failed four live Neon suites (task lifecycle, jsonb, usage, repository onboarding) while all offline tests passed.
+- Root cause: `TASK_COLUMNS` now selects `pull_request_number`, `pull_request_url`, `retry_of`, `retry_depth`; the columns did not exist yet, so every live task read failed. The DB lane had flagged this dependency in its report.
+- Correction: applied `0006` (user-approved) and re-ran the suite: 1398/0 with live Neon.
+- Prevention: a migration that adds columns to a table read by existing suites makes the live suite depend on migration order. The lane report must state it (it did), and the coordinator must apply the migration before treating live failures as regressions.

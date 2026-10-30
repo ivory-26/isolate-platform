@@ -67,3 +67,12 @@ Baseten and Modal are credit-funded. Projects skills must not trigger paid calls
 ## Deliberately not installed this sprint
 
 Skills for CI/CD, threat modeling, and per-provider SDKs were NOT installed — sprint gates run via repository scripts (`bun run validate`), and the sprint briefs encode required security behavior directly in agent instructions. Add candidates via this registry when a concrete need appears, applying the `SKILLS.md` review checklist.
+
+## Wave 8 (2026-10-30, no new installs)
+
+| Skill / MCP | Source | Used by | Review status |
+|---|---|---|---|
+| context7 + mastra-docs MCP | Local pinned servers | W8-GH (GitHub REST semantics), W8-WRK (Mastra tool shapes) | Read-only doc lookups; installed d.ts and the existing connector remain authority; no live provider calls |
+| Neon MCP | Hosted streamable HTTP | Coordinator | Read-only precondition check and post-migration verification; `0006` applied through the repo runner after explicit user approval |
+
+No new skill was installed for wave 8. The wave was backend-only: schema, sandbox command policy, connector, worker lifecycle and server-side control-plane actions. The design skills (`build-design-system`, `impeccable`, `ui-review`) stay queued for wave 9, where the user's design input will drive the surface work.

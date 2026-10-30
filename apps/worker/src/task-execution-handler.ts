@@ -1,3 +1,4 @@
+import { pullRequestApprovalPayloadSha256 } from "@isolate/integrations";
 import type {
 	AgentTurnCaps,
 	AgentTurnRecord,
@@ -15,11 +16,16 @@ import type {
 	TaskWorkspace,
 	TaskWorkspaceGit,
 } from "@isolate/sandbox";
-import { SandboxError } from "@isolate/sandbox";
+import {
+	executeCommand,
+	runValidationCommand,
+	SandboxError,
+} from "@isolate/sandbox";
 import type {
 	ExecutionLifecycle,
 	LifecycleTransitionInput,
 	UsageSink,
+	ValidationReport,
 } from "@isolate/shared";
 import {
 	errorCodeOf,
@@ -30,6 +36,11 @@ import {
 	type TaskId,
 } from "@isolate/shared";
 import type { HandlerContext, HandlerVerdict, JobHandler } from "./contracts";
+import { readApprovalId, readTaskId } from "./payload";
+import {
+	buildPullRequestTarget,
+	PULL_REQUEST_APPROVAL_ACTION,
+} from "./pull-request-approval";
 import { clampErrorCode, sanitizeMessage } from "./sanitize";
 
 /**
@@ -48,6 +59,15 @@ import { clampErrorCode, sanitizeMessage } from "./sanitize";
  * bounded diff artifact and — when `pushEnabled` — pauses on a human approval
  * **before** any sandbox is provisioned. Without `lifecycle` the handler is
  * byte-for-byte the wave-4/6 implementation (no transitions, no clone).
+ *
+ * Wave 8 inserts two more gates inside that flow:
+ * - a repository-configured validation command runs in the SAME sandbox after
+ *   the diff exists and before anything is pushed; a failure (or an invalid
+ *   command refused by policy) ends the task `failed` with a bounded report,
+ *   no push and no repair turn — the rerun path replaces repair;
+ * - after a successful push the task pauses a second time, bound to
+ *   `{repositoryFullName, headBranch, baseBranch, headSha}` (action
+ *   `github.create_pull_request`). The `create_pull_request` job performs it.
  *
  * Security / spend invariants:
  * - no credentials or environment values are read here; the prompt carries
@@ -89,6 +109,12 @@ const MAX_LOGGED_TURN = 10_000;
 
 /** Bounded inline diff artifact (matches the DB `artifacts.content` cap). */
 const MAX_ARTIFACT_BYTES = 65_536;
+/** Validation log artifacts are bounded by the runner's inline capture cap. */
+const MAX_VALIDATION_LOG_BYTES = 65_536;
+/** Bounded `git rev-parse HEAD` result used to bind the PR approval. */
+const HEAD_SHA_TIMEOUT_MS = 30_000;
+const HEAD_SHA_OUTPUT_BYTES = 4_096;
+const HEAD_SHA_PATTERN = /^[0-9a-f]{40,64}$/i;
 /** Approval validity window; the resume job must arrive before this. */
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 /** Hosts the clone/push helpers are allowed to reach inside the sandbox. */
@@ -100,11 +126,6 @@ const TURN_STATUSES: ReadonlySet<string> = new Set([
 	"failed",
 	"denied",
 ]);
-
-const UUID_PATTERN =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Bounded approval id: opaque, single component, no control characters. */
-const APPROVAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 const REJECTED_PAYLOAD: HandlerVerdict = {
 	outcome: "dead_letter",
@@ -175,34 +196,16 @@ export type TaskExecutionDeps = {
 	 * `run_task` pauses at `awaiting_approval` before any sandbox exists.
 	 */
 	pushEnabled?: boolean;
+	/**
+	 * Wave 8 validation policy for the task's repository. `null` (or an absent
+	 * seam) means no command is configured: the gate degrades to the wave-7
+	 * "diff present" meaning and emits a `skipped` event.
+	 */
+	loadValidationPolicy?: (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+	}) => Promise<{ command: string; timeoutMs: number } | null>;
 };
-
-/** Reads a UUID taskId from an untrusted payload without throwing. */
-function readTaskId(payload: unknown): string | null {
-	try {
-		if (payload === null || typeof payload !== "object") return null;
-		if (Array.isArray(payload)) return null;
-		const value = (payload as Record<string, unknown>).taskId;
-		return typeof value === "string" && UUID_PATTERN.test(value) ? value : null;
-	} catch {
-		// Hostile getters/proxies must never make `supports()` throw.
-		return null;
-	}
-}
-
-/** Reads the bounded `resume_task` approval id without throwing. */
-function readApprovalId(payload: unknown): string | null {
-	try {
-		if (payload === null || typeof payload !== "object") return null;
-		if (Array.isArray(payload)) return null;
-		const value = (payload as Record<string, unknown>).approvalId;
-		return typeof value === "string" && APPROVAL_ID_PATTERN.test(value)
-			? value
-			: null;
-	} catch {
-		return null;
-	}
-}
 
 /**
  * Canonical approval payload for `git push_branch`. The field order is part of
@@ -375,6 +378,75 @@ function toVerdict(error: unknown, ctx: HandlerContext): HandlerVerdict {
 				};
 	}
 	return { outcome: "retry", code: "INTERNAL" };
+}
+
+/** Longest code-point prefix whose UTF-8 encoding fits the byte budget. */
+function utf8Prefix(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.length <= maxBytes) return value;
+	let end = maxBytes;
+	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+	return bytes.subarray(0, end).toString("utf8");
+}
+
+/**
+ * Defensive bound for the validation log artifact. The runner already caps its
+ * capture at 64 KiB; this is a second boundary so a future adapter change
+ * cannot push an unbounded blob into `artifacts.content`.
+ */
+function boundedLogContent(value: string): {
+	content: string;
+	bytes: number;
+	truncated: boolean;
+} {
+	const content = utf8Prefix(value, MAX_VALIDATION_LOG_BYTES);
+	const bytes = Buffer.byteLength(content, "utf8");
+	return {
+		content,
+		bytes,
+		truncated: bytes < Buffer.byteLength(value, "utf8"),
+	};
+}
+
+/**
+ * Reads the pushed commit SHA from inside the same sandbox (`git rev-parse
+ * HEAD`) through the trusted command policy. Returns `null` on any refusal or
+ * malformed output: the caller then leaves the task at `review_ready` instead
+ * of pausing on a PR approval it could never satisfy.
+ */
+async function readHeadSha(
+	deps: TaskExecutionDeps,
+	sandbox: SandboxHandle,
+	repoPath: string,
+	signal: AbortSignal,
+): Promise<string | null> {
+	const policy = deps.sandboxPolicy;
+	if (policy.maxTimeoutMs < 1 || policy.maxOutputBytes < 1) return null;
+	try {
+		const result = await executeCommand(
+			deps.provider,
+			sandbox,
+			policy,
+			{
+				executable: "git",
+				args: ["rev-parse", "HEAD"],
+				cwd: repoPath,
+				timeoutMs: Math.floor(
+					Math.min(HEAD_SHA_TIMEOUT_MS, policy.maxTimeoutMs),
+				),
+				maxOutputBytes: Math.floor(
+					Math.min(HEAD_SHA_OUTPUT_BYTES, policy.maxOutputBytes),
+				),
+				egress: { mode: "deny" },
+			},
+			signal,
+		);
+		const sha = result.stdout.trim().toLowerCase();
+		return HEAD_SHA_PATTERN.test(sha) ? sha : null;
+	} catch {
+		return null;
+	}
 }
 
 /** How a bounded turn loop finished; mapped to transitions outside. */
@@ -803,6 +875,171 @@ function createHandler(
 						},
 						false,
 					);
+
+					// Wave 8 validation gate. It runs in THIS sandbox, after the
+					// diff exists and before anything is pushed. No configured
+					// command keeps the wave-7 meaning and is recorded as skipped.
+					const validationPolicy =
+						deps.loadValidationPolicy === undefined
+							? null
+							: await deps.loadValidationPolicy({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+								});
+					let validationReport: ValidationReport | null = null;
+					if (validationPolicy === null) {
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "validation.finished",
+							actor: "worker",
+							data: { stage: "command", status: "skipped" },
+						});
+					} else {
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "validation.started",
+							actor: "worker",
+							data: {
+								stage: "command",
+								timeoutMs: validationPolicy.timeoutMs,
+							},
+						});
+						let validation: Awaited<ReturnType<typeof runValidationCommand>>;
+						try {
+							validation = await runValidationCommand(
+								{
+									provider: deps.provider,
+									sandbox: handle,
+									repoPath,
+									now,
+								},
+								{
+									command: validationPolicy.command,
+									timeoutMs: validationPolicy.timeoutMs,
+								},
+							);
+						} catch (error) {
+							// A refusal (invalid configured command) is terminal: no
+							// command ran, nothing is pushed and there is no retry loop.
+							if (error instanceof SandboxError && error.code === "CANCELLED") {
+								attemptOutcome = { status: "retry" };
+								return leaseLostVerdict();
+							}
+							if (
+								error instanceof SandboxError &&
+								error.code === "POLICY_DENIED"
+							) {
+								await transitionLifecycle(
+									mode.lifecycle,
+									ctx.logger,
+									{
+										organizationId: job.organizationId,
+										taskId: job.taskId,
+										from: "validating",
+										to: "failed",
+										actor: "worker",
+										reason: "validation command denied",
+									},
+									true,
+								);
+								attemptOutcome = {
+									status: "failed",
+									reason: "validation command denied",
+									error: "POLICY_DENIED",
+								};
+								return {
+									outcome: "dead_letter",
+									code: "POLICY_DENIED",
+									note: "validation command denied",
+								};
+							}
+							throw error;
+						}
+						validationReport = validation.report;
+						const log = boundedLogContent(validation.output);
+						const logSha256 = new Bun.CryptoHasher("sha256")
+							.update(log.content)
+							.digest("hex");
+						const logArtifact = await mode.lifecycle.artifact({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							kind: "log_bundle",
+							contentType: "text/plain",
+							content: log.content,
+							sha256: logSha256,
+						});
+						// The report is bounded and carries only argv LENGTH, never
+						// the command text or its arguments (an operator-authored
+						// command can still embed a secret).
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "validation.finished",
+							actor: "worker",
+							data: {
+								stage: "command",
+								status: validation.report.status,
+								exitCode: validation.report.exitCode,
+								durationMs: validation.report.durationMs,
+								outputBytes: validation.report.outputBytes,
+								truncated: validation.report.truncated,
+								argvLength: validation.report.argv.length,
+								commandBytes: Buffer.byteLength(
+									validation.report.command,
+									"utf8",
+								),
+								artifactId: logArtifact.artifactId,
+							},
+						});
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "artifact.created",
+							actor: "worker",
+							data: {
+								artifactId: logArtifact.artifactId,
+								kind: "log_bundle",
+								sha256: logSha256,
+								bytes: log.bytes,
+								truncated: log.truncated,
+							},
+						});
+						if (validation.report.status === "failed") {
+							// Validation failure is terminal for this attempt: no push,
+							// no diff artifact, no repair turn. The rerun path replaces
+							// repair (DECISIONS 2026-10-30).
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "validating",
+									to: "failed",
+									actor: "worker",
+									reason: "validation failed",
+								},
+								false,
+							);
+							attemptOutcome = {
+								status: "failed",
+								reason: "validation failed",
+								validation: validation.report,
+							};
+							return {
+								outcome: "dead_letter",
+								code: "VALIDATION_FAILED",
+								note: "validation failed",
+							};
+						}
+					}
+
 					const diff = await workspaceGit.diffPatch(
 						workspace,
 						context.baseBranch,
@@ -828,6 +1065,7 @@ function createHandler(
 						type: "validation.finished",
 						actor: "worker",
 						data: {
+							stage: "diff",
 							filesChanged: stat.filesChanged,
 							insertions: stat.insertions,
 							deletions: stat.deletions,
@@ -868,6 +1106,9 @@ function createHandler(
 						filesChanged: stat.filesChanged,
 						insertions: stat.insertions,
 						deletions: stat.deletions,
+						...(validationReport === null
+							? {}
+							: { validation: validationReport }),
 					};
 
 					if (mode.pushEnabled) {
@@ -922,6 +1163,125 @@ function createHandler(
 								note: "push failed",
 							};
 						}
+
+						// Second human gate: opening a GitHub-visible PR is bound to
+						// the exact pushed commit. Only an available target (GitHub
+						// URL + readable HEAD) can be approved; otherwise the task
+						// stays at wave-7 `review_ready`.
+						const headSha = await readHeadSha(
+							deps,
+							handle,
+							repoPath,
+							ctx.signal,
+						);
+						if (ctx.signal.aborted) {
+							attemptOutcome = { status: "retry" };
+							return leaseLostVerdict();
+						}
+						if (headSha === null) {
+							ctx.logger.warn(
+								"pull request approval skipped: head sha unavailable",
+							);
+							return {
+								outcome: "complete",
+								note: "agent reported no further work",
+							};
+						}
+						const target = buildPullRequestTarget({
+							repoUrl: context.repoUrl,
+							baseBranch: context.baseBranch,
+							headBranch: context.isolatedBranch,
+							headSha,
+						});
+						if (target === null) {
+							ctx.logger.warn(
+								"pull request approval skipped: no pull request target",
+							);
+							return {
+								outcome: "complete",
+								note: "agent reported no further work",
+							};
+						}
+						const cancelledAfterPush = await mode.lifecycle.isCancelled({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+						});
+						if (cancelledAfterPush) {
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "review_ready",
+									to: "cancelled",
+									actor: "worker",
+									reason: "task cancelled",
+								},
+								true,
+							);
+							attemptOutcome = { status: "cancelled" };
+							return { outcome: "complete", note: "task cancelled" };
+						}
+						const payloadSha256 =
+							await pullRequestApprovalPayloadSha256(target);
+						const expiresAt = new Date(now() + APPROVAL_TTL_MS);
+						let requestedApprovalId: string | null = null;
+						try {
+							const requested = await mode.lifecycle.approvalRequested({
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								workflowRunId: null,
+								action: PULL_REQUEST_APPROVAL_ACTION,
+								payloadSha256,
+								requestedBy: "worker",
+								expiresAt,
+							});
+							requestedApprovalId = requested.approvalId;
+						} catch (error) {
+							// A duplicate pending approval is idempotent success.
+							if (!isLifecycleConflict(error)) throw error;
+						}
+						await transitionLifecycle(
+							mode.lifecycle,
+							ctx.logger,
+							{
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								from: "review_ready",
+								to: "awaiting_approval",
+								actor: "worker",
+								reason: "pull request approval required",
+							},
+							true,
+						);
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "approval.requested",
+							actor: "worker",
+							data: {
+								action: PULL_REQUEST_APPROVAL_ACTION,
+								payload: target,
+								payloadSha256,
+								expiresAt: expiresAt.toISOString(),
+								...(requestedApprovalId === null
+									? {}
+									: { approvalId: requestedApprovalId }),
+							},
+						});
+						attemptOutcome = {
+							status: "awaiting_approval",
+							action: PULL_REQUEST_APPROVAL_ACTION,
+							...(requestedApprovalId === null
+								? {}
+								: { approvalId: requestedApprovalId }),
+						};
+						return {
+							outcome: "complete",
+							note: "awaiting pull request approval",
+						};
 					}
 
 					return {

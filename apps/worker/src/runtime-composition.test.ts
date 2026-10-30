@@ -2,13 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PgSql } from "@isolate/db";
+import type {
+	PgSql,
+	RepositoryRepository,
+	RepositoryRow,
+	RunEventRow,
+	TaskRepository,
+	TaskRow,
+} from "@isolate/db";
 import { NullProvider } from "@isolate/sandbox";
-import type { Logger } from "@isolate/shared";
+import type { Logger, OrganizationId, TaskId } from "@isolate/shared";
 import { workerConfigSchema } from "./config";
 import {
 	createConfiguredWorkerComposition,
 	createSandboxEnvResolver,
+	loadPullRequestTargetFromEvents,
+	loadPullRequestTaskState,
+	loadValidationPolicyForTask,
 	parseGitHubFullName,
 	readInferenceProvider,
 	selectGitHubTokenProvider,
@@ -177,6 +187,8 @@ describe("configured composition", () => {
 		expect(composition.overrides.createRuntime).toBeUndefined();
 		expect(composition.overrides.createWorkspaceGit).toBeUndefined();
 		expect(composition.overrides.pushEnabled).toBe(false);
+		expect(typeof composition.overrides.loadValidationPolicy).toBe("function");
+		expect(composition.overrides.pullRequest).toBeUndefined();
 		expect(composition.githubAuth).toBe(false);
 	});
 });
@@ -314,6 +326,7 @@ describe("GitHub App credential wiring", () => {
 		expect(withoutSandbox.githubAuth).toBe(true);
 		expect(withoutSandbox.overrides.resolveSandboxEnv).toBeUndefined();
 		expect(withoutSandbox.overrides.pushEnabled).toBe(false);
+		expect(withoutSandbox.overrides.pullRequest).toBeUndefined();
 
 		const withSandbox = await createConfiguredWorkerComposition(
 			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
@@ -340,5 +353,169 @@ describe("GitHub App credential wiring", () => {
 		expect(typeof withSandbox.overrides.resolveSandboxEnv).toBe("function");
 		expect(typeof withSandbox.overrides.createWorkspaceGit).toBe("function");
 		expect(withSandbox.overrides.pushEnabled).toBe(true);
+		expect(typeof withSandbox.overrides.pullRequest?.loadTaskState).toBe(
+			"function",
+		);
+		expect(
+			typeof withSandbox.overrides.pullRequest?.loadPullRequestTarget,
+		).toBe("function");
+		expect(typeof withSandbox.overrides.pullRequest?.recordPullRequest).toBe(
+			"function",
+		);
+		expect(typeof withSandbox.overrides.pullRequest?.createPullRequest).toBe(
+			"function",
+		);
+	});
+});
+
+describe("wave-8 review reads", () => {
+	const ORG = "11111111-1111-4111-8111-111111111111" as OrganizationId;
+	const OTHER_ORG = "22222222-2222-4222-8222-222222222222" as OrganizationId;
+	const TASK = "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f" as TaskId;
+	const TARGET = {
+		repositoryFullName: "acme/widget",
+		headBranch: "task/abc",
+		baseBranch: "main",
+		headSha: "a".repeat(40),
+	};
+
+	function taskRow(overrides: Record<string, unknown> = {}): TaskRow {
+		return {
+			id: TASK,
+			organization_id: ORG,
+			repository_id: "repo_1",
+			status: "executing",
+			pull_request_number: 12,
+			pull_request_url: "https://github.com/acme/widget/pull/12",
+			...overrides,
+		} as unknown as TaskRow;
+	}
+
+	function repositoryRow(
+		overrides: Record<string, unknown> = {},
+	): RepositoryRow {
+		return {
+			id: "repo_1",
+			organization_id: ORG,
+			provider: "github",
+			external_full_name: "acme/widget",
+			default_branch: "main",
+			validation_command: "bun test",
+			validation_timeout_ms: 30_000,
+			created_at: new Date(),
+			...overrides,
+		} as unknown as RepositoryRow;
+	}
+
+	function runEvent(overrides: Record<string, unknown> = {}): RunEventRow {
+		return {
+			id: "evt_1",
+			task_id: TASK,
+			workflow_run_id: null,
+			type: "approval.requested",
+			actor: "worker",
+			data: {},
+			occurred_at: new Date(),
+			...overrides,
+		} as unknown as RunEventRow;
+	}
+
+	test("validation policy reads task → repository under one tenant", async () => {
+		const tasks: Pick<TaskRepository, "get"> = { get: async () => taskRow() };
+		const repositories: Pick<RepositoryRepository, "get"> = {
+			get: async () => repositoryRow(),
+		};
+
+		expect(
+			await loadValidationPolicyForTask(tasks, repositories, {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toEqual({ command: "bun test", timeoutMs: 30_000 });
+
+		// Foreign organization is indistinguishable from an absent task.
+		expect(
+			await loadValidationPolicyForTask(tasks, repositories, {
+				organizationId: OTHER_ORG,
+				taskId: TASK,
+			}),
+		).toBeNull();
+
+		const noCommand: Pick<RepositoryRepository, "get"> = {
+			get: async () => repositoryRow({ validation_command: null }),
+		};
+		expect(
+			await loadValidationPolicyForTask(tasks, noCommand, {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toBeNull();
+	});
+
+	test("the PR target is the latest valid github.create_pull_request event", async () => {
+		const olderPush = runEvent({
+			id: "evt_1",
+			data: { action: "git.push_branch", payloadSha256: "b".repeat(64) },
+		});
+		const prEvent = runEvent({
+			id: "evt_2",
+			data: {
+				action: "github.create_pull_request",
+				payload: TARGET,
+				payloadSha256: "c".repeat(64),
+			},
+		});
+		const runEvents = { listByTask: async () => [olderPush, prEvent] };
+
+		expect(
+			await loadPullRequestTargetFromEvents(runEvents, {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toEqual(TARGET);
+
+		// A malformed latest PR event fails closed; it never falls back to an
+		// older approval.
+		const malformed = runEvent({
+			id: "evt_3",
+			data: {
+				action: "github.create_pull_request",
+				payload: { ...TARGET, token: "ghs_secret" },
+			},
+		});
+		expect(
+			await loadPullRequestTargetFromEvents(
+				{ listByTask: async () => [prEvent, malformed] },
+				{ organizationId: ORG, taskId: TASK },
+			),
+		).toBeNull();
+
+		// No PR approval at all.
+		expect(
+			await loadPullRequestTargetFromEvents(
+				{ listByTask: async () => [olderPush] },
+				{ organizationId: ORG, taskId: TASK },
+			),
+		).toBeNull();
+	});
+
+	test("the PR task snapshot is tenant-scoped", async () => {
+		const tasks: Pick<TaskRepository, "get"> = { get: async () => taskRow() };
+		expect(
+			await loadPullRequestTaskState(tasks, {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toEqual({
+			status: "executing",
+			pullRequestNumber: 12,
+			pullRequestUrl: "https://github.com/acme/widget/pull/12",
+		});
+		expect(
+			await loadPullRequestTaskState(tasks, {
+				organizationId: OTHER_ORG,
+				taskId: TASK,
+			}),
+		).toBeNull();
 	});
 });

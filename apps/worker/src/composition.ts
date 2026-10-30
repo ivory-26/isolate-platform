@@ -5,6 +5,10 @@ import { type Logger, PlatformError, type UsageSink } from "@isolate/shared";
 import type { WorkerConfig } from "./config";
 import type { JobHandler } from "./contracts";
 import {
+	createPullRequestHandler,
+	type PullRequestWorkflowDeps,
+} from "./create-pull-request-handler";
+import {
 	createResumeTaskHandler,
 	createTaskExecutionHandler,
 	createUnconfiguredRuntimeFactory,
@@ -43,6 +47,12 @@ export type WorkerCompositionOverrides = Partial<
 	caps?: Partial<AgentTurnCaps>;
 	maxSandboxSeconds?: number;
 	maxCostUsdPerTask?: number;
+	/**
+	 * Wave 8 PR stage. Bound only when a GitHub broker and a real sandbox
+	 * provider exist; without it the `create_pull_request` handler is not
+	 * registered, so the job stays unclaimable (fail closed).
+	 */
+	pullRequest?: Omit<PullRequestWorkflowDeps, "lifecycle">;
 };
 
 export type WorkerComposition = {
@@ -132,16 +142,26 @@ export function createOfflineWorkerDeps(
 		lifecycle: overrides.lifecycle,
 		createWorkspaceGit: overrides.createWorkspaceGit,
 		pushEnabled: overrides.pushEnabled ?? false,
+		...(overrides.loadValidationPolicy === undefined
+			? {}
+			: { loadValidationPolicy: overrides.loadValidationPolicy }),
 	};
 
-	return {
-		taskExecution,
-		handlers:
-			taskExecution.lifecycle === undefined
-				? [createTaskExecutionHandler(taskExecution)]
-				: [
-						createTaskExecutionHandler(taskExecution),
-						createResumeTaskHandler(taskExecution),
-					],
-	};
+	const handlers: JobHandler[] = [createTaskExecutionHandler(taskExecution)];
+	if (taskExecution.lifecycle !== undefined) {
+		handlers.push(createResumeTaskHandler(taskExecution));
+		// The PR handler needs a lifecycle plus the three DB reads and the
+		// connector seam; the composition binds them only when GitHub and a real
+		// sandbox are configured.
+		if (overrides.pullRequest !== undefined) {
+			handlers.push(
+				createPullRequestHandler({
+					lifecycle: taskExecution.lifecycle,
+					...overrides.pullRequest,
+				}),
+			);
+		}
+	}
+
+	return { taskExecution, handlers };
 }

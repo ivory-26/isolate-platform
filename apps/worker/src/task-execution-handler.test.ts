@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { JobRow } from "@isolate/db";
+import { pullRequestApprovalPayloadSha256 } from "@isolate/integrations";
 import type {
 	AgentTurnCaps,
 	AgentUsage,
@@ -108,9 +109,12 @@ class FakeProvider implements SandboxProvider {
 	readonly name = "fake-sandbox";
 	createCalls: SandboxSpec[] = [];
 	executeCalls: SandboxHandle[] = [];
+	executeCommands: unknown[] = [];
 	destroyCalls: SandboxHandle[] = [];
 	createError: unknown = null;
 	destroyError: unknown = null;
+	/** Overrides the default successful command result when set. */
+	executeHandler: ((command: unknown) => CommandResult) | null = null;
 	private nextId = 0;
 
 	async create(spec: SandboxSpec): Promise<SandboxHandle> {
@@ -122,10 +126,12 @@ class FakeProvider implements SandboxProvider {
 
 	async execute(
 		sandbox: SandboxHandle,
-		_command: unknown,
+		command: unknown,
 		_signal?: AbortSignal,
 	): Promise<CommandResult> {
 		this.executeCalls.push(sandbox);
+		this.executeCommands.push(command);
+		if (this.executeHandler !== null) return this.executeHandler(command);
 		return {
 			exitCode: 0,
 			stdout: "ok",
@@ -424,6 +430,11 @@ type HarnessOptions = {
 	pushEnabled?: boolean;
 	job?: JobRow;
 	handlerType?: "run_task" | "resume_task";
+	/** Wave 8: `undefined` leaves the seam unbound (skipped), `null` explicit. */
+	validationPolicy?: { command: string; timeoutMs: number } | null;
+	/** Trusted policy used for the PR head-SHA read (`git rev-parse HEAD`). */
+	sandboxPolicy?: CommandPolicy;
+	executeHandler?: (command: unknown) => CommandResult;
 };
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -431,6 +442,9 @@ function makeHarness(options: HarnessOptions = {}) {
 	const logs: LogRecord[] = [];
 	const logger = makeFakeLogger(logs);
 	const provider = options.provider ?? new FakeProvider();
+	if (options.executeHandler !== undefined) {
+		provider.executeHandler = options.executeHandler;
+	}
 	const sink = options.sink ?? new FakeUsageSink();
 	const controller = new AbortController();
 	const heartbeats: number[] = [];
@@ -461,7 +475,7 @@ function makeHarness(options: HarnessOptions = {}) {
 			maxSteps: 12,
 			...options.caps,
 		},
-		sandboxPolicy: POLICY,
+		sandboxPolicy: options.sandboxPolicy ?? POLICY,
 		sandbox: {
 			cpuCount: 1,
 			memoryMb: 512,
@@ -479,6 +493,11 @@ function makeHarness(options: HarnessOptions = {}) {
 		...(options.lifecycle === undefined
 			? {}
 			: { lifecycle: options.lifecycle }),
+		...(options.validationPolicy === undefined
+			? {}
+			: {
+					loadValidationPolicy: async () => options.validationPolicy ?? null,
+				}),
 		...(options.workspaceGitFactory === undefined
 			? workspaceGit === undefined
 				? {}
@@ -1283,8 +1302,18 @@ describe("task execution handler — wave 7 execution flow", () => {
 			"agent.turn_finished",
 			"agent.turn_started",
 			"agent.turn_finished",
+			// No validation command configured: the command gate is recorded as
+			// skipped, then the wave-7 diff gate finishes as before.
+			"validation.finished",
 			"validation.finished",
 			"artifact.created",
+		]);
+		const validationEvents = lifecycle.calls.filter(
+			(call) => call.kind === "event" && call.type === "validation.finished",
+		);
+		expect(validationEvents).toMatchObject([
+			{ data: { stage: "command", status: "skipped" } },
+			{ data: { stage: "diff", filesChanged: 1 } },
 		]);
 
 		const artifact = lifecycle.calls.find((call) => call.kind === "artifact");
@@ -1656,6 +1685,362 @@ describe("task execution handler — wave 7 push failure", () => {
 		expect(lastAttemptOutcome(lifecycle)).toEqual({
 			status: "failed",
 			reason: "push failed",
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+});
+
+/* ------------------------------ wave 8: validation -------------------------- */
+
+const VALIDATION_POLICY = { command: "bun test", timeoutMs: 30_000 };
+const PUSHED_SHA = "b".repeat(40);
+
+/** Trusted policy that authorizes only the PR head-SHA probe. */
+const WORKSPACE_POLICY: CommandPolicy = {
+	workspaceRoot: POLICY.workspaceRoot,
+	allowlist: [
+		{
+			executable: "git",
+			args: [
+				{ kind: "literal", value: "rev-parse" },
+				{ kind: "literal", value: "HEAD" },
+			],
+		},
+	],
+	maxTimeoutMs: 60_000,
+	maxOutputBytes: 1_048_576,
+	egress: { mode: "deny" },
+};
+
+function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
+	return {
+		exitCode: 0,
+		stdout: "tests ok\n",
+		stderr: "",
+		durationMs: 5,
+		timedOut: false,
+		outputLimitExceeded: false,
+		...overrides,
+	};
+}
+
+function commandArgv(command: unknown): {
+	executable?: string;
+	args?: readonly string[];
+} {
+	return command as { executable?: string; args?: readonly string[] };
+}
+
+function artifactsOf(lifecycle: FakeLifecycle) {
+	return lifecycle.calls.filter(
+		(call): call is Extract<LifecycleCall, { kind: "artifact" }> =>
+			call.kind === "artifact",
+	);
+}
+
+describe("task execution handler — wave 8 validation gate", () => {
+	test("a passing command runs in the same sandbox and stores a log artifact", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			script: [{ output: "" }],
+			validationPolicy: VALIDATION_POLICY,
+			executeHandler: () => commandResult(),
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(workspace.pushes).toHaveLength(0);
+		expect(harness.provider.executeCalls).toHaveLength(1);
+		expect(harness.provider.executeCalls[0]).toEqual({
+			id: "sbx_1",
+			workspaceRoot: POLICY.workspaceRoot,
+		});
+		const command = commandArgv(harness.provider.executeCommands[0]);
+		expect(command.executable).toBe("bun");
+		expect(command.args).toEqual(["test"]);
+
+		const artifacts = artifactsOf(lifecycle);
+		expect(artifacts.map((artifact) => artifact.kind_)).toEqual([
+			"log_bundle",
+			"diff",
+		]);
+		expect(artifacts[0]?.content).toBe("tests ok\n");
+
+		const commandFinished = lifecycle.calls.find(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		);
+		expect(commandFinished).toMatchObject({
+			data: {
+				stage: "command",
+				status: "passed",
+				exitCode: 0,
+				outputBytes: 9,
+				argvLength: 2,
+				truncated: false,
+			},
+		});
+		// The event never carries the command text or its arguments.
+		expect(JSON.stringify(commandFinished)).not.toContain("bun test");
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+			validation: { status: "passed", argv: ["bun", "test"] },
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("no configured command records a skipped gate and keeps wave-7 behaviour", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			validationPolicy: null,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(eventTypes(lifecycle)).toContain("validation.finished");
+		const skipped = lifecycle.calls.find(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		);
+		expect(skipped).toMatchObject({
+			data: { stage: "command", status: "skipped" },
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a failing command fails the task with no push and no diff artifact", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			validationPolicy: VALIDATION_POLICY,
+			executeHandler: () =>
+				commandResult({ exitCode: 1, stdout: "2 tests failed\n" }),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "validation failed",
+		});
+		expect(workspace.pushes).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toContainEqual(["validating", "failed"]);
+		expect(transitionPairs(lifecycle)).not.toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(artifactsOf(lifecycle).map((artifact) => artifact.kind_)).toEqual([
+			"log_bundle",
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "failed",
+			reason: "validation failed",
+			validation: { status: "failed", exitCode: 1 },
+		});
+		// Only the validation command ran; the head-SHA probe was never reached.
+		expect(harness.provider.executeCalls).toHaveLength(1);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("an invalid configured command is a terminal POLICY_DENIED before execution", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			validationPolicy: {
+				command: "bun test; rm -rf /",
+				timeoutMs: 30_000,
+			},
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "POLICY_DENIED",
+			note: "validation command denied",
+		});
+		// The runner refuses before the provider is called.
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(workspace.pushes).toHaveLength(0);
+		expect(artifactsOf(lifecycle)).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toContainEqual(["validating", "failed"]);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "failed",
+			reason: "validation command denied",
+			error: "POLICY_DENIED",
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("validation output is clipped to the inline log cap", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			validationPolicy: VALIDATION_POLICY,
+			executeHandler: () => commandResult({ stdout: "x".repeat(100_000) }),
+			script: [{ output: "" }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		const log = artifactsOf(lifecycle)[0];
+		expect(log?.kind_).toBe("log_bundle");
+		expect(Buffer.byteLength(log?.content ?? "", "utf8")).toBe(65_536);
+		const commandFinished = lifecycle.calls.find(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		);
+		expect(commandFinished).toMatchObject({
+			data: { truncated: true, outputBytes: 65_536 },
+		});
+	});
+});
+
+/* --------------------------- wave 8: pull request gate ---------------------- */
+
+describe("task execution handler — wave 8 pull request approval", () => {
+	test("a successful push requests the second approval bound to the pushed commit", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			sandboxPolicy: WORKSPACE_POLICY,
+			executeHandler: (command) => {
+				const argv = commandArgv(command);
+				if (
+					argv.executable === "git" &&
+					argv.args?.join(" ") === "rev-parse HEAD"
+				) {
+					return commandResult({ stdout: `${PUSHED_SHA}\n` });
+				}
+				throw new Error("unexpected command");
+			},
+			script: [{ output: "" }],
+		});
+		const expectedSha = await pullRequestApprovalPayloadSha256({
+			repositoryFullName: "acme/widget",
+			headBranch: DEFAULT_CONTEXT.isolatedBranch,
+			baseBranch: DEFAULT_CONTEXT.baseBranch,
+			headSha: PUSHED_SHA,
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "complete",
+			note: "awaiting pull request approval",
+		});
+		expect(workspace.pushes).toEqual([DEFAULT_CONTEXT.isolatedBranch]);
+		const requested = lifecycle.calls.filter(
+			(call) => call.kind === "approvalRequested",
+		);
+		expect(requested).toHaveLength(1);
+		expect(requested[0]).toMatchObject({
+			action: "github.create_pull_request",
+			payloadSha256: expectedSha,
+			requestedBy: "worker",
+		});
+		const approvalEvent = lifecycle.calls.find(
+			(call) => call.kind === "event" && call.type === "approval.requested",
+		);
+		expect(approvalEvent).toMatchObject({
+			data: {
+				action: "github.create_pull_request",
+				payload: {
+					repositoryFullName: "acme/widget",
+					headBranch: DEFAULT_CONTEXT.isolatedBranch,
+					baseBranch: DEFAULT_CONTEXT.baseBranch,
+					headSha: PUSHED_SHA,
+				},
+				payloadSha256: expectedSha,
+			},
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"review_ready",
+			"awaiting_approval",
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "awaiting_approval",
+			action: "github.create_pull_request",
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		// The approval payload is bounded identifiers only; no credential text.
+		expect(JSON.stringify(lifecycle.calls)).not.toContain("token");
+		expect(JSON.stringify(harness.logs)).not.toContain("token");
+	});
+
+	test("when the pushed head SHA cannot be read the task stays review_ready", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			sandboxPolicy: WORKSPACE_POLICY,
+			// Default fake output is not a git SHA.
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "complete",
+			note: "agent reported no further work",
+		});
+		expect(workspace.pushes).toEqual([DEFAULT_CONTEXT.isolatedBranch]);
+		expect(
+			lifecycle.calls.some((call) => call.kind === "approvalRequested"),
+		).toBe(false);
+		expect(eventTypes(lifecycle)).not.toContain("approval.requested");
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});

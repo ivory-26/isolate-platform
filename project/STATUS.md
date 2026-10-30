@@ -1,8 +1,29 @@
 # Status
 
-Last updated: 2026-10-30 (wave 8 merged and migrated; **live PR acceptance passed** — real Meta + Modal run created `ivory-26/agent-bank#1`)
+Last updated: 2026-10-30 (wave 9 merged, `0007` applied, **both live validation scenarios passed** — PR #2 created, failure path blocked the push)
 
-## Current: wave 8 — Review close: validation gate, PR approval, rerun (merged, migrated, offline-complete)
+## Current: wave 9 — Completion truth, live validation, concurrency (merged, migrated, live-proven)
+
+Completion is now decided by the task's environment: declared acceptance checks and the repository's validation command must pass before `review_ready`; a budget stop never counts as "done" by itself.
+
+- **Merged on `main`**: W9-DB `f7ee997`+`5277068` (merge `e515798`), W9-EXEC `40393c0` (merge `59018a8`, from checkpoint `cf90e2e` after the first agent hit its turn limit), W9-WEB `377445d` (merge `e700057`), coordinator binding `ef8ac6f`, live runner `4265361`. Contracts `c6f3b8b`.
+- **Migration `0007` applied to Neon (user-approved)** and verified: `tasks.acceptance_checks jsonb default '[]'` with the array CHECK (≤32), `branch_locks` table with `(organization_id, repository_id, branch)` PK and an expiry index.
+- **Acceptance contract**: `path_exists`, `content_matches`, `command_exit_zero` (shared schema, bounded, path-confined). The worker evaluates them in the task sandbox, emits `acceptance.started/finished`, stores a bounded `report` artifact, and refuses to complete (or push) when any check fails.
+- **Validation argv**: `bun test <path>` is allowed with a bounded relative path; plain `bun test` unchanged; refusals tested.
+- **Tool audit**: every gated tool call — executed, denied or approval-required — writes a `tool_invocations` row with a hash-only argument digest. The table finally has a runtime writer.
+- **Concurrency**: the loop honours `maxConcurrency` with a bounded pool, and every job takes a per-repository+branch **row lease** (`branch_locks`) before provisioning, released in `finally`; a held lease is a bounded retry, never a second writer. The first implementation used session advisory locks, which are unsound under PgBouncer transaction pooling on our `-pooler` host; replaced and recorded in CHALLENGES.
+- **Live proof (one bounded run each)**:
+  - **PASS** — task `…` branch `task/w9-live-e646c2d4`, **PR [#2](https://github.com/ivory-26/agent-bank/pull/2)**, two files (doc + Bun test). Events: clone → 2 turns → `acceptance.*` → `validation.started/finished` → push → PR approval → `pr.created`. Artifacts: diff, log bundle, report. Meta **8891/669** and **8965/1085** tokens; one Modal sandbox; 0 running after.
+  - **FAIL** — validation command missing its target → task `failed`, verdict `VALIDATION_FAILED`, **branch 404 (nothing pushed)**, `log_bundle` artifact stored. Meta 6220/1034 and 8483/1513 tokens; 0 sandboxes after.
+- **Gates**: biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · **1489 pass / 0 fail / 8 skip** offline ×2 · web build + 30-check sweep + smoke · `acceptance:offline` PASS.
+
+### Wave 9 open items
+1. Close the acceptance PRs/branches when the evidence is no longer needed: `#1`, `#2`, `task/w8-live-24b80218`, `task/w9-live-e646c2d4`, wave 7's `task/w7-live-da35089b`.
+2. `retryTask` after a live failure is still proven offline only; the fail run's task is retryable and a bounded live retry can be added later.
+3. `content_matches` regexes are operator-authored and run over a bounded 64 KiB read without a timeout — a self-inflicted ReDoS surface, recorded as a risk.
+4. The branch-lock lease has no renewal: a job longer than 15 minutes can be taken over. Long jobs must pass a TTL or renew (wave 11 hardening).
+
+## Previous: wave 8 — Review close: validation gate, PR approval, rerun (merged, migrated, offline-complete)
 
 Wave 8 turns `review_ready` into a reviewable outcome: the repository's configured validation command runs in the same sandbox before anything is pushed, a failure ends the task with a bounded report, opening a pull request is a **second** human approval bound to the exact commit, and a person can rerun failed work inside the same task boundary. **Scope decision (user): backend only — no web UI this wave.**
 

@@ -522,6 +522,117 @@ Lanes are defined now so future agents can claim them without re-deriving contex
 - Status: **done**
 
 
+### Wave 9 execution record (2026-10-30)
+
+| Lane | Commit | Coordinator gates (×2) |
+|---|---|---|
+| W9-DB | `f7ee997` + `5277068` → merge `e515798` | biome 0 errors · typecheck 8/8 · 256 db tests |
+| W9-EXEC | checkpoint `cf90e2e` → `40393c0` → merge `59018a8` | biome clean · typecheck 8/8 · 690 sandbox+mastra+worker tests |
+| W9-WEB | `377445d` → merge `e700057` | biome clean · typecheck 8/8 · 220 web tests · build · 30-check sweep |
+
+Coordinator integration `ef8ac6f`: bound `loadAcceptanceChecks` (task → `tasks.acceptance_checks`) and `acquireBranchLock` (`PostgresBranchLockRepository`) in `createConfiguredWorkerComposition`, exposed `repositoryId` in the task-context row, and asserted both seams in the composition test.
+
+**Live proof (one bounded run per scenario, `scripts/acceptance-live-pr.ts`)**:
+- PASS → task `…`, branch `task/w9-live-e646c2d4`, **PR #2**, files `LIVE_ACCEPTANCE.md` + `live_acceptance.test.ts`. Events: `workspace.cloned` → 2 turns → `acceptance.started/finished` → `validation.started/finished` → `artifact.created` (diff/log/report) → `approval.requested` (PR) → `pr.created`. Meta 8891/669 and 8965/1085 tokens; one Modal sandbox; 0 running.
+- FAIL → `failed`, `VALIDATION_FAILED`, **branch 404 (no push)**, `log_bundle` artifact. Meta 6220/1034 and 8483/1513 tokens; 0 running.
+- Validation policy restored to `none` after each run.
+
+**Recovery notes**: W9-EXEC's first agent hit its 150-turn limit with 22 files uncommitted; the coordinator made a checkpoint commit (`cf90e2e`) and a fresh agent (W9-EXEC2) fixed the type error, added the missing lock/concurrency tests, and finished (`40393c0`). W9-DB's first lock used session advisory locks; review caught that our `-pooler` URL is PgBouncer transaction mode, and a follow-up agent replaced it with a row lease (`5277068`).
+
+## Wave 10 — DevSecOps incident response + context fabric (planned 2026-10-31)
+
+Goal: the agent is triggered by real operational signals and resolves them end to end with the same execution loop.
+
+- **Triggers**: signed webhooks from PagerDuty/Sentry/Datadog/Grafana and GitHub (failed workflow, failing check suite, security alert) → normalized `IncidentSignal` → task with `source`, `severity`, `service`, `fingerprint` (dedupe), `links`, bounded evidence bundle. Incidents are a new task *source*, not a new execution path.
+- **Context fabric** (read-only connectors, scoped auth, per-tool permissions, audited): GitHub Actions runs and logs, check suites, branch protection/rulesets, CODEOWNERS, CONTRIBUTING, PR templates, recent commits and PRs; observability queries (Sentry issues, Datadog/Grafana metrics + logs, trace ids); deployment history; runbooks from `docs/runbooks/**` and the platform.
+- **Context assembly**: bounded, cited `ContextBundle` (source, path/url, excerpt, trust level) injected with the untrusted-data rule; every item capped and attributable.
+- **Resolution loop**: reproduce → query observability → fix on a branch → validation (wave 9) → human approval → PR linked to the incident → post-incident report artifact + timeline; escalate to `blocked` with evidence when the incident is not code-fixable.
+- **Data**: `incidents`, `incident_signals`, `context_items`, `runbook_refs`, `connector_credentials` (server-only, never in prompts), plus `tasks.incident_id`.
+- **Safety**: incident tasks inherit the same caps; production writes (deploy/rollback/secret change) are separate sensitive tools that always require approval; no connector credential enters model context.
+
+### Multi-agent inside one sandbox (design, wave 10)
+- One sandbox per task remains the isolation unit. An **orchestrator** plans and delegates to N **subagents** sharing the workspace but owning disjoint `fileOwnership` path partitions.
+- Each subagent gets its own tool gate bound to the same `SandboxHandle`, its own turn/token budget, and no credentials beyond the task scope; results return as bounded summaries.
+- Sequential by default (deterministic diffs); parallel only when ownership globs are provably disjoint, with a workspace path lock. Every subagent turn is a `run_event` with `agentId`; the diff and validation gates run once on the combined result.
+
+### Concurrency model (wave 9 + 10)
+- Queue claiming is already `FOR UPDATE SKIP LOCKED`; wave 9 adds a bounded in-process pool honouring `maxConcurrency` and a per-repository+branch advisory lock so two jobs never write one branch.
+- Per-organization quotas and provider rate limits are wave 10; the sandbox provider remains the concurrency ceiling.
+
+## Wave 11 — P1 fidelity, observability, storage (planned, after wave 9 live proof)
+
+Lanes are defined now so future agents can claim them without re-deriving context. Contracts first (coordinator), then two parallel lanes, then integration.
+
+### W11-0 — Contracts (coordinator)
+- `BlobStore` interface in `@isolate/shared` (`put/get/list/delete` with size, content type and sha256), `CostPriceTable` type, and a `RunSummary` read shape (per-task tokens, sandbox seconds, cost, gate outcomes). No implementation.
+
+### W11-PLAN — `packages/mastra/**` + docs (owner: agent W11-PLAN, branch `task/w11-plan`)
+- Retire `createSdlcWorkflow` and its tests; the decision is already recorded in `DECISIONS.md`; document the handler as the runtime of record in `ARCHITECTURE.md §3`. If the user chooses plan execution instead, rewrite the workflow around the current helpers with a documented storage/resume design — decide first and record it.
+- DoD: no dead lifecycle left, docs consistent, gates green ×2.
+
+### W11-OBS — `packages/shared/**` + `apps/worker/**` + `scripts/**` (owner: agent W11-OBS, branch `task/w11-obs`)
+- A trusted **price table** (config-driven, never guessed) so `usage_records.cost_usd` is populated from measured tokens and sandbox seconds; a `summarizeTask` read over `usage_records` + `task_attempts` + `artifacts`; and **structured metrics** through the existing logger (`isolate.metric` records with fixed names: claimed/completed/failed/dead_letter, turn latency, sandbox seconds, validation outcome, PR outcome).
+- DoD: offline tests with fake clocks/rows, no external backend required, docs updated with the metric vocabulary.
+
+### W11-STORE — `packages/db/**` + `apps/worker/**` (owner: agent W11-STORE, branch `task/w11-store`)
+- `BlobStore` over an inline/DB-backed implementation with a 2 MiB ceiling and a documented S3/R2 seam; large diffs and log bundles move to the store, `artifacts.storage_ref` points at it, and the 256 KiB inline column stays for small payloads. No cloud credentials in this lane.
+- DoD: migration if needed, tenant-scoped reads, live suite that skips without `DATABASE_URL`, worker writes through the store.
+
+### W11-OPS — Coordinator
+- Merge green lanes, apply any migration with user approval, run full validate ×2, extend `acceptance:offline` where behaviour changed, update STATUS/CHALLENGES, and confirm the wave-9 live proofs still hold.
+
+## Wave 12 — Product surface (web UI) and deployment decision (planned; the user has design input)
+
+- **Does not start without the user's design direction.** It includes the design-system/token pass, run detail, approvals, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).
+- Entry criteria: waves 9–11 merged and documented; a short design brief from the user; the deployment questions answered (target host, budget, domain, data residency).
+
+## Wave 4 — legacy handover (superseded by the provider-plane plan above)
+- W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
+
+## Wave 2 — Integration & validation (coordinator)
+- Merge all `task/*` branches → sprint lanes → `main`; full `bun run validate`; apply `0001_platform_core.sql` to Neon (with user approval); QA/DoD audit; docs + challenges; CI green on pushed commit.
+- Status: done
+
+## Later (event scope decisions pending)
+- Sandbox hosted providers, visual editor UI (React Flow), auth/tenancy surface on the web app.
+
+## Sprint A — Foundation & Data Plane (`sprint/a-foundation`)
+
+### A1 — `@isolate/shared` implementation
+- Owner: agent session A1 · Worktree: `../worktrees-platform/sa1-shared` · Branch: `task/sa1-shared`
+- File ownership: `packages/shared/**`
+- DoD: brief §Task A1 (schemas + deep redaction + full test set).
+- Coordinator verification: implementation + 60 passing tests verified in the new repo — scoped gates all green (biome / tsc / 60 pass · 0 fail), no drift to commit (work is at the seed commit). Its `.gitattributes` CRLF proposal adopted by the coordinator.
+- Status: **done**
+
+### A2 — `@isolate/db` implementation
+- Owner: agent session A2 · Worktree: `../worktrees-platform/sa2-db` · Branch: `task/sa2-db`
+- Coordinator verification: commits `bcf71f6` + `0f96283` — contracts declared/exported in-module (self-imports gone, 11 tsc errors → 0), fresh `client.ts` rewrite (26 LOC), budget jsonb snake_case bug fixed at insert boundary. Gates: biome clean (9 non-null warnings, test files only), tsc 0 errors, **27 pass / 1 skip** offline; **28 pass / 0 fail live** (pre-migration probe, correct `../../isolate/.env` path). Migration `0001_platform_core.sql` ready to apply (coordinator, with user approval).
+- Status: **done**
+
+## Sprint B — Runtime & Orchestration (`sprint/b-runtime`)
+
+### B1 — Durable worker loop (`apps/worker`)
+- Owner: agent session B1 · Worktree: `../worktrees-platform/sb1-worker` · Branch: `task/sb1-worker`
+- Coordinator verification: commit `45fe874` — both tsc defects fixed (generic `settle()`, explicit `.catch` return annotation); 3 transplant test-fake defects found + fixed (frozen clock, simulated lease-loss, ticker fixtures). Gates: biome 0 issues ×2, tsc clean, **20 pass / 0 fail** (loop 17 + config 3), ×3 reproducibility. Contract proposals queued for wave-2 review: `JobRow.lease`/`lastError` totality; `WorkerConfig.jobTimeoutMs` promotion.
+- Status: **done**
+
+### B2 — Mastra SDLC workflow (`packages/mastra`)
+- Owner: agent session B2 · Worktree: `../worktrees-platform/sb2-mastra` · Branch: `task/sb2-mastra`
+- Coordinator verification: commit `4353dba` — `createSdlcWorkflow` per ratified dountil mapping (validate→repair loop body, persisted `repairAttemptsUsed`, bail short-circuits); policy-gated `wirePlatformTools` (deny-by-default, approval-required for sensitive); fake-runtime-only tests. Gates: biome 0 issues ×2, tsc clean, **14 pass / 0 fail**. Key artifacts for wave 2: dash-only step ids (dotted ids break resume — B3 must forbid `.` in node ids), `mastra` instance with storage required for suspend/resume, agent-turn budget = `maxRepairAttempts + 2`.
+- Status: **done**
+
+### B3 — Workflow registry/validation/compiler (`packages/workflow-schema`)
+- Owner: agent session B3 · Worktree: `../worktrees-platform/sb3-wf-schema` · Branch: `task/sb3-wf-schema`
+- Coordinator verification: commit `ec6afde` — test suite RECREATED (transplant had silently dropped it; see CHALLENGES), biome 0 issues, tsc clean, **52 pass / 0 fail**. Supported-subset + rejection-shape reports and editor-facing integration checklist delivered.
+- Status: **done**
+
+### B4 — GitHub connector (`packages/integrations`)
+- Owner: agent session B4 · Worktree: `../worktrees-platform/sb4-integrations` · Branch: `task/sb4-integrations`
+- Coordinator verification: commit `9226219` — biome 0 issues, tsc clean, **26 pass / 0 fail** (redact 6 + rest-client 20). Deny-default approval gating redaction-proof + audit sink covered; contract note: failure union extended with NOT_FOUND/RATE_LIMITED (optional sanitized message), consumers switch on `code`.
+- Status: **done**
+
+
 ### Wave 9 execution record (in progress)
 
 | Lane | Commit | Coordinator gates |

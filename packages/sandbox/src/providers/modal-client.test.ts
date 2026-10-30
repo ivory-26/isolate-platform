@@ -245,19 +245,20 @@ describe("createModalSandboxClient operations", () => {
 		]);
 	});
 
-	test("forwards an allowlist when present", async () => {
+	test("forwards an allowlist without blockNetwork", async () => {
 		const { sandbox } = fakeSandbox();
 		const { module, calls } = fakeSdk({ sandbox });
 		const client = await createModalSandboxClient(env, async () => module);
 		await client.create({
 			...createParams,
-			blockNetwork: false,
+			blockNetwork: undefined,
 			outboundDomainAllowlist: ["github.com"],
 		});
 		expect(calls.create[0].params.outboundDomainAllowlist).toEqual([
 			"github.com",
 		]);
-		expect(calls.create[0].params.blockNetwork).toBe(false);
+		expect(calls.create[0].params.blockNetwork).toBeUndefined();
+		expect("blockNetwork" in calls.create[0].params).toBe(false);
 	});
 
 	test("forwards create-time env to the SDK without touching argv", async () => {

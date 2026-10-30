@@ -210,7 +210,8 @@ describe("ModalSandboxProvider.create", () => {
 				hosts: ["github.com", "registry.npmjs.org", "github.com"],
 			},
 		});
-		expect(calls.create[0].blockNetwork).toBe(false);
+		expect(calls.create[0].blockNetwork).toBeUndefined();
+		expect("blockNetwork" in calls.create[0]).toBe(false);
 		expect(calls.create[0].outboundDomainAllowlist).toEqual([
 			"github.com",
 			"registry.npmjs.org",

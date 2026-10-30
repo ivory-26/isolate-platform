@@ -195,7 +195,9 @@ export async function createModalSandboxClient(
 					idleTimeoutMs: params.idleTimeoutMs,
 					workdir: params.workdir,
 					command: [...params.command],
-					blockNetwork: params.blockNetwork,
+					...(params.blockNetwork === undefined
+						? {}
+						: { blockNetwork: params.blockNetwork }),
 					...(params.outboundDomainAllowlist
 						? {
 								outboundDomainAllowlist: [...params.outboundDomainAllowlist],

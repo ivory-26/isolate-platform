@@ -112,8 +112,25 @@ describe("sandbox tool backend", () => {
 		const result = await backend(provider).readFile("src/index.ts");
 		expect(result).toEqual({ content: "hello", truncated: false });
 		expect(calls[0].executable).toBe("cat");
-		expect(calls[0].args).toEqual([`${ROOT}/src/index.ts`]);
-		expect(calls[0].cwd).toBe(ROOT);
+		expect(calls[0].args).toEqual([`${ROOT}/repo/src/index.ts`]);
+		expect(calls[0].cwd).toBe(`${ROOT}/repo`);
+	});
+
+	test("roots file tools at the repo checkout, not the sandbox root", async () => {
+		const { provider, calls } = fakeProvider(() => ok(""));
+		const scoped = backend(provider, undefined, {
+			repoPath: `${ROOT}/checkout`,
+		}) as WriteBackend;
+		await scoped.writeFile("src/a.ts", "x");
+		expect(calls[0]?.args).toEqual([
+			"-e",
+			WRITE_FILE_SCRIPT,
+			`${ROOT}/checkout/src/a.ts`,
+		]);
+		expect(calls[0]?.cwd).toBe(`${ROOT}/checkout`);
+		await expect(scoped.readFile("../outside.ts")).rejects.toMatchObject({
+			code: "VALIDATION_FAILED",
+		});
 	});
 
 	test("lists files, applies the entry cap and maps failures", async () => {
@@ -203,8 +220,8 @@ describe("sandbox tool backend — wave 7 write surface", () => {
 		);
 		expect(calls[0]).toMatchObject({
 			executable: "bun",
-			args: ["-e", WRITE_FILE_SCRIPT, `${ROOT}/src/index.ts`],
-			cwd: ROOT,
+			args: ["-e", WRITE_FILE_SCRIPT, `${ROOT}/repo/src/index.ts`],
+			cwd: `${ROOT}/repo`,
 			egress: { mode: "deny" },
 		});
 		// Content never enters argv.

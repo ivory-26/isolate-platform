@@ -19,6 +19,7 @@ import type {
 	TaskWorkspaceCommitInput,
 	TaskWorkspaceGit,
 } from "@isolate/sandbox";
+import { SandboxError } from "@isolate/sandbox";
 import type {
 	ExecutionLifecycle,
 	JobId,
@@ -718,6 +719,22 @@ describe("task execution handler — failure mapping", () => {
 		});
 		expect(provider.createCalls).toHaveLength(1);
 		expect(provider.destroyCalls).toHaveLength(0);
+		expect(harness.sink.rows).toHaveLength(0);
+	});
+
+	test("a SandboxError from provisioning maps to a bounded adapter code", async () => {
+		const provider = new FakeProvider();
+		provider.createError = new SandboxError(
+			"PROVIDER_UNAVAILABLE",
+			"modal unavailable",
+		);
+		const harness = makeHarness({ provider });
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "retry",
+			code: "INTEGRATION_UNAVAILABLE",
+		});
+		expect(provider.createCalls).toHaveLength(1);
 		expect(harness.sink.rows).toHaveLength(0);
 	});
 

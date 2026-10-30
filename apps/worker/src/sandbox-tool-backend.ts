@@ -426,12 +426,14 @@ export function createSandboxToolBackend(
 
 	return {
 		async readFile(path, readOptions) {
-			const absolute = resolveSandboxPath(sandbox.workspaceRoot, path);
+			const absolute = resolveSandboxPath(repoPath, path);
 			const result = await run(
 				"cat",
 				[absolute],
 				policy.maxTimeoutMs,
 				readOptions?.maxBytes,
+				undefined,
+				repoPath,
 			);
 			if (result.exitCode !== 0) {
 				throw new PlatformError("NOT_FOUND", "file could not be read");
@@ -440,8 +442,15 @@ export function createSandboxToolBackend(
 		},
 
 		async listFiles(path, listOptions) {
-			const absolute = resolveSandboxPath(sandbox.workspaceRoot, path);
-			const result = await run("ls", ["-1", absolute]);
+			const absolute = resolveSandboxPath(repoPath, path);
+			const result = await run(
+				"ls",
+				["-1", absolute],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
 			if (result.exitCode !== 0) {
 				throw new PlatformError("NOT_FOUND", "directory could not be listed");
 			}
@@ -467,9 +476,16 @@ export function createSandboxToolBackend(
 			}
 			const base =
 				searchOptions?.path === undefined
-					? sandbox.workspaceRoot
-					: resolveSandboxPath(sandbox.workspaceRoot, searchOptions.path);
-			const result = await run("grep", ["-rn", query, base]);
+					? repoPath
+					: resolveSandboxPath(repoPath, searchOptions.path);
+			const result = await run(
+				"grep",
+				["-rn", query, base],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
 			if (result.exitCode !== 0 && result.exitCode !== 1) {
 				throw new PlatformError("AGENT_EXECUTION_FAILED", "search failed");
 			}
@@ -511,6 +527,9 @@ export function createSandboxToolBackend(
 				executable,
 				argv.slice(1),
 				execOptions?.timeoutMs,
+				undefined,
+				undefined,
+				repoPath,
 			);
 			return toExecResult(result);
 		},
@@ -519,12 +538,19 @@ export function createSandboxToolBackend(
 			if (args.length === 0 || args.length > 16) {
 				throw new PlatformError("VALIDATION_FAILED", "invalid git command");
 			}
-			const result = await run("git", args, gitOptions?.timeoutMs);
+			const result = await run(
+				"git",
+				args,
+				gitOptions?.timeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
 			return toExecResult(result);
 		},
 
 		async writeFile(path, content, writeOptions) {
-			const absolute = resolveSandboxPath(sandbox.workspaceRoot, path);
+			const absolute = resolveSandboxPath(repoPath, path);
 			if (typeof content !== "string") {
 				throw new PlatformError("VALIDATION_FAILED", "invalid file content");
 			}
@@ -548,7 +574,7 @@ export function createSandboxToolBackend(
 				policy.maxTimeoutMs,
 				undefined,
 				content,
-				sandbox.workspaceRoot,
+				repoPath,
 			);
 			if (result.exitCode !== 0) {
 				throw new PlatformError(

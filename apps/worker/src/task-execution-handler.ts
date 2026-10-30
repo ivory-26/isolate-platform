@@ -15,6 +15,7 @@ import type {
 	TaskWorkspace,
 	TaskWorkspaceGit,
 } from "@isolate/sandbox";
+import { SandboxError } from "@isolate/sandbox";
 import type {
 	ExecutionLifecycle,
 	LifecycleTransitionInput,
@@ -352,6 +353,26 @@ function toVerdict(error: unknown, ctx: HandlerContext): HandlerVerdict {
 		return note === ""
 			? { outcome: "dead_letter", code }
 			: { outcome: "dead_letter", code, note };
+	}
+	// Sandbox adapters throw SandboxError, which is not a PlatformError; map its
+	// bounded code instead of collapsing every provisioning/Git failure to
+	// INTERNAL. This is what makes a failed live run diagnosable.
+	if (error instanceof SandboxError) {
+		if (error.code === "CANCELLED") return leaseLostVerdict();
+		if (error.code === "POLICY_DENIED") {
+			return { outcome: "dead_letter", code: "POLICY_DENIED" };
+		}
+		if (error.code === "PROVIDER_UNAVAILABLE") {
+			return { outcome: "retry", code: "INTEGRATION_UNAVAILABLE" };
+		}
+		const note = sanitizeMessage(error.message);
+		return note === ""
+			? { outcome: "dead_letter", code: "AGENT_EXECUTION_FAILED" }
+			: {
+					outcome: "dead_letter",
+					code: "AGENT_EXECUTION_FAILED",
+					note,
+				};
 	}
 	return { outcome: "retry", code: "INTERNAL" };
 }
@@ -1123,6 +1144,8 @@ function createHandler(
 			} catch (error) {
 				ctx.logger.warn("task execution failed; mapped to bounded verdict", {
 					code: clampErrorCode(errorCodeOf(error)),
+					// Bounded adapter code; never a message, path or credential.
+					...(error instanceof SandboxError ? { sandboxCode: error.code } : {}),
 				});
 				return toVerdict(error, ctx);
 			} finally {

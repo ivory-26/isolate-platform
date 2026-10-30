@@ -32,7 +32,8 @@ export interface ModalCreateParams {
 	readonly idleTimeoutMs: number;
 	readonly workdir: string;
 	readonly command: readonly string[];
-	readonly blockNetwork: boolean;
+	/** Omitted for allowlist egress: Modal forbids combining it with a allowlist. */
+	readonly blockNetwork?: boolean;
 	readonly outboundDomainAllowlist?: readonly string[];
 	/** Create-time environment; consumed by Git via `GIT_CONFIG_*`. */
 	readonly env?: Readonly<Record<string, string>>;
@@ -105,7 +106,7 @@ function validateIdleTimeout(value: number, lifetimeMs: number): void {
 }
 
 function egressParams(egress: SandboxSpec["egress"]): {
-	readonly blockNetwork: boolean;
+	readonly blockNetwork?: boolean;
 	readonly outboundDomainAllowlist?: readonly string[];
 } {
 	if (!egress || typeof egress !== "object")
@@ -127,8 +128,9 @@ function egressParams(egress: SandboxSpec["egress"]): {
 		)
 			deny("Invalid sandbox egress hostname");
 	}
+	// Modal rejects `blockNetwork` when an allowlist is present, even as false.
+	// The allowlist alone means "network on, confined to these domains".
 	return {
-		blockNetwork: false,
 		outboundDomainAllowlist: Object.freeze(hosts),
 	};
 }

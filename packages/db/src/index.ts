@@ -6,6 +6,7 @@ export * from "./repositories/blob-store";
 export * from "./repositories/branch-lock-repository";
 export * from "./repositories/compiled-plan-repository";
 export * from "./repositories/execution-lifecycle";
+export * from "./repositories/incident-repository";
 export * from "./repositories/membership-repository";
 export * from "./repositories/organization-repository";
 export * from "./repositories/queue-repository";

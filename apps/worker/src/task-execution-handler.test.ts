@@ -1869,6 +1869,7 @@ describe("task execution handler — wave 8 validation gate", () => {
 		]);
 		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
 			status: "review_ready",
+			completion: "validation",
 			validation: { status: "passed", argv: ["bun", "test"] },
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
@@ -2520,6 +2521,7 @@ describe("task execution handler — wave 9 branch lock", () => {
 			},
 		]);
 		expect(lock.releases).toEqual(["release"]);
+		expect(lock.leases[0]?.releases).toBe(1);
 		expect(harness.provider.createCalls).toHaveLength(1);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
@@ -2570,6 +2572,52 @@ describe("task execution handler — wave 9 branch lock", () => {
 			note: "empty diff",
 		});
 		expect(lock.releases).toEqual(["release"]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("releases exactly once when a turn throws after provisioning", async () => {
+		const lifecycle = new FakeLifecycle();
+		const lock = fakeLock();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: lock.acquireBranchLock,
+			script: [
+				{
+					output: "",
+					throwError: new PlatformError("DB_UNAVAILABLE", "db down"),
+				},
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "retry",
+			code: "DB_UNAVAILABLE",
+		});
+		expect(lock.releases).toEqual(["release"]);
+		expect(lock.leases[0]?.releases).toBe(1);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("releases exactly once when the lease is lost mid-run", async () => {
+		const lifecycle = new FakeLifecycle();
+		const lock = fakeLock();
+		let abortRun: () => void = () => {};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: lock.acquireBranchLock,
+			script: [{ output: "", onTurn: () => abortRun() }],
+		});
+		abortRun = () => harness.controller.abort();
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "retry", code: "LEASE_LOST" });
+		expect(lock.releases).toEqual(["release"]);
+		expect(lock.leases[0]?.releases).toBe(1);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 

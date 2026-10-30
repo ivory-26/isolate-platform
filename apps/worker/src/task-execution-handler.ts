@@ -1614,13 +1614,11 @@ function createHandler(
 				}
 
 				const lifecycle = deps.lifecycle;
-				if (lifecycle === undefined) {
-					return await runWithSandbox(context, allowedTurns, null);
-				}
 
 				// Wave 9 branch lock: one writer per repository+branch. Acquired
-				// before provisioning so two jobs can never clone/push the same
-				// branch; a miss is a bounded requeue, never a second writer.
+				// before any provisioning (including the legacy lifecycle-less
+				// flow) so two jobs can never clone/push the same branch; a miss
+				// is a bounded requeue, never a second writer.
 				if (deps.acquireBranchLock !== undefined) {
 					branchLock = await deps.acquireBranchLock({
 						organizationId: job.organizationId,
@@ -1637,6 +1635,10 @@ function createHandler(
 							backoffMs: BRANCH_LOCK_BACKOFF_MS,
 						};
 					}
+				}
+
+				if (lifecycle === undefined) {
+					return await runWithSandbox(context, allowedTurns, null);
 				}
 
 				const started = await lifecycle.attemptStarted({

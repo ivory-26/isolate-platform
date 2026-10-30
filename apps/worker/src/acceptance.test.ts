@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SandboxToolBackend } from "@isolate/mastra";
+import type { SandboxExecResult, SandboxToolBackend } from "@isolate/mastra";
 import type {
 	CommandResult,
 	SandboxHandle,
@@ -33,6 +33,19 @@ function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
 		durationMs: 3,
 		timedOut: false,
 		outputLimitExceeded: false,
+		...overrides,
+	};
+}
+
+function sandboxExecResult(
+	overrides: Partial<SandboxExecResult> = {},
+): SandboxExecResult {
+	return {
+		exitCode: 0,
+		stdout: "ok",
+		stderr: "",
+		durationMs: 3,
+		truncated: false,
 		...overrides,
 	};
 }
@@ -88,12 +101,12 @@ class FakeBackend implements SandboxToolBackend {
 		return [];
 	}
 
-	async exec(): Promise<CommandResult> {
-		return commandResult();
+	async exec(): Promise<SandboxExecResult> {
+		return sandboxExecResult();
 	}
 
-	async git(): Promise<CommandResult> {
-		return commandResult();
+	async git(): Promise<SandboxExecResult> {
+		return sandboxExecResult();
 	}
 }
 

@@ -2,6 +2,7 @@ export * from "./client";
 export * from "./repositories/approval-repository";
 export * from "./repositories/artifact-repository";
 export * from "./repositories/audit-repository";
+export * from "./repositories/blob-store";
 export * from "./repositories/branch-lock-repository";
 export * from "./repositories/compiled-plan-repository";
 export * from "./repositories/execution-lifecycle";

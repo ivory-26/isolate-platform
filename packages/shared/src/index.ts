@@ -5,6 +5,7 @@ export * from "./types/acceptance";
 export * from "./types/errors";
 export * from "./types/events";
 export * from "./types/ids";
+export * from "./types/incident";
 export * from "./types/lifecycle";
 export * from "./types/observability";
 export * from "./types/result";

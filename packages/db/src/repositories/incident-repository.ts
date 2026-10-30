@@ -254,6 +254,10 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		input: IncidentSignalInput,
 	): Promise<RecordIncidentSignalResult> {
 		const signal = normalizeIncidentSignalInput(input);
+		// Timestamps are bound as explicit ISO-8601 text under a `::timestamptz`
+		// cast (never rely on the driver's Date coercion under a cast; see the
+		// jsonb double-encoding lesson in CHALLENGES).
+		const receivedAt = signal.receivedAt.toISOString();
 		const inserted = (await this.sql.unsafe(STMT.insert, [
 			signal.organizationId,
 			signal.source,
@@ -262,7 +266,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			signal.service,
 			signal.fingerprint,
 			signal.deliveryId,
-			signal.receivedAt,
+			receivedAt,
 		])) as unknown as Record<string, unknown>[];
 		if (inserted.length > 0) {
 			return { ok: true, signalId: String(inserted[0].id), created: true };
@@ -273,7 +277,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			signal.organizationId,
 			signal.source,
 			signal.fingerprint,
-			signal.receivedAt,
+			receivedAt,
 		])) as unknown as Record<string, unknown>[];
 		if (existing.length === 0) {
 			throw new Error(

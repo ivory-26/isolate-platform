@@ -122,7 +122,11 @@ test.skipIf(!hasDb)(
 					`INSERT INTO incident_signals
 						(organization_id, source, kind, severity, service, fingerprint, received_at)
 					 VALUES ($1, 'github', 'workflow_run.failed', 'critical', 'checkout', $2, $3::timestamptz)`,
-					[orgId, FINGERPRINT, new Date(RECEIVED_AT.getTime() + 60 * 1000)],
+					[
+						orgId,
+						FINGERPRINT,
+						new Date(RECEIVED_AT.getTime() + 60 * 1000).toISOString(),
+					],
 				);
 			} catch {
 				rejected = true;

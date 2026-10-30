@@ -623,6 +623,24 @@ describe("git.commit_local", () => {
 		expect(calls.commitAll).toEqual([]);
 	});
 
+	test("uses pending paths so an untracked file can be committed", async () => {
+		const { backend, calls } = fakeBackend();
+		backend.pendingPaths = async () => ["LIVE_ACCEPTANCE.md"];
+		const registry = wireSandboxTools(backend);
+		const output = await callTool(
+			registry,
+			"git.commit_local",
+			{ message: "chore: live" },
+			{ ...taskContext, fileOwnership: ["LIVE_ACCEPTANCE.md"] },
+		);
+		expect(output).toEqual({
+			state: "executed",
+			audited: true,
+			value: { commitSha: "0123456789abcdef" },
+		});
+		expect(calls.commitAll).toEqual(["chore: live"]);
+	});
+
 	test("unowned commit with empty ownership fails closed", async () => {
 		const { backend, calls } = fakeBackend();
 		const registry = wireSandboxTools(backend);

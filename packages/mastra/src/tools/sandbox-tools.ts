@@ -323,32 +323,45 @@ export function createSandboxToolImplementations(
 		"git.commit_local": async (args, context) => {
 			const parsed = parseArgs(CommitArgs, args, "git.commit_local");
 			const diffSummary = backend.diffSummary?.bind(backend);
+			const pendingPaths = backend.pendingPaths?.bind(backend);
 			const commitAll = backend.commitAll?.bind(backend);
-			if (diffSummary === undefined || commitAll === undefined) {
+			if (
+				commitAll === undefined ||
+				(pendingPaths === undefined && diffSummary === undefined)
+			) {
 				throw new PlatformError(
 					"MISSING_CONFIG",
 					"sandbox backend has no commit surface",
 				);
 			}
-			const summary = await diffSummary();
-			if (summary.filesChanged === 0 || summary.files.length === 0) {
+			let files: readonly string[];
+			if (pendingPaths !== undefined) {
+				files = await pendingPaths();
+			} else {
+				const summary = await diffSummary?.();
+				files = summary?.files ?? [];
+				if (
+					summary !== undefined &&
+					(summary.filesChanged > MAX_COMMIT_PATHS ||
+						summary.files.length !== summary.filesChanged)
+				) {
+					throw new PlatformError(
+						"VALIDATION_FAILED",
+						"incomplete or oversized diff summary",
+					);
+				}
+			}
+			if (files.length === 0) {
 				throw new PlatformError("VALIDATION_FAILED", "no changes to commit");
 			}
-			if (
-				summary.filesChanged > MAX_COMMIT_PATHS ||
-				summary.files.length > MAX_COMMIT_PATHS
-			) {
+			if (files.length > MAX_COMMIT_PATHS) {
 				throw new PlatformError(
 					"VALIDATION_FAILED",
 					"too many changed files to commit",
 				);
 			}
-			if (summary.files.length !== summary.filesChanged) {
-				// Every changed path must be visible to the ownership check.
-				throw new PlatformError("VALIDATION_FAILED", "incomplete diff summary");
-			}
 			const matcher = createOwnershipMatcher(context.fileOwnership);
-			if (!summary.files.every((file) => matcher.owns(file))) {
+			if (!files.every((file) => matcher.owns(file))) {
 				throw new PlatformError(
 					"POLICY_DENIED",
 					"commit touches files outside task ownership",

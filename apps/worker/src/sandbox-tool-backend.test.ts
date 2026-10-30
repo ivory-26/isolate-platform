@@ -73,7 +73,7 @@ type WriteBackend = SandboxToolBackend &
 	Required<
 		Pick<
 			SandboxToolBackend,
-			"writeFile" | "commitAll" | "diffSummary" | "diffPatch"
+			"writeFile" | "commitAll" | "diffSummary" | "diffPatch" | "pendingPaths"
 		>
 	>;
 
@@ -321,6 +321,19 @@ describe("sandbox tool backend — wave 7 write surface", () => {
 		expect(calls[0]).toMatchObject({
 			executable: "git",
 			args: ["diff", "--numstat", "origin/main...HEAD"],
+			cwd: `${ROOT}/repo`,
+		});
+	});
+
+	test("lists pending paths including untracked files", async () => {
+		const { provider, calls } = fakeProvider(() =>
+			ok("?? LIVE_ACCEPTANCE.md\n M src/a.ts\nR  old.ts -> new.ts\n"),
+		);
+		const paths = await writeBackend(provider).pendingPaths();
+		expect(paths).toEqual(["LIVE_ACCEPTANCE.md", "src/a.ts", "new.ts"]);
+		expect(calls[0]).toMatchObject({
+			executable: "git",
+			args: ["status", "--porcelain"],
 			cwd: `${ROOT}/repo`,
 		});
 	});

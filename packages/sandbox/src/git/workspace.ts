@@ -521,7 +521,15 @@ export const createTaskWorkspaceGit: CreateTaskWorkspaceGit = (
 			const name = validateBranchName(branch);
 			await git(
 				context,
-				["push", "origin", `HEAD:refs/heads/${name}`],
+				[
+					// GIT_OPTIONS sets protocol.allow=never; the HTTPS transport must
+					// be re-allowed explicitly for a push, exactly as clone does.
+					"-c",
+					"protocol.https.allow=always",
+					"push",
+					"origin",
+					`HEAD:refs/heads/${name}`,
+				],
 				{
 					cwd: path,
 					timeoutMs: PUSH_TIMEOUT_MS,

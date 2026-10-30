@@ -93,6 +93,13 @@ export interface SandboxToolBackend {
 		readonly files: readonly string[];
 	}>;
 
+	/**
+	 * Pending paths from the working tree/index (including untracked files),
+	 * used by the commit tool for ownership. Commit-to-commit diff intentionally
+	 * ignores untracked files, so it cannot authorize a first commit.
+	 */
+	pendingPaths?(): Promise<readonly string[]>;
+
 	/** Bounded patch text for the task artifact; never streamed to the model. */
 	diffPatch?(options?: {
 		readonly maxBytes?: number;

@@ -37,6 +37,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_WRITE_BYTES = 262_144;
 export const MAX_DIFF_BYTES = 65_536;
 const MAX_DIFF_FILES = 200;
+const MAX_PENDING_PATHS = 1_000;
 const MAX_COMMIT_MESSAGE_CHARS = 200;
 const MAX_AUTHOR_NAME_CHARS = 100;
 const MAX_AUTHOR_EMAIL_CHARS = 200;
@@ -637,6 +638,35 @@ export function createSandboxToolBackend(
 				);
 			}
 			return { commitSha };
+		},
+
+		async pendingPaths() {
+			const result = await run(
+				"git",
+				["status", "--porcelain"],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
+			if (result.exitCode !== 0) {
+				throw new PlatformError("GIT_OPERATION_FAILED", "git status failed");
+			}
+			const paths = new Set<string>();
+			for (const line of result.stdout.split(/\r?\n/)) {
+				if (line.length < 4) continue;
+				let file = line.slice(3).trim();
+				if (file.includes(" -> ")) {
+					const parts = file.split(" -> ");
+					file = parts[parts.length - 1]?.trim() ?? "";
+				}
+				if (file.startsWith('"') && file.endsWith('"')) {
+					file = file.slice(1, -1);
+				}
+				if (file.length > 0) paths.add(file);
+				if (paths.size >= MAX_PENDING_PATHS) break;
+			}
+			return [...paths];
 		},
 
 		async diffSummary() {

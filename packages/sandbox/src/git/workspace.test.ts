@@ -648,6 +648,7 @@ describe("pushBranch", () => {
 		]);
 		expect(command.args).not.toContain("--force");
 		expect(command.args).not.toContain("-f");
+		expect(command.args).toContain("protocol.https.allow=always");
 		expect(command.egress).toEqual(REMOTE_GIT_EGRESS);
 	});
 

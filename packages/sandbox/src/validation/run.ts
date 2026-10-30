@@ -1,4 +1,4 @@
-import type { ValidationReport } from "../../../shared/src/types/review";
+import type { ValidationReport } from "@isolate/shared";
 import { deny, SandboxError } from "../errors";
 import { executeCommand } from "../execute";
 import {

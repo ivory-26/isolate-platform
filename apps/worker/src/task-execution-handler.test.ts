@@ -1866,10 +1866,33 @@ describe("task execution handler — wave 7 resume", () => {
 		]);
 	});
 
+	test("a pending approval waits instead of failing the task", async () => {
+		// Enqueue-before-decide: the job may fire before the human answers.
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "pending", payloadSha256: APPROVAL_SHA };
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "retry",
+			code: "APPROVAL_REQUIRED",
+			backoffMs: 60_000,
+		});
+		expect(transitionPairs(lifecycle)).not.toContainEqual([
+			"awaiting_approval",
+			"failed",
+		]);
+		expect(harness.provider.createCalls).toHaveLength(0);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({ status: "retry" });
+	});
+
 	for (const [status, code] of [
 		["rejected", "APPROVAL_REJECTED"],
 		["expired", "APPROVAL_EXPIRED"],
-		["pending", "APPROVAL_REQUIRED"],
 	] as const) {
 		test(`a ${status} approval fails the task without provisioning`, async () => {
 			const lifecycle = new FakeLifecycle();

@@ -298,6 +298,21 @@ describe("create_pull_request handler — approval verification", () => {
 		).toBe(true);
 	});
 
+	test("a pending approval waits instead of consuming the job", async () => {
+		// Enqueue-before-decide: the job can fire before the human answers.
+		const harness = makeHarness({
+			approval: { status: "pending", payloadSha256: await approvedSha() },
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "retry",
+			code: "APPROVAL_REQUIRED",
+			backoffMs: 60_000,
+		});
+		expect(harness.createCalls).toHaveLength(0);
+		expect(harness.recordCalls).toHaveLength(0);
+	});
+
 	test("a rejected approval creates no PR and does not retry", async () => {
 		const harness = makeHarness({
 			approval: { status: "rejected", payloadSha256: await approvedSha() },

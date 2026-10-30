@@ -511,6 +511,16 @@ User decision (2026-10-30): finish backend hardening and evaluate the DevSecOps 
 ### H12-OPS — Coordinator
 - Merge green lanes, gates ×2, full offline suite, web build/sweep; **live retry proof**: take the wave-9 failed task and run `retryTask` end to end (one sandbox, small caps) to prove the rerun path live; update STATUS/CHALLENGES/DECISIONS.
 
+### Wave 12 execution record (2026-10-30)
+
+| Lane | Commit | Coordinator gates (×2) |
+|---|---|---|
+| H12-1 | `d2f21c9` → merge `e1f9424` | biome clean · typecheck 8/8 · 223 web tests · build · 30-check sweep |
+| H12-2 | `def8254` → merge `bcb8a8b` | biome 0 errors · typecheck 8/8 · 576 db+worker tests · acceptance PASS |
+| H12-3 | `e80f36c` → merge `23cfe35` | docs only — `docs/devsecops-connectors.md` (937 lines, 66 sources, phased plan, risk register) |
+
+Coordinator integration after the merges: both handlers now **wait** on a `pending` approval (bounded retry, no task transition) instead of failing or consuming the job, and the pre-enqueued follow-up uses `APPROVAL_FOLLOW_UP_MAX_ATTEMPTS = 60`; tests added for both handlers. Documented in DECISIONS and CHALLENGES, including the queue-backoff clarification.
+
 ## Wave 13 — Product surface (web UI) and deployment decision (planned; blocked on user input)
 
 - **Does not start without the user's design direction.** Design-system/token pass, run detail, approvals page, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).

@@ -326,3 +326,10 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: a wrong price is worse than no price — it corrupts spend caps, per-org reporting and the "measured, never estimated" rule this project has held since wave 4. Billing pages change, so prices belong in environment configuration with a source note, not in code.
 - Consequences: Meta dev/pre-production runs record exact tokens and sandbox seconds with `cost_usd = null`; a Baseten production run with the same table attributes both. Switching prices never needs a code change.
 - Alternatives rejected: hardcoding rates (silent drift); using third-party aggregator values for the contributor tier (unverified for our access path); treating unknown as zero (under-reports spend and disables caps).
+
+## 2026-10-30 — H12: approval follow-up jobs are enqueued before the decision, and wait while pending
+
+- Decision: `decideApproval` enqueues the follow-up job first (deterministic key `approval:<approvalId>`, `notBefore = now + 15 s`, `maxAttempts = 60`), then commits the decision + audit row. While the approval is still `pending`, both worker handlers return a bounded `retry` instead of failing or consuming the job. Rejected/expired remain terminal.
+- Rationale: the previous order could commit `approved` and then fail to enqueue, stranding a task with no job and no way to replay. Enqueue-first turns that into "a job that waits", which is recoverable; the pending branch is what makes waiting safe.
+- Consequences: a human decision typically reaches the worker on the next retry (at most 5 minutes, the queue's backoff cap). If nobody decides within the attempt budget, the job dead-letters while the approval stays pending; an operator re-enqueue is the documented recovery.
+- Alternatives rejected: decide-then-enqueue (the original stranded state); a transactional outbox (correct, but a new table and dispatcher for one write); enqueue with a long `notBefore` equal to the approval expiry (a decision cannot then accelerate it).

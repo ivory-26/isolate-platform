@@ -171,6 +171,9 @@ type ApprovalFollowUp = {
  * still `pending`; the decision + audit + event writes finish in milliseconds.
  */
 export const APPROVAL_FOLLOW_UP_NOT_BEFORE_MS = 15_000;
+/** The job waits for the human: exponential queue backoff caps at 5 min, so
+ * ~60 attempts cover several hours before dead-lettering. */
+export const APPROVAL_FOLLOW_UP_MAX_ATTEMPTS = 60;
 
 /**
  * The approval action decides the follow-up job, never the caller. An unknown
@@ -298,7 +301,7 @@ async function enqueueApprovalFollowUp(
 		type: followUp.type,
 		payload: followUp.payload,
 		idempotencyKey: followUp.idempotencyKey,
-		maxAttempts: WORKER_CONFIG_DEFAULTS.maxJobAttempts,
+		maxAttempts: APPROVAL_FOLLOW_UP_MAX_ATTEMPTS,
 		notBefore: new Date(nowMs + APPROVAL_FOLLOW_UP_NOT_BEFORE_MS).toISOString(),
 	});
 	if (

@@ -1862,6 +1862,17 @@ function createHandler(
 							note: "approval not found",
 						};
 					}
+					if (approval.status === "pending") {
+						// The follow-up job is enqueued before the decision commits, so a
+						// pending approval means the human has not answered yet. Wait
+						// (bounded by max_attempts) instead of failing the task.
+						attemptOutcome = { status: "retry", reason: "approval pending" };
+						return {
+							outcome: "retry",
+							code: "APPROVAL_REQUIRED",
+							backoffMs: 60_000,
+						};
+					}
 					if (approval.status !== "approved") {
 						const code =
 							approval.status === "rejected"

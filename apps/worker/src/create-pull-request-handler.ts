@@ -240,8 +240,18 @@ export function createPullRequestHandler(
 				prOutcome("skipped", "NOT_FOUND");
 				return { outcome: "complete", note: "approval not found" };
 			}
-			// Rejected / expired / still pending: no PR. The control plane fails
-			// the task on rejection; this handler must not retry.
+			if (approval.status === "pending") {
+				// Enqueue-before-decide: the job may fire before the human answers.
+				// Wait (bounded by max_attempts) rather than consuming the job.
+				prOutcome("skipped", "APPROVAL_REQUIRED");
+				return {
+					outcome: "retry",
+					code: "APPROVAL_REQUIRED",
+					backoffMs: 60_000,
+				};
+			}
+			// Rejected / expired: no PR. The control plane fails the task on
+			// rejection; this handler must not retry.
 			if (approval.status !== "approved") {
 				prOutcome("skipped", "APPROVAL_REQUIRED");
 				return { outcome: "complete", note: `approval ${approval.status}` };

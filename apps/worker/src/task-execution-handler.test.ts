@@ -9,16 +9,29 @@ import type {
 import type {
 	CommandPolicy,
 	CommandResult,
+	CreateTaskWorkspaceGit,
 	SandboxHandle,
 	SandboxProvider,
 	SandboxSpec,
+	TaskDiffStat,
+	TaskWorkspace,
+	TaskWorkspaceCloneInput,
+	TaskWorkspaceCommitInput,
+	TaskWorkspaceGit,
 } from "@isolate/sandbox";
 import type {
+	ExecutionLifecycle,
 	JobId,
+	LifecycleApprovalState,
+	LifecycleArtifactInput,
+	LifecycleEventInput,
+	LifecycleTransitionInput,
 	LogFields,
 	Logger,
 	OrganizationId,
+	RunEventType,
 	TaskId,
+	TaskStatus,
 	UsageRecordInput,
 	UsageSink,
 } from "@isolate/shared";
@@ -26,7 +39,9 @@ import { PlatformError } from "@isolate/shared";
 import type { HandlerContext, HandlerVerdict } from "./contracts";
 import {
 	buildTaskPrompt,
+	createResumeTaskHandler,
 	createTaskExecutionHandler,
+	pushApprovalPayloadSha256,
 	type TaskExecutionDeps,
 } from "./task-execution-handler";
 
@@ -141,6 +156,175 @@ class FakeUsageSink implements UsageSink {
 	}
 }
 
+type LifecycleCall =
+	| { kind: "attemptStarted" }
+	| {
+			kind: "attemptFinished";
+			outcome: Readonly<Record<string, unknown>> | null;
+	  }
+	| { kind: "transition"; from: TaskStatus; to: TaskStatus; reason?: string }
+	| {
+			kind: "event";
+			type: RunEventType;
+			data: Readonly<Record<string, unknown>> | undefined;
+	  }
+	| { kind: "artifact"; kind_: string; content: string; sha256: string }
+	| {
+			kind: "approvalRequested";
+			action: string;
+			payloadSha256: string;
+			requestedBy: string;
+			expiresAt: Date;
+	  }
+	| { kind: "approvalStatus"; approvalId: string };
+
+class FakeLifecycle implements ExecutionLifecycle {
+	calls: LifecycleCall[] = [];
+	approval: LifecycleApprovalState | null = null;
+	cancelled = false;
+	/** Target statuses whose transition throws a stale-from conflict. */
+	conflictOn: Set<TaskStatus> = new Set();
+	approvalRequestedError: unknown = null;
+
+	async transition(input: LifecycleTransitionInput): Promise<void> {
+		this.calls.push({
+			kind: "transition",
+			from: input.from,
+			to: input.to,
+			...(input.reason === undefined ? {} : { reason: input.reason }),
+		});
+		if (this.conflictOn.has(input.to)) {
+			// The wave-7 lifecycle contract calls this CONFLICT; the shared
+			// ErrorCode vocabulary spells it DEPENDENCY_CONFLICT.
+			throw new PlatformError("DEPENDENCY_CONFLICT", "stale transition");
+		}
+	}
+
+	async event(input: LifecycleEventInput): Promise<void> {
+		this.calls.push({ kind: "event", type: input.type, data: input.data });
+	}
+
+	async artifact(
+		input: LifecycleArtifactInput,
+	): Promise<{ artifactId: string }> {
+		this.calls.push({
+			kind: "artifact",
+			kind_: input.kind,
+			content: input.content,
+			sha256: input.sha256,
+		});
+		return { artifactId: "artifact_1" };
+	}
+
+	async attemptStarted(): Promise<{
+		attemptId: string;
+		attemptIndex: number;
+	}> {
+		this.calls.push({ kind: "attemptStarted" });
+		return { attemptId: "attempt_1", attemptIndex: 1 };
+	}
+
+	async attemptFinished(input: {
+		attemptId: string;
+		outcome: Readonly<Record<string, unknown>> | null;
+	}): Promise<void> {
+		this.calls.push({ kind: "attemptFinished", outcome: input.outcome });
+	}
+
+	async approvalRequested(input: {
+		action: string;
+		payloadSha256: string;
+		requestedBy: string;
+		expiresAt: Date;
+	}): Promise<{ approvalId: string }> {
+		if (this.approvalRequestedError !== null) {
+			throw this.approvalRequestedError;
+		}
+		this.calls.push({
+			kind: "approvalRequested",
+			action: input.action,
+			payloadSha256: input.payloadSha256,
+			requestedBy: input.requestedBy,
+			expiresAt: input.expiresAt,
+		});
+		return { approvalId: "approval_1" };
+	}
+
+	async approvalStatus(): Promise<LifecycleApprovalState | null> {
+		this.calls.push({ kind: "approvalStatus", approvalId: "approval_1" });
+		return this.approval;
+	}
+
+	async isCancelled(): Promise<boolean> {
+		return this.cancelled;
+	}
+}
+
+class FakeWorkspaceGit implements TaskWorkspaceGit {
+	assertCalls = 0;
+	cloneCalls: TaskWorkspaceCloneInput[] = [];
+	branches: string[] = [];
+	pushes: string[] = [];
+	commits: TaskWorkspaceCommitInput[] = [];
+	diffStatCalls: string[] = [];
+	diffPatchCalls: string[] = [];
+	diffStatResult: TaskDiffStat = {
+		filesChanged: 1,
+		insertions: 3,
+		deletions: 2,
+		files: ["src/widget.ts"],
+	};
+	patch = "diff --git a/src/widget.ts b/src/widget.ts\n+const x = 1;\n";
+	truncated = false;
+	cloneError: unknown = null;
+	pushError: unknown = null;
+
+	async assertToolchain(): Promise<void> {
+		this.assertCalls += 1;
+	}
+
+	async cloneAndCheckout(
+		input: TaskWorkspaceCloneInput,
+	): Promise<TaskWorkspace> {
+		this.cloneCalls.push(structuredClone(input));
+		if (this.cloneError !== null) throw this.cloneError;
+		return { path: input.targetPath, baseBranch: input.baseBranch };
+	}
+
+	async createBranch(_workspace: TaskWorkspace, branch: string): Promise<void> {
+		this.branches.push(branch);
+	}
+
+	async commitAll(
+		_workspace: TaskWorkspace,
+		input: TaskWorkspaceCommitInput,
+	): Promise<{ commitSha: string }> {
+		this.commits.push(input);
+		return { commitSha: "a".repeat(40) };
+	}
+
+	async diffStat(
+		_workspace: TaskWorkspace,
+		baseBranch: string,
+	): Promise<TaskDiffStat> {
+		this.diffStatCalls.push(baseBranch);
+		return this.diffStatResult;
+	}
+
+	async diffPatch(
+		_workspace: TaskWorkspace,
+		baseBranch: string,
+	): Promise<{ patch: string; truncated: boolean }> {
+		this.diffPatchCalls.push(baseBranch);
+		return { patch: this.patch, truncated: this.truncated };
+	}
+
+	async pushBranch(_workspace: TaskWorkspace, branch: string): Promise<void> {
+		this.pushes.push(branch);
+		if (this.pushError !== null) throw this.pushError;
+	}
+}
+
 type ScriptTurn = {
 	output: string;
 	promptTokens?: number;
@@ -229,6 +413,16 @@ type HarnessOptions = {
 	sink?: FakeUsageSink;
 	loadError?: unknown;
 	clock?: FakeClock;
+	lifecycle?: FakeLifecycle;
+	workspaceGit?: FakeWorkspaceGit;
+	workspaceGitFactory?: (input: {
+		provider: SandboxProvider;
+		sandbox: SandboxHandle;
+		signal?: AbortSignal;
+	}) => FakeWorkspaceGit;
+	pushEnabled?: boolean;
+	job?: JobRow;
+	handlerType?: "run_task" | "resume_task";
 };
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -250,6 +444,7 @@ function makeHarness(options: HarnessOptions = {}) {
 		...options.context,
 	};
 
+	const workspaceGit = options.workspaceGit;
 	const deps: TaskExecutionDeps = {
 		provider,
 		createRuntime: runtime.factory,
@@ -280,6 +475,15 @@ function makeHarness(options: HarnessOptions = {}) {
 				? { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 }
 				: options.priceTable,
 		now: clock.now,
+		...(options.lifecycle === undefined
+			? {}
+			: { lifecycle: options.lifecycle }),
+		...(options.workspaceGitFactory === undefined
+			? workspaceGit === undefined
+				? {}
+				: { createWorkspaceGit: (() => workspaceGit) as CreateTaskWorkspaceGit }
+			: { createWorkspaceGit: options.workspaceGitFactory }),
+		pushEnabled: options.pushEnabled ?? false,
 	};
 
 	const ctx: HandlerContext = {
@@ -292,7 +496,10 @@ function makeHarness(options: HarnessOptions = {}) {
 	};
 
 	return {
-		handler: createTaskExecutionHandler(deps),
+		handler:
+			options.handlerType === "resume_task"
+				? createResumeTaskHandler(deps)
+				: createTaskExecutionHandler(deps),
 		deps,
 		ctx,
 		controller,
@@ -303,7 +510,7 @@ function makeHarness(options: HarnessOptions = {}) {
 		runtime,
 		heartbeats,
 		loaderCalls,
-		job: makeJob(),
+		job: options.job ?? makeJob(),
 	};
 }
 
@@ -822,5 +1029,614 @@ describe("task execution handler — prompt and payload", () => {
 		};
 		await harness.handler.handle(harness.job, harness.ctx);
 		expect(sawBackend).toBe(false);
+	});
+});
+
+/* ------------------------------ wave 7: lifecycle --------------------------- */
+
+const APPROVAL_SHA = pushApprovalPayloadSha256(
+	DEFAULT_CONTEXT.repoUrl,
+	DEFAULT_CONTEXT.isolatedBranch,
+);
+
+function makeResumeJob(overrides: Partial<JobRow> = {}): JobRow {
+	return makeJob({
+		// `resume_task` is a wave-7 worker job type; the db `JobType` union is
+		// owned by the DB lane and is widened there.
+		type: "resume_task" as JobRow["type"],
+		payload: { taskId: TASK_UUID, approvalId: "approval_1" },
+		...overrides,
+	});
+}
+
+function transitionPairs(
+	lifecycle: FakeLifecycle,
+): Array<[TaskStatus, TaskStatus]> {
+	const pairs: Array<[TaskStatus, TaskStatus]> = [];
+	for (const call of lifecycle.calls) {
+		if (call.kind === "transition") pairs.push([call.from, call.to]);
+	}
+	return pairs;
+}
+
+function eventTypes(lifecycle: FakeLifecycle): RunEventType[] {
+	const types: RunEventType[] = [];
+	for (const call of lifecycle.calls) {
+		if (call.kind === "event") types.push(call.type);
+	}
+	return types;
+}
+
+function kindIndex(lifecycle: FakeLifecycle, kind: LifecycleCall["kind"]) {
+	return lifecycle.calls.findIndex((call) => call.kind === kind);
+}
+
+function lastAttemptOutcome(lifecycle: FakeLifecycle) {
+	for (let index = lifecycle.calls.length - 1; index >= 0; index--) {
+		const call = lifecycle.calls[index];
+		if (call?.kind === "attemptFinished") return call.outcome;
+	}
+	return undefined;
+}
+
+describe("task execution handler — wave 7 approval gate", () => {
+	test("push-enabled run_task pauses before any sandbox or clone exists", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "complete", note: "awaiting approval" });
+		// No sandbox, no clone, no spend.
+		expect(harness.provider.createCalls).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(0);
+		expect(workspace.assertCalls).toBe(0);
+		expect(workspace.cloneCalls).toHaveLength(0);
+		expect(harness.sink.rows).toHaveLength(0);
+
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["planning", "awaiting_approval"],
+		]);
+
+		const requested = lifecycle.calls.find(
+			(call) => call.kind === "approvalRequested",
+		);
+		expect(requested).toMatchObject({
+			action: "git.push_branch",
+			payloadSha256: APPROVAL_SHA,
+			requestedBy: "worker",
+		});
+		if (requested?.kind === "approvalRequested") {
+			expect(requested.expiresAt.getTime()).toBe(
+				harness.clock.current + 24 * 60 * 60 * 1000,
+			);
+		}
+		// Ordering: attempt starts, the task enters planning, then the approval
+		// is requested and announced.
+		const kinds = lifecycle.calls.map((call) => call.kind);
+		expect(kinds.indexOf("attemptStarted")).toBeLessThan(
+			kinds.indexOf("approvalRequested"),
+		);
+		expect(kinds.lastIndexOf("transition")).toBeLessThan(
+			lifecycle.calls.findIndex(
+				(call) => call.kind === "event" && call.type === "approval.requested",
+			),
+		);
+		const approvalEvent = lifecycle.calls.find(
+			(call) => call.kind === "event" && call.type === "approval.requested",
+		);
+		expect(approvalEvent).toMatchObject({
+			data: { action: "git.push_branch", payloadSha256: APPROVAL_SHA },
+		});
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "awaiting_approval",
+			approvalId: "approval_1",
+		});
+	});
+
+	test("an existing pending approval is idempotent success", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approvalRequestedError = new PlatformError(
+			"DEPENDENCY_CONFLICT",
+			"pending approval already exists",
+		);
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			pushEnabled: true,
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "complete", note: "awaiting approval" });
+		expect(harness.provider.createCalls).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"planning",
+			"awaiting_approval",
+		]);
+		expect(eventTypes(lifecycle)).toEqual(["approval.requested"]);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "awaiting_approval",
+		});
+	});
+
+	test("run_task without push enabled never requests an approval", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "" }],
+		});
+		await harness.handler.handle(harness.job, harness.ctx);
+		expect(kindIndex(lifecycle, "approvalRequested")).toBe(-1);
+		expect(eventTypes(lifecycle)).not.toContain("approval.requested");
+		expect(harness.provider.createCalls).toHaveLength(1);
+	});
+});
+
+describe("task execution handler — wave 7 execution flow", () => {
+	test("clones, runs bounded turns, stores a diff artifact and reaches review_ready", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		let factoryInput:
+			| {
+					sandbox: SandboxHandle;
+					baseBranch?: string;
+					repoPath?: string;
+			  }
+			| undefined;
+		const harness = makeHarness({
+			lifecycle,
+			script: [{ output: "working" }, { output: "" }],
+			workspaceGitFactory: (input) => {
+				factoryInput = input;
+				return workspace;
+			},
+		});
+		let toolContext: { fileOwnership?: readonly string[] } | undefined;
+		let backendInput: { baseBranch?: string; repoPath?: string } | undefined;
+		harness.deps.createSandboxBackend = (input) => {
+			backendInput = input;
+			return {
+				readFile: async () => ({ content: "", truncated: false }),
+				listFiles: async () => [],
+				search: async () => [],
+				exec: async () => ({
+					exitCode: 0,
+					stdout: "",
+					stderr: "",
+					durationMs: 0,
+					truncated: false,
+				}),
+				git: async () => ({
+					exitCode: 0,
+					stdout: "",
+					stderr: "",
+					durationMs: 0,
+					truncated: false,
+				}),
+			};
+		};
+		const original = harness.deps.createRuntime;
+		harness.deps.createRuntime = (options) => {
+			toolContext = options.toolContext;
+			return original(options);
+		};
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "complete",
+			note: "agent reported no further work",
+		});
+		expect(factoryInput?.sandbox).toEqual({
+			id: "sbx_1",
+			workspaceRoot: POLICY.workspaceRoot,
+		});
+		expect(workspace.assertCalls).toBe(1);
+		expect(workspace.cloneCalls).toEqual([
+			{
+				repoUrl: DEFAULT_CONTEXT.repoUrl,
+				baseBranch: DEFAULT_CONTEXT.baseBranch,
+				targetPath: `${POLICY.workspaceRoot}/repo`,
+			},
+		]);
+		expect(workspace.branches).toEqual([DEFAULT_CONTEXT.isolatedBranch]);
+		expect(workspace.diffStatCalls).toEqual([DEFAULT_CONTEXT.baseBranch]);
+		expect(workspace.diffPatchCalls).toEqual([DEFAULT_CONTEXT.baseBranch]);
+
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["planning", "executing"],
+			["executing", "validating"],
+			["validating", "review_ready"],
+		]);
+		expect(eventTypes(lifecycle)).toEqual([
+			"workspace.cloned",
+			"agent.turn_started",
+			"agent.turn_finished",
+			"agent.turn_started",
+			"agent.turn_finished",
+			"validation.finished",
+			"artifact.created",
+		]);
+
+		const artifact = lifecycle.calls.find((call) => call.kind === "artifact");
+		expect(artifact).toMatchObject({
+			kind_: "diff",
+			content: workspace.patch,
+			sha256: new Bun.CryptoHasher("sha256")
+				.update(workspace.patch)
+				.digest("hex"),
+		});
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "review_ready",
+			filesChanged: 1,
+			insertions: 3,
+			deletions: 2,
+		});
+
+		// Clone/push need GitHub egress; tool calls still authorize deny.
+		expect(harness.provider.createCalls[0]?.egress).toEqual({
+			mode: "allowlist",
+			hosts: ["github.com", "codeload.github.com"],
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		expect(toolContext?.fileOwnership).toEqual(DEFAULT_CONTEXT.fileOwnership);
+		expect(backendInput).toMatchObject({
+			baseBranch: DEFAULT_CONTEXT.baseBranch,
+			repoPath: `${POLICY.workspaceRoot}/repo`,
+		});
+	});
+
+	test("a stale queued→planning conflict is treated as already started", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.conflictOn = new Set<TaskStatus>(["planning"]);
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict.outcome).toBe("complete");
+		expect(harness.provider.createCalls).toHaveLength(1);
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+	});
+
+	test("an empty diff fails the task with a bounded verdict before validation", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 0,
+			insertions: 0,
+			deletions: 0,
+			files: [],
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "empty diff",
+		});
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["planning", "executing"],
+			["executing", "failed"],
+		]);
+		expect(workspace.diffPatchCalls).toHaveLength(0);
+		expect(kindIndex(lifecycle, "artifact")).toBe(-1);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "failed",
+			reason: "empty diff",
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("cancellation before the next turn stops, records cancelled and tears down once", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			script: [
+				{ output: "working", onTurn: () => (lifecycle.cancelled = true) },
+				{ output: "never" },
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "complete", note: "task cancelled" });
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["planning", "executing"],
+			["executing", "cancelled"],
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({ status: "cancelled" });
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a cancelled task is not provisioned at all", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.cancelled = true;
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({ outcome: "complete", note: "task cancelled" });
+		expect(harness.provider.createCalls).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["planning", "cancelled"],
+		]);
+	});
+
+	test("a clone failure maps to a bounded verdict with exactly-once teardown", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.cloneError = new PlatformError(
+			"GIT_OPERATION_FAILED",
+			"clone failed at https://user:token@github.com/acme/widget.git",
+		);
+		const harness = makeHarness({ lifecycle, workspaceGit: workspace });
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "GIT_OPERATION_FAILED",
+			note: "clone failed at [url]",
+		});
+		expect(JSON.stringify(verdict)).not.toContain("token");
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		expect(harness.runtime.runTurns).toHaveLength(0);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({ status: "failed" });
+	});
+
+	test("emits no turn summaries or credentials through lifecycle records", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "" }],
+		});
+		await harness.handler.handle(harness.job, harness.ctx);
+		const serialized = JSON.stringify(lifecycle.calls);
+		expect(serialized).not.toContain("SECRET");
+		expect(serialized).not.toContain("token@host");
+		// The patch is stored as artifact content only, never in an event.
+		for (const call of lifecycle.calls) {
+			if (call.kind === "event") {
+				expect(JSON.stringify(call.data)).not.toContain("diff --git");
+			}
+		}
+		expect(JSON.stringify(harness.logs)).not.toContain("SECRET");
+	});
+});
+
+describe("task execution handler — wave 7 resume", () => {
+	test("supports() requires a bounded approvalId for resume jobs", () => {
+		const harness = makeHarness({ handlerType: "resume_task" });
+		expect(harness.handler.jobType).toBe("resume_task");
+		expect(
+			harness.handler.supports({ taskId: TASK_UUID, approvalId: "approval_1" }),
+		).toBe(true);
+		expect(harness.handler.supports({ taskId: TASK_UUID })).toBe(false);
+		expect(
+			harness.handler.supports({ taskId: TASK_UUID, approvalId: "bad id!" }),
+		).toBe(false);
+		expect(
+			harness.handler.supports({
+				taskId: TASK_UUID,
+				approvalId: "x".repeat(200),
+			}),
+		).toBe(false);
+		expect(
+			harness.handler.supports({
+				taskId: "not-a-uuid",
+				approvalId: "approval_1",
+			}),
+		).toBe(false);
+	});
+
+	test("an approved resume with the matching SHA executes and pushes once", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "complete",
+			note: "agent reported no further work",
+		});
+		expect(kindIndex(lifecycle, "approvalStatus")).toBeGreaterThanOrEqual(0);
+		expect(transitionPairs(lifecycle)).toEqual([
+			["queued", "planning"],
+			["awaiting_approval", "executing"],
+			["executing", "validating"],
+			["validating", "review_ready"],
+		]);
+		expect(workspace.pushes).toEqual([DEFAULT_CONTEXT.isolatedBranch]);
+		expect(harness.provider.createCalls).toHaveLength(1);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+		});
+	});
+
+	test("an approved resume without push enabled stores the artifact but does not push", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			script: [{ output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict.outcome).toBe("complete");
+		expect(workspace.pushes).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+	});
+
+	for (const [status, code] of [
+		["rejected", "APPROVAL_REJECTED"],
+		["expired", "APPROVAL_EXPIRED"],
+		["pending", "APPROVAL_REQUIRED"],
+	] as const) {
+		test(`a ${status} approval fails the task without provisioning`, async () => {
+			const lifecycle = new FakeLifecycle();
+			lifecycle.approval = { status, payloadSha256: APPROVAL_SHA };
+			const harness = makeHarness({
+				lifecycle,
+				workspaceGit: new FakeWorkspaceGit(),
+				handlerType: "resume_task",
+				job: makeResumeJob(),
+			});
+
+			const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+			expect(verdict).toEqual({
+				outcome: "dead_letter",
+				code,
+				note: `approval ${status}`,
+			});
+			expect(transitionPairs(lifecycle)).toContainEqual([
+				"awaiting_approval",
+				"failed",
+			]);
+			expect(harness.provider.createCalls).toHaveLength(0);
+			expect(lastAttemptOutcome(lifecycle)).toMatchObject({ status: "failed" });
+		});
+	}
+
+	test("a mismatched approval SHA is a bounded conflict and provisions nothing", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = {
+			status: "approved",
+			payloadSha256: "deadbeef".repeat(8),
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "DEPENDENCY_CONFLICT",
+			note: "approval payload mismatch",
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"awaiting_approval",
+			"failed",
+		]);
+		expect(harness.provider.createCalls).toHaveLength(0);
+	});
+
+	test("a missing approval record fails closed", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "NOT_FOUND",
+			note: "approval not found",
+		});
+		expect(harness.provider.createCalls).toHaveLength(0);
+	});
+
+	test("a resume payload without an approvalId is rejected before any work", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			handlerType: "resume_task",
+			job: makeResumeJob({ payload: { taskId: TASK_UUID } }),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "job payload rejected by handler",
+		});
+		expect(lifecycle.calls).toHaveLength(0);
+		expect(harness.provider.createCalls).toHaveLength(0);
+	});
+});
+
+describe("task execution handler — wave 7 push failure", () => {
+	test("a push failure lands at failed with a bounded verdict", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		workspace.pushError = new PlatformError(
+			"GIT_OPERATION_FAILED",
+			"push rejected",
+		);
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "GIT_OPERATION_FAILED",
+			note: "push failed",
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"review_ready",
+			"failed",
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "failed",
+			reason: "push failed",
+		});
+		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 });

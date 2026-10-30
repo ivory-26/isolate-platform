@@ -57,6 +57,11 @@ function createOpenAIRuntimeFactory(
 						organizationId: factoryOptions.toolContext.organizationId,
 						taskId: factoryOptions.toolContext.taskId,
 						scopes: [...(factoryOptions.toolContext.scopes ?? [])],
+						// Wave 7: the tool gate rejects writes outside the authored
+						// ownership list; an empty list means "no writes".
+						fileOwnership: [
+							...(factoryOptions.toolContext.fileOwnership ?? []),
+						],
 					})
 				: undefined;
 		const agent = defineCodingAgent(model, {

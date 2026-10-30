@@ -4,6 +4,7 @@ import {
 	createDb,
 	type PgSql,
 	PostgresAuditRepository,
+	PostgresBranchLockRepository,
 	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
 	PostgresRepositoryRepository,
@@ -33,6 +34,7 @@ import {
 import {
 	type Logger,
 	type OrganizationId,
+	type RepositoryId,
 	PlatformError,
 	type TaskId,
 	type TaskStatus,
@@ -432,6 +434,7 @@ export async function createConfiguredWorkerComposition(
 	const taskRepository = new PostgresTaskRepository(sql);
 	const repositoryRepository = new PostgresRepositoryRepository(sql);
 	const runEventRepository = new PostgresRunEventRepository(sql);
+	const branchLocks = new PostgresBranchLockRepository(sql);
 
 	const overrides: WorkerCompositionOverrides = {
 		usageSink,
@@ -447,6 +450,23 @@ export async function createConfiguredWorkerComposition(
 		// Wave 9 tool audit: one `tool_invocations` row per gated call (executed
 		// or denied), carrying a SHA-256 argument digest — never the arguments.
 		recordToolInvocation: createToolInvocationRecorder(sql),
+		// Wave 9: machine-checkable acceptance criteria, read tenant-scoped.
+		loadAcceptanceChecks: async (input) => {
+			const task = await taskRepository.get(input.taskId);
+			return task === null || task.organization_id !== input.organizationId
+				? null
+				: task.acceptance_checks;
+		},
+		// Wave 9: one writer per repository+branch. A held lease is a bounded
+		// requeue in the handler; the row lease is safe under transaction pooling.
+		acquireBranchLock: async (input) => {
+			const lease = await branchLocks.acquire({
+				organizationId: input.organizationId,
+				repositoryId: input.repositoryId as RepositoryId,
+				branch: input.branch,
+			});
+			return lease.ok ? { release: () => lease.release() } : null;
+		},
 	};
 
 	const sandbox = await selectSandboxProvider(env, deps);

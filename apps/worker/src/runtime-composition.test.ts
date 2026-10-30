@@ -191,6 +191,9 @@ describe("configured composition", () => {
 		expect(typeof composition.overrides.loadValidationPolicy).toBe("function");
 		// Wave 9: the tool audit sink is bound with the database composition.
 		expect(typeof composition.overrides.recordToolInvocation).toBe("function");
+		// Wave 9: acceptance checks and the per-branch lock are bound with the DB.
+		expect(typeof composition.overrides.loadAcceptanceChecks).toBe("function");
+		expect(typeof composition.overrides.acquireBranchLock).toBe("function");
 		expect(composition.overrides.pullRequest).toBeUndefined();
 		expect(composition.githubAuth).toBe(false);
 	});

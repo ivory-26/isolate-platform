@@ -341,3 +341,24 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: Bun's dotenv parser (like most dotenv parsers) treats an unquoted value as ending at the first newline. Quoted multiline values are preserved; unquoted ones are not. The missing tail is unrecoverable from the environment.
 - Correction: the provider now normalizes quoted multiline, literal `\n`, CRLF, single-line and quote-wrapped PEMs, and the worker accepts `GITHUB_APP_PRIVATE_KEY_PATH` for a server-side file read. A truncated inline value with no path fails closed with an explicit message.
 - Prevention: for long secrets, prefer a file path over a pasted multiline value, or quote the value in `.env`. Verify completeness by checking for the `END` marker at boot, never by printing the key.
+
+## 2026-10-30 — W7: Modal rejects `blockNetwork` together with an egress allowlist
+
+- Symptom: the first live GitHub push acceptance failed at sandbox provisioning. The task reached `executing`, no `workspace.cloned` event existed, no sandbox usage row was written, and the handler returned an opaque `INTERNAL`/retry verdict. No branch was pushed; zero sandboxes remained.
+- Root cause: `ModalSandboxProvider` sent `{ blockNetwork: false, outboundDomainAllowlist: [...] }`. Modal's `SandboxCreateParams` explicitly says the allowlist "cannot be used with `blockNetwork`", and it rejects the combination even when the value is `false`.
+- Correction: allowlist egress now omits `blockNetwork` entirely (and the real client conditionally spreads it), so the allowlist alone means "network on, confined to these domains". Deny still sends `blockNetwork: true`. Tests assert the key is absent for allowlist mode.
+- Prevention: read the field-level "cannot be used with" notes in the provider d.ts, not just the field names. The deny-egress live pass from wave 6 did not exercise this branch; the first allowlist run did.
+
+## 2026-10-30 — W7: file tools were rooted at the sandbox, git at the repo checkout
+
+- Symptom: before the live push run, review showed `repo.write_file("LIVE_ACCEPTANCE.md")` would write to `<workspaceRoot>/LIVE_ACCEPTANCE.md` while `git add/commit/diff` ran in `<workspaceRoot>/repo`. The commit would have seen no changes, or the file would have been outside the repository.
+- Root cause: the wave-7 backend added `repoPath` for git operations but left `readFile/listFiles/search/writeFile/exec` rooted at the sandbox workspace.
+- Correction: every file/exec/git operation now roots at the resolved `repoPath` (still confined to the policy workspace), with a test that a custom checkout path is honored and `..` is rejected.
+- Prevention: when a component has two roots (sandbox vs checkout), resolve every operation against the narrower one and assert the path in tests.
+
+## 2026-10-30 — W7: adapter errors collapsed to INTERNAL and hid the failure stage
+
+- Symptom: the failed live run logged only `code: INTERNAL`, so the provisioning failure could not be identified from worker output or persisted attempts.
+- Root cause: `SandboxError` is not a `PlatformError`; the handler's `toVerdict` mapped every non-PlatformError to retry `INTERNAL` without the adapter code.
+- Correction: `SandboxError` codes are mapped to bounded platform codes (`PROVIDER_UNAVAILABLE` → `INTEGRATION_UNAVAILABLE` retry; policy/other failures → dead-letter), and the failure log carries a bounded `sandboxCode` field. No message, path or credential is logged.
+- Prevention: every adapter boundary that can throw should map its own bounded code; "unknown → INTERNAL" is a last resort, not the normal path for a typed adapter.

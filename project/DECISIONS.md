@@ -268,3 +268,10 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: Bun's dotenv parser treats an unquoted multiline value as a single line, so a pasted PEM arrives truncated at `-----BEGIN PRIVATE KEY-----` and no parser change can recover the rest. The path form uses the PKCS#8 file the operator already has, without hand-editing hundreds of `\n` escapes. The file is read once at worker boot and never logged.
 - Consequences: `.env` can carry either a quoted multiline PEM, a `\n`-escaped one-liner, or `GITHUB_APP_PRIVATE_KEY_PATH`. A partial key configuration fails closed with `MISSING_CONFIG`; an incomplete inline value with no path fails with an explicit "quote the multiline value or set GITHUB_APP_PRIVATE_KEY_PATH" message.
 - Alternatives rejected: custom `.env` parsing to reassemble unquoted multiline values (reads a secrets file outside the app's normal env contract and is fragile); requiring base64 (still a manual one-line transformation); silently using the truncated key (guaranteed auth failure at the first token mint).
+
+## 2026-10-30 — W7: allowlist egress omits `blockNetwork`
+
+- Decision: `ModalSandboxProvider` maps `egress: {mode:"allowlist"}` to `outboundDomainAllowlist` **without** a `blockNetwork` field; `egress: {mode:"deny"}` maps to `blockNetwork: true`. The normalized `ModalCreateParams.blockNetwork` is optional and the real client emits it only when defined.
+- Rationale: Modal rejects an allowlist combined with `blockNetwork` even when it is `false`; the d.ts states the two are mutually exclusive. Omitting the flag is the only valid representation of "network on, confined to these domains".
+- Consequences: the first live allowlist clone/push attempt failed before a sandbox was created; after the fix, the parameter shape is covered by fake-client tests. The corrected live rerun awaits explicit authorization because the credit policy forbids retrying after a failure without asking.
+- Alternatives rejected: sending `blockNetwork: true` with the allowlist (rejected by Modal and would block the clone); removing the allowlist (would leave network unrestricted).

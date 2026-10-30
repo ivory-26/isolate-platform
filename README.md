@@ -4,7 +4,7 @@
 
 An autonomous DevSecOps control plane: accept an engineering task, plan and implement a change with a Mastra agent runtime inside a durable worker, validate it through a bounded repair loop, and emit reviewable pull requests — with policy gates, approvals, and audit at every boundary.
 
-**Stack**: Bun workspaces · TypeScript · Mastra (`@mastra/core`) as agent/workflow runtime · Neon PostgreSQL as system of record (data plane) · Zod everywhere · Biome · Bun test · OpenAI-compatible model providers (Baseten Muse Spark Open planned for the provider plane).
+**Stack**: Bun workspaces · TypeScript · Mastra (`@mastra/core`) as agent/workflow runtime · Neon PostgreSQL as system of record (data plane) · Zod everywhere · Biome · Bun test · OpenAI-compatible Muse models (Meta Model API for dev/pre-production, Baseten for production).
 
 ## What is built in this repo (event week)
 

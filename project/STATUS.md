@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-29 (wave 6 merged to `main` at `8cd5260`; live provider acceptance complete; Google consent is the remaining browser check)
+Last updated: 2026-10-30 (wave 6 on `main`; Meta contributor inference validated for dev/pre-production; Google auth working locally)
 
 ## Current: wave 6 — Google sign-in, task intent persisted, real adapters bound
 
@@ -9,7 +9,8 @@ Last updated: 2026-10-29 (wave 6 merged to `main` at `8cd5260`; live provider ac
 - **Task intent is persisted**: migration `0004_task_context.sql` adds `tasks.goal`, `tasks.acceptance_criteria` and `tasks.file_ownership`; it is **applied to Neon `isolate-platform`** (columns and both array CHECKs verified via `information_schema`/`pg_constraint`). Submission collects them; `PostgresTaskContextRepository` serves the worker's `loadTaskContext` from one tenant-scoped task⋈repository read, failing closed on missing/terminal/foreign rows.
 - **The wave-4 boundary is closed**: `CodingAgentRuntimeFactoryOptions` now receives the per-job `sandboxBackend` and trusted task ids; the worker builds a policy-gated `SandboxToolBackend` over the provisioned handle. The real worker composition binds the Postgres queue, usage sink and context loader, selects Modal only when opted in (app resolution stays lazy, no network at boot), and selects Baseten only when keyed. Every provider choice fails closed.
 - **Data relations**: `public.users` ↔ `neon_auth.user` stay bridged by the same UUID (no cross-schema FK; `neon_auth` is Neon-owned). `memberships.user_id`, `tasks.created_by`, `tasks.repository_id` and `repositories.organization_id` keep real intra-platform FKs; identity mirroring runs on every session read, and `users.email UNIQUE` prevents two identities claiming one address.
-- **Model**: Meta Muse Spark Open is the only configured inference model (`meta-models/muse-spark-open-1026`, confirmed present in `GET /v1/models`). No fallback model or provider exists; legacy non-Muse gateway settings were removed from `.env.example`.
+- **Model split**: `INFERENCE_PROVIDER=meta` is the local/dev and pre-production path — Meta Model API `https://api.meta.ai/v1`, model `muse-spark-1.3-contributor` only. `INFERENCE_PROVIDER=baseten` is production — `meta-models/muse-spark-open-1026` only. No other model or provider exists. A bounded Meta agent turn was verified: one plan, 103 prompt / 367 completion tokens, 4.5 s, usage recorded and cleaned up.
+- **Reasoning-model guard**: an empty agent turn at the output-token cap is now `BUDGET_EXCEEDED`, not completion (Muse Spark 1.3 spends the budget on reasoning first).
 - **Keyed acceptance (2026-10-29, one bounded run)**: `GET /v1/models` listed 20 models with the target present → one completion `HTTP 200`, prompt 148 / completion 16 tokens, no tools, `max_tokens=16` → one Modal sandbox (`0.125 CPU / 512 MiB / 60 s`) `echo isolate-ok` exit 0 → terminated and confirmed destroyed. Both usage rows were written to a temporary organization, read back, printed and cleaned up. `cost_usd` is null because no trusted price table is configured; no cost was guessed.
 - Gates on `task/w6-finish`: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **946 pass / 0 fail / 4 skip** offline (×2) and **950 pass / 0 fail** with live Neon · web production build green · client sweep **30 checks** · production smoke green · `acceptance:offline` PASS (run with `--no-env-file`; it correctly refuses when keyed env is present).
 

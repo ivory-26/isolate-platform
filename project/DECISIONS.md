@@ -152,6 +152,14 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: `bun.lock` is a single root file shared by every worktree — the one file class AGENTS.md reserves for the coordinator. W4-SBX and W4-WRK also carry uncommitted `bun.lock` changes (Modal / Mastra dependencies), so the coordinator must reconcile the three lockfile deltas rather than let the last merge win.
 - Alternatives rejected: committing the app change without the lockfile (CI's `--frozen-lockfile` install fails, so the branch would be unmergeable); vendoring the SDK (the dependency is already published and version-pinned).
 
+## 2026-10-30 — W6.1: Meta Model API is the dev/pre-production inference path; Baseten is production
+
+- Decision: `INFERENCE_PROVIDER` accepts `none | meta | baseten`. `meta` uses `https://api.meta.ai/v1` with `META_API_KEY` and exactly `muse-spark-1.3-contributor`; `META_MODEL_ID` may only repeat that id (any other value fails closed). `baseten` stays the production path with `meta-models/muse-spark-open-1026`.
+- Rationale: agentic plan tests should run on Meta's contributor access while it is available; Baseten credits are reserved for production and a single pre-production pass.
+- Consequences: both providers share the same Mastra runtime factory and tool wiring; only the model config differs. Neither provider is auto-selected: the worker fails closed when the selected provider's key is missing.
+- Verified: one bounded Meta agent turn produced a 74-character plan with 103 prompt / 367 completion tokens (including reasoning) in 4.5 s; the usage row was recorded and cleaned up.
+- Alternatives rejected: a single provider with a runtime-overridable model id (silent model drift); hard-coding a Meta/Baseten switch on `NODE_ENV` (deployment-specific and easy to get wrong).
+
 ## 2026-10-29 — W6: Meta Muse Spark Open `1026` is the only inference model
 
 - Decision: `BASETEN_DEFAULT_MODEL_ID` is `meta-models/muse-spark-open-1026`; `BASETEN_MODEL_ID` exists only to pin the same family, not to select another vendor/model. The legacy `MODEL_PROVIDER`/`LLM_*` gateway block was removed from `.env.example`, and no code path reads it.

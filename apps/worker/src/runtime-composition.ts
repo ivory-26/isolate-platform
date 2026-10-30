@@ -16,7 +16,10 @@ import { type Logger, PlatformError, type UsageSink } from "@isolate/shared";
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
 import type { QueueLike } from "./contracts";
-import { createBasetenRuntimeFactory } from "./runtime-factory";
+import {
+	createBasetenRuntimeFactory,
+	createMetaRuntimeFactory,
+} from "./runtime-factory";
 import {
 	createSandboxToolBackend,
 	createWorkspaceToolPolicy,
@@ -111,13 +114,12 @@ export function selectRuntimeFactory(
 ): WorkerCompositionOverrides["createRuntime"] {
 	const name = readInferenceProvider(env);
 	if (name === "none") return undefined;
-	if (name !== "baseten") {
-		throw new PlatformError(
-			"MISSING_CONFIG",
-			"INFERENCE_PROVIDER must be 'none' or 'baseten'",
-		);
-	}
-	return createBasetenRuntimeFactory(env);
+	if (name === "meta") return createMetaRuntimeFactory(env);
+	if (name === "baseten") return createBasetenRuntimeFactory(env);
+	throw new PlatformError(
+		"MISSING_CONFIG",
+		"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
+	);
 }
 
 function sandboxBackendFactory(

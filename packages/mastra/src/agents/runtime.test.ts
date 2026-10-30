@@ -146,6 +146,39 @@ describe("createMastraAgentRuntime usage mapping", () => {
 		expect(order).toEqual(["usage:start", "usage:end", "record"]);
 	});
 
+	test("empty text at the output cap is BUDGET_EXCEEDED, not completion", async () => {
+		const caps = {
+			maxOutputTokensPerTurn: 128,
+			maxTaskTokens: 1024,
+			maxSteps: 1,
+		};
+		const truncated = fakeAgent(() => ({
+			text: "",
+			totalUsage: { inputTokens: 10, outputTokens: 128, totalTokens: 138 },
+		}));
+		const runtime = runtimeWith(truncated.agent, { caps });
+		await expect(
+			runtime.runTurn({
+				prompt: "go",
+				context: CONTEXT,
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
+
+		const finished = fakeAgent(() => ({
+			text: "",
+			totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+		}));
+		const doneRuntime = runtimeWith(finished.agent, { caps });
+		expect(
+			await doneRuntime.runTurn({
+				prompt: "go",
+				context: CONTEXT,
+				signal: new AbortController().signal,
+			}),
+		).toBe("");
+	});
+
 	test("falls back to result.usage and accepts OpenAI-style token aliases", async () => {
 		const fake = fakeAgent(() => ({
 			text: "ok",

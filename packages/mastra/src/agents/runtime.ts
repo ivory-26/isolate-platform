@@ -275,6 +275,20 @@ export function createMastraAgentRuntime(
 						await onUsage(usage);
 					}
 				}
+				// Reasoning models can spend the whole output budget on reasoning and
+				// return empty text. That means "truncated", not "no further work":
+				// the empty-output completion protocol must not treat it as done.
+				if (
+					caps !== undefined &&
+					result.text === "" &&
+					usage !== null &&
+					usage.completionTokens >= caps.maxOutputTokensPerTurn
+				) {
+					throw new PlatformError(
+						"BUDGET_EXCEEDED",
+						"agent turn exhausted its output budget",
+					);
+				}
 				const finished: AgentTurnRecord = {
 					turn,
 					status: "finished",

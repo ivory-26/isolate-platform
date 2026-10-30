@@ -166,6 +166,14 @@ Started 2026-10-29. Goal: a signed-in caller sees only their own organization's 
 
 ### Status: **done — committed on `task/w5-auth`, not pushed**
 
+## Wave 6.1 — Meta contributor inference for dev/pre-production (2026-10-30)
+
+- `INFERENCE_PROVIDER=meta` → Meta Model API (`https://api.meta.ai/v1`), model `muse-spark-1.3-contributor` only; `META_MODEL_ID` rejects any other id. `INFERENCE_PROVIDER=baseten` remains production (`meta-models/muse-spark-open-1026`).
+- Shared Mastra runtime factory for both; `createMetaRuntimeFactory`/`createBasetenRuntimeFactory`.
+- Reasoning-model guard: empty text at the per-turn output cap throws `BUDGET_EXCEEDED` instead of signalling completion.
+- Bounded live check: one Meta agent plan turn (1024-token cap), 103 prompt / 367 completion tokens, 4.5 s; usage row recorded and cleaned. Offline gates green.
+- Status: **done** — keys are read only from `.env`; no value printed or committed.
+
 ## Wave 6 — Auth completion + real adapter integration (branch `task/w6-finish`, worktree `../worktrees-platform/w6-finish`)
 
 Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth story (Google sign-in, task intent in the DB) and remove the wave-4 integration boundary so the real Baseten/Modal adapters can be selected at boot once keys exist.

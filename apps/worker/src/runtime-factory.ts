@@ -3,6 +3,8 @@ import {
 	type CodingAgentRuntimeFactory,
 	createMastraAgentRuntime,
 	defineCodingAgent,
+	metaModelConfig,
+	type OpenAICompatibleModelConfig,
 	type UsagePriceTable,
 	wireSandboxTools,
 } from "@isolate/mastra";
@@ -36,11 +38,10 @@ export type BasetenRuntimeFactoryOptions = {
 	priceTable?: UsagePriceTable;
 };
 
-export function createBasetenRuntimeFactory(
-	env: Record<string, string | undefined>,
-	options: BasetenRuntimeFactoryOptions = {},
+function createOpenAIRuntimeFactory(
+	model: OpenAICompatibleModelConfig,
+	options: BasetenRuntimeFactoryOptions,
 ): CodingAgentRuntimeFactory {
-	const model = basetenModelConfig(env);
 	const agentId = options.agentId ?? AGENT_ID;
 	const agentName = options.agentName ?? AGENT_NAME;
 	const modelIdentity = {
@@ -85,4 +86,24 @@ export function createBasetenRuntimeFactory(
 				: { priceTable: options.priceTable }),
 		});
 	};
+}
+
+/** Production inference: Baseten, Meta Muse Spark Open 1026 only. */
+export function createBasetenRuntimeFactory(
+	env: Record<string, string | undefined>,
+	options: BasetenRuntimeFactoryOptions = {},
+): CodingAgentRuntimeFactory {
+	return createOpenAIRuntimeFactory(basetenModelConfig(env), options);
+}
+
+/**
+ * Local/dev + pre-production agent tests: Meta Model API, Muse Spark 1.3
+ * Contributor only. Same runtime/tool wiring; the provider config is the only
+ * difference.
+ */
+export function createMetaRuntimeFactory(
+	env: Record<string, string | undefined>,
+	options: BasetenRuntimeFactoryOptions = {},
+): CodingAgentRuntimeFactory {
+	return createOpenAIRuntimeFactory(metaModelConfig(env), options);
 }

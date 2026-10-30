@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { SandboxToolBackend } from "@isolate/mastra";
-import { createBasetenRuntimeFactory } from "./runtime-factory";
+import {
+	createBasetenRuntimeFactory,
+	createMetaRuntimeFactory,
+} from "./runtime-factory";
 
 const backend: SandboxToolBackend = {
 	async readFile() {
@@ -61,5 +64,22 @@ describe("createBasetenRuntimeFactory", () => {
 			},
 		});
 		expect(bound.id).toBe("coding-agent");
+	});
+
+	test("builds a Meta runtime pinned to the contributor model", () => {
+		const factory = createMetaRuntimeFactory({ META_API_KEY: "test-meta-key" });
+		const runtime = factory({ caps });
+		expect(runtime.id).toBe("coding-agent");
+		expect(runtime.name).toBe("Coding Agent");
+	});
+
+	test("Meta factory fails closed without its key or with another model", () => {
+		expect(() => createMetaRuntimeFactory({})).toThrow(/META_API_KEY/);
+		expect(() =>
+			createMetaRuntimeFactory({
+				META_API_KEY: "test-meta-key",
+				META_MODEL_ID: "muse-spark-1.3",
+			}),
+		).toThrow(/META_MODEL_ID/);
 	});
 });

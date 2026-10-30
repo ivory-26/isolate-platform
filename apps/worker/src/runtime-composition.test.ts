@@ -97,6 +97,17 @@ describe("inference provider selection", () => {
 		});
 		expect(typeof factory).toBe("function");
 	});
+
+	test("meta requires its key and yields a factory when present", () => {
+		expect(() => selectRuntimeFactory({ INFERENCE_PROVIDER: "meta" })).toThrow(
+			/META_API_KEY/,
+		);
+		const factory = selectRuntimeFactory({
+			INFERENCE_PROVIDER: "meta",
+			META_API_KEY: "test-meta-key",
+		});
+		expect(typeof factory).toBe("function");
+	});
 });
 
 describe("configured composition", () => {

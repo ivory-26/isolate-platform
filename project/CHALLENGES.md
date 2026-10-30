@@ -295,6 +295,12 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Correction: the handler now builds a policy-gated `SandboxToolBackend` from the provisioned handle and passes it plus the trusted task ids to the factory; the factory wires `wireSandboxTools(...).forTask(...)`.
 - Prevention: when a per-job resource is created by one layer and needed by another, put it in the interface between them explicitly; "provider-agnostic" must not mean "resource-free".
 
+## 2026-10-30 — W6.1: a reasoning model spends the output cap before writing an answer
+- Symptom: the first bounded Meta agent turn returned an empty string with exactly 128 completion tokens; the task handler's completion protocol would have read that as "no further work".
+- Root cause: Muse Spark 1.3 is a reasoning model. A direct probe at `max_tokens=256` reported 173 reasoning tokens and only 2 content characters; at 128 the budget was exhausted during reasoning, so `result.text` was empty and `finish_reason` was `length`.
+- Correction: `createMastraAgentRuntime` now throws `BUDGET_EXCEEDED` when the text is empty **and** provider-reported completion tokens reach the per-turn cap. The agent test cap is 1024 output tokens. The retry produced a 74-character plan with 367 completion tokens.
+- Prevention: an empty output is ambiguous for reasoning models. Never map "empty text" to completion without also checking the truncated-cap condition; test the two cases separately (truncated vs genuinely done).
+
 ## 2026-10-29 — W6: offline acceptance refuses once a keyed `.env` exists
 - Symptom: `bun run acceptance:offline` exited 1 with "provider environment variables are set (MODAL_API_KEY)" even though the script imports no provider SDK; the same command had passed before the worktree gained a `.env`.
 - Root cause: Bun auto-loads `.env` for `bun run`, and the offline script deliberately refuses to start when any `BASETEN_*`/`MODAL_*` variable is present — exactly the guard that keeps CI key-free.

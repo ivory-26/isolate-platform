@@ -13,6 +13,7 @@
  * configured; the script never invents a price.
  */
 import { createDb, PostgresUsageRepository } from "../packages/db/src/index";
+import type { AgentUsage, TaskContext } from "../packages/mastra/src/index";
 import {
 	type CommandPolicy,
 	createModalSandboxClient,
@@ -20,6 +21,7 @@ import {
 	ModalSandboxProvider,
 	type SandboxHandle,
 } from "../packages/sandbox/src/index";
+import { createMetaRuntimeFactory } from "../apps/worker/src/runtime-factory";
 
 const BASETEN_MODEL = "meta-models/muse-spark-open-1026";
 const BASETEN_BASE = "https://inference.baseten.co/v1";
@@ -260,15 +262,74 @@ async function recordAndReport(rows: MeasuredUsage[]): Promise<void> {
 
 const liveBaseten = process.env.BASETEN_LIVE === "1";
 const liveModal = process.env.MODAL_LIVE === "1";
-if (!liveBaseten && !liveModal) {
+const liveMeta = process.env.META_LIVE === "1";
+if (!liveBaseten && !liveModal && !liveMeta) {
 	console.log(
-		"No live provider opted in. Set BASETEN_LIVE=1 and/or MODAL_LIVE=1 to run the bounded acceptance.",
+		"No live provider opted in. Set META_LIVE=1, BASETEN_LIVE=1 and/or MODAL_LIVE=1 to run the bounded acceptance.",
 	);
 	process.exit(0);
 }
 
+/**
+ * Bounded agentic plan test on Meta Model API (Muse Spark 1.3 Contributor).
+ * One tool-less agent turn, 1024 output tokens max (reasoning + answer), 1 step.
+ * No sandbox.
+ */
+async function runMeta(): Promise<MeasuredUsage[]> {
+	const caps = {
+		maxOutputTokensPerTurn: 1024,
+		maxTaskTokens: 2048,
+		maxSteps: 1,
+	};
+	let usage: AgentUsage | null = null;
+	const factory = createMetaRuntimeFactory(process.env);
+	const runtime = factory({
+		caps,
+		onUsage: (reported: AgentUsage) => {
+			usage = reported;
+		},
+	});
+	const context: TaskContext = {
+		taskId: "00000000-0000-4000-8000-000000000001",
+		organizationId: "00000000-0000-4000-8000-000000000002",
+		goal: "Plan one step for adding a health endpoint.",
+		repoUrl: "https://github.com/example/repo.git",
+		baseBranch: "main",
+		isolatedBranch: "task/plan-check",
+		fileOwnership: [],
+		acceptanceCriteria: [],
+		limits: {
+			max_agent_turns: 1,
+			max_repair_attempts: 0,
+			max_duration_ms: 60_000,
+		},
+	};
+	const startedAt = Date.now();
+	const text = await runtime.runTurn({
+		prompt:
+			"Planning only. Reply in one short sentence naming the first step to add a health-check endpoint to a web app.",
+		context,
+		signal: AbortSignal.timeout(60_000),
+	});
+	const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+	console.log(
+		`Meta agent turn: ${seconds}s; output ${text.length} chars; ${text.slice(0, 200)}`,
+	);
+	const reported: AgentUsage | null = usage;
+	return [
+		{
+			provider: reported?.providerId ?? "meta",
+			modelId: reported?.modelId ?? "muse-spark-1.3-contributor",
+			promptTokens: reported?.promptTokens ?? null,
+			completionTokens: reported?.completionTokens ?? null,
+			costUsd: null,
+		},
+	];
+}
+
 // Sequential only: the credit policy forbids parallel live calls.
 const measured: MeasuredUsage[] = [];
+if (liveMeta) measured.push(...(await runMeta()));
 if (liveBaseten) measured.push(...(await runBaseten()));
 if (liveModal) measured.push(...(await runModal()));
 await recordAndReport(measured);

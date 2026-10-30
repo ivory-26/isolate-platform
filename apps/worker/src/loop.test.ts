@@ -875,3 +875,67 @@ describe("worker sanitisation — unit", () => {
 		expect(clampErrorCode("MADE_UP_CODE")).toBe("INTERNAL");
 	});
 });
+
+/* ------------------------ wave 11 — structured metrics ---------------------- */
+
+describe("worker loop — wave 11 metrics", () => {
+	function metricRecords(logs: LogRecord[]): LogFields[] {
+		return logs
+			.filter((log) => log.message === "isolate.metric")
+			.map((log) => log.fields);
+	}
+
+	test("claimed and completed emit one record each", async () => {
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async () => ({ outcome: "complete", note: "SECRET note text" }),
+		};
+		const harness = makeHarness([handler]);
+		harness.queue.jobs.push(makeJob());
+		await eventually(() => harness.queue.ackCompletes.length === 1);
+		const records = metricRecords(harness.logs);
+		expect(records.map((record) => record.metric)).toEqual([
+			"worker.job.claimed",
+			"worker.job.completed",
+		]);
+		expect(records[0]).toMatchObject({
+			jobType: "run_task",
+			attempt: 1,
+		});
+		expect(records[1]).toMatchObject({ outcome: "complete" });
+		// A handler note is never copied into a metric record.
+		expect(JSON.stringify(records)).not.toContain("SECRET");
+		await harness.stop("done");
+	});
+
+	test("failed and dead_letter follow the queue's requeue decision", async () => {
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async () => ({
+				outcome: "retry",
+				code: "AGENT_EXECUTION_FAILED",
+				backoffMs: 5,
+			}),
+		};
+		const harness = makeHarness([handler]);
+		harness.queue.jobs.push(makeJob({ maxAttempts: 2 }));
+		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
+		const records = metricRecords(harness.logs);
+		const names = records.map((record) => record.metric);
+		expect(names.filter((name) => name === "worker.job.failed")).toHaveLength(
+			2,
+		);
+		expect(
+			names.filter((name) => name === "worker.job.dead_letter"),
+		).toHaveLength(1);
+		const failures = records.filter(
+			(record) => record.metric === "worker.job.failed",
+		);
+		expect(failures[0]?.requeued).toBe(true);
+		expect(failures[1]?.requeued).toBe(false);
+		expect(failures[0]?.code).toBe("AGENT_EXECUTION_FAILED");
+		await harness.stop("done");
+	});
+});

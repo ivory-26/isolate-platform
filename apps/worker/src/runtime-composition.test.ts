@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
+	ArtifactRow,
 	PgSql,
 	RepositoryRepository,
 	RepositoryRow,
 	RunEventRow,
+	TaskAttemptRow,
 	TaskRepository,
 	TaskRow,
 } from "@isolate/db";
@@ -15,6 +17,7 @@ import type { Logger, OrganizationId, TaskId } from "@isolate/shared";
 import { workerConfigSchema } from "./config";
 import {
 	createConfiguredWorkerComposition,
+	createRunSummaryReader,
 	createSandboxEnvResolver,
 	createToolInvocationRecorder,
 	loadPullRequestTargetFromEvents,
@@ -566,6 +569,121 @@ describe("wave-8 review reads", () => {
 				organizationId: OTHER_ORG,
 				taskId: TASK,
 			}),
+		).toBeNull();
+	});
+});
+
+describe("wave-11 price table and run summary", () => {
+	const TABLE = {
+		models: [
+			{
+				modelId: "meta-llama/test-model",
+				promptTokenUsdPerMillion: 0.27,
+				completionTokenUsdPerMillion: 0.85,
+			},
+		],
+		sandbox: { cpuSecondUsd: 0.00005, gibSecondUsd: 0.00001 },
+	};
+
+	const ORG = "11111111-1111-4111-8111-111111111111" as OrganizationId;
+	const OTHER_ORG = "22222222-2222-4222-8222-222222222222" as OrganizationId;
+	const TASK = "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f" as TaskId;
+
+	test("a valid COST_PRICE_TABLE is parsed at boot and injected", async () => {
+		const composition = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{ COST_PRICE_TABLE: JSON.stringify(TABLE) },
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(composition.overrides.priceTable).toEqual(TABLE);
+		expect(typeof composition.summarizeTask).toBe("function");
+	});
+
+	test("an absent table leaves cost unknown and never fails boot", async () => {
+		const composition = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{},
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(composition.overrides.priceTable).toBeNull();
+	});
+
+	test("a malformed table fails boot with a bounded code", async () => {
+		await expect(
+			createConfiguredWorkerComposition(
+				{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+				logger(),
+				{ COST_PRICE_TABLE: '{"models": [' },
+				{ createDb: () => ({}) as PgSql },
+			),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+	});
+
+	test("summarizeTask reads usage, attempts and artifacts under one tenant", async () => {
+		const reader = createRunSummaryReader({
+			tasks: {
+				get: async () =>
+					({
+						id: TASK,
+						organization_id: ORG,
+						status: "review_ready",
+						pull_request_number: 4,
+						pull_request_url: "https://github.com/acme/widget/pull/4",
+					}) as unknown as TaskRow,
+			},
+			usage: {
+				sumByTask: async () => ({
+					promptTokens: 120,
+					completionTokens: 30,
+					totalTokens: 150,
+					costUsd: "0.000042",
+				}),
+			},
+			attempts: {
+				listByTask: async () =>
+					[
+						{
+							id: "attempt_1",
+							task_id: TASK,
+							workflow_run_id: null,
+							attempt_index: 1,
+							started_at: new Date(0),
+							finished_at: new Date(1000),
+							outcome: {
+								status: "review_ready",
+								sandboxSeconds: 42,
+								validation: { status: "passed" },
+							},
+						},
+					] as unknown as TaskAttemptRow[],
+			},
+			artifacts: {
+				listByTask: async () =>
+					[{ id: "a1" }, { id: "a2" }] as unknown as ArtifactRow[],
+			},
+		});
+
+		expect(await reader({ organizationId: ORG, taskId: TASK })).toEqual({
+			taskId: TASK,
+			status: "review_ready",
+			promptTokens: 120,
+			completionTokens: 30,
+			sandboxSeconds: 42,
+			costUsd: 0.000042,
+			attempts: 1,
+			artifacts: 2,
+			validation: "passed",
+			pullRequest: {
+				number: 4,
+				url: "https://github.com/acme/widget/pull/4",
+			},
+		});
+
+		// A foreign organization is indistinguishable from an absent task.
+		expect(
+			await reader({ organizationId: OTHER_ORG, taskId: TASK }),
 		).toBeNull();
 	});
 });

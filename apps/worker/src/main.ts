@@ -72,6 +72,8 @@ if (isMain) {
 		workspaceGitBound: composition.overrides.createWorkspaceGit !== undefined,
 		githubAuth: composition.githubAuth,
 		pushApproval: composition.overrides.pushEnabled === true,
+		priceTableConfigured: composition.overrides.priceTable != null,
+		summarizeTaskBound: composition.summarizeTask !== undefined,
 	});
 	const loop = bootstrapWorkers({
 		config,

@@ -365,7 +365,7 @@ function createDeps(
 		sandbox: { cpuCount: 1, memoryMb: 512, lifetimeMs: 60_000 },
 		maxSandboxSeconds: 60,
 		maxCostUsdPerTask: 1,
-		sandboxPriceTable: null,
+		priceTable: null,
 	};
 }
 

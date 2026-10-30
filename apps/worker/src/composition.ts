@@ -103,8 +103,9 @@ function createDefaultSandboxPolicy(): CommandPolicy {
  * overridden; the config only supplies the bounded caps and defaults.
  * W4-OPS wiring (after adapters merge) must supply at least:
  * `provider`, `createRuntime`, `usageSink`, `loadTaskContext`, and a real
- * `sandboxPolicy`; `sandboxPriceTable` should be set whenever sandbox spend
- * must be attributed.
+ * `sandboxPolicy`; `priceTable` should be set (wave 11, loaded from
+ * `COST_PRICE_TABLE` by the configured composition) whenever spend must be
+ * attributed.
  */
 export function createOfflineWorkerDeps(
 	config: WorkerConfig,
@@ -135,7 +136,7 @@ export function createOfflineWorkerDeps(
 		},
 		maxSandboxSeconds: overrides.maxSandboxSeconds ?? config.maxSandboxSeconds,
 		maxCostUsdPerTask: overrides.maxCostUsdPerTask ?? config.maxCostUsdPerTask,
-		sandboxPriceTable: overrides.sandboxPriceTable ?? null,
+		priceTable: overrides.priceTable ?? null,
 		now: overrides.now,
 		// Wave 7 seams. When `lifecycle` is absent the handler keeps the wave-6
 		// semantics and the resume handler is not registered.

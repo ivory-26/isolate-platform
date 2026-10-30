@@ -4,11 +4,13 @@ import type {
 	HandlerContext,
 	HandlerVerdict,
 	JobHandler,
+	QueueLike,
 	WorkerDeps,
 	WorkerJobType,
 	WorkerLoop,
 } from "./contracts";
 import { createHeartbeatTicker } from "./heartbeat";
+import { emitMetric, WORKER_METRICS } from "./metrics";
 import { clampErrorCode, sanitizeMessage, toAckError } from "./sanitize";
 
 /**
@@ -156,18 +158,49 @@ export function createWorkerLoop(
 		}
 	};
 
+	/**
+	 * One bounded failed/dead-letter metric pair per ackFail. `requeued` is the
+	 * queue's decision; when it is known and false the job was dead-lettered.
+	 */
+	const emitJobFailure = (
+		jobLogger: Logger,
+		job: JobRow,
+		code: string,
+		result: Awaited<ReturnType<QueueLike["ackFail"]>> | null,
+	): void => {
+		const fields = {
+			jobId: job.id,
+			taskId: job.taskId,
+			jobType: job.type,
+			code,
+		};
+		emitMetric(jobLogger, WORKER_METRICS.jobFailed, {
+			...fields,
+			...(result === null || !result.ok ? {} : { requeued: result.requeued }),
+		});
+		if (result?.ok === true && !result.requeued) {
+			emitMetric(jobLogger, WORKER_METRICS.jobDeadLetter, fields);
+		}
+	};
+
 	async function processJob(job: JobRow): Promise<void> {
 		const jobLogger = logger.child({ jobId: job.id, jobType: job.type });
 		jobLogger.info("job claimed", {
 			attempt: job.attempts,
 			maxAttempts: job.maxAttempts,
 		});
+		emitMetric(jobLogger, WORKER_METRICS.jobClaimed, {
+			jobId: job.id,
+			taskId: job.taskId,
+			jobType: job.type,
+			attempt: job.attempts,
+		});
 		const handler = handlersByType.get(job.type);
 		if (!handler) {
 			jobLogger.warn("no handler registered for job type", {
 				jobType: job.type,
 			});
-			await settle(
+			const result = await settle(
 				queue.ackFail({
 					jobId: job.id,
 					ownerId: config.workerId,
@@ -177,6 +210,7 @@ export function createWorkerLoop(
 				"ackFail",
 				jobLogger,
 			);
+			emitJobFailure(jobLogger, job, "NOT_FOUND", result);
 			return;
 		}
 
@@ -184,7 +218,7 @@ export function createWorkerLoop(
 		// answer never runs the handler.
 		if (!handler.supports(job.payload)) {
 			jobLogger.warn("payload rejected by handler supports() check");
-			await settle(
+			const result = await settle(
 				queue.ackFail({
 					jobId: job.id,
 					ownerId: config.workerId,
@@ -194,6 +228,7 @@ export function createWorkerLoop(
 				"ackFail",
 				jobLogger,
 			);
+			emitJobFailure(jobLogger, job, "VALIDATION_FAILED", result);
 			return;
 		}
 
@@ -245,7 +280,7 @@ export function createWorkerLoop(
 				});
 				jobController.abort();
 				void attempt.catch(() => null); // swallow the abandoned attempt
-				await settle(
+				const result = await settle(
 					queue.ackFail({
 						jobId: job.id,
 						ownerId: config.workerId,
@@ -255,6 +290,7 @@ export function createWorkerLoop(
 					"ackFail",
 					jobLogger,
 				);
+				emitJobFailure(jobLogger, job, "BUDGET_EXCEEDED", result);
 				return;
 			}
 
@@ -265,7 +301,7 @@ export function createWorkerLoop(
 				jobLogger.error("handler threw; mapped to bounded code", {
 					code: ack.code,
 				});
-				await settle(
+				const result = await settle(
 					queue.ackFail({
 						jobId: job.id,
 						ownerId: config.workerId,
@@ -275,6 +311,7 @@ export function createWorkerLoop(
 					"ackFail",
 					jobLogger,
 				);
+				emitJobFailure(jobLogger, job, ack.code, result);
 				return;
 			}
 
@@ -282,6 +319,12 @@ export function createWorkerLoop(
 			if (verdict.outcome === "complete") {
 				jobLogger.info("job completed", { note: verdict.note });
 				onEvent({ kind: "completed", jobId: job.id });
+				emitMetric(jobLogger, WORKER_METRICS.jobCompleted, {
+					jobId: job.id,
+					taskId: job.taskId,
+					jobType: job.type,
+					outcome: "complete",
+				});
 				const result = await settle(
 					queue.ackComplete(job.id, config.workerId),
 					"ackComplete",
@@ -319,6 +362,7 @@ export function createWorkerLoop(
 					? Math.max(0, Math.min(300_000, Math.floor(verdict.backoffMs)))
 					: null;
 			jobLogger.warn("job failed", { code, requeued, backoffMs });
+			emitJobFailure(jobLogger, job, code, result);
 			onEvent({ kind: "failed", jobId: job.id, code, requeued });
 		} finally {
 			stopController.signal.removeEventListener("abort", abortJob);

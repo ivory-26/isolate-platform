@@ -25,6 +25,7 @@ import {
 import type {
 	AcceptanceCheck,
 	AcceptanceReport,
+	CostPriceTable,
 	ExecutionLifecycle,
 	LifecycleTransitionInput,
 	UsageSink,
@@ -35,8 +36,10 @@ import {
 	errorCodeOf,
 	isPlatformError,
 	type Logger,
+	modelCallCostUsd,
 	type OrganizationId,
 	PlatformError,
+	sandboxCostUsd,
 	type TaskId,
 } from "@isolate/shared";
 import {
@@ -46,6 +49,7 @@ import {
 	runAcceptanceChecks,
 } from "./acceptance";
 import type { HandlerContext, HandlerVerdict, JobHandler } from "./contracts";
+import { emitMetric, WORKER_METRICS } from "./metrics";
 import { readApprovalId, readTaskId } from "./payload";
 import {
 	buildPullRequestTarget,
@@ -224,7 +228,13 @@ export type TaskExecutionDeps = {
 	maxSandboxSeconds: number;
 	/** Config-derived per-task USD cap (usage without a price cannot be capped). */
 	maxCostUsdPerTask: number;
-	sandboxPriceTable?: { cpuSecondUsd: number; gibSecondUsd: number } | null;
+	/**
+	 * Wave 11 trusted price table, loaded by the composition root from
+	 * `COST_PRICE_TABLE` (the handler never reads env). `null`/absent means no
+	 * trusted price: model and sandbox rows keep their unknown (null) cost and
+	 * never a guessed one.
+	 */
+	priceTable?: CostPriceTable | null;
 	now?: () => number;
 	/**
 	 * Wave 7 execution lifecycle. Absent keeps the wave-6 handler semantics:
@@ -406,6 +416,33 @@ function logTurnRecord(logger: Logger, record: AgentTurnRecord): void {
 /** Bounded verdict for a spent budget; static note only. */
 function budgetVerdict(note: string): HandlerVerdict {
 	return { outcome: "dead_letter", code: "BUDGET_EXCEEDED", note };
+}
+
+/**
+ * Cost for one model call from the worker's trusted price table.
+ *
+ * - table absent → the row keeps the runtime-reported value, exactly as
+ *   before wave 11 (null unless the runtime was itself configured with a
+ *   trusted table);
+ * - table present → the table is authoritative; an uncovered model falls back
+ *   to the runtime-reported value rather than inventing a price, so spend caps
+ *   keep working through model-id drift without ever guessing.
+ */
+function trustedModelCostUsd(
+	priceTable: CostPriceTable | null | undefined,
+	usage: AgentUsage,
+): number | null {
+	if (priceTable === null || priceTable === undefined) return usage.costUsd;
+	return (
+		modelCallCostUsd(
+			{
+				modelId: usage.modelId,
+				promptTokens: usage.promptTokens,
+				completionTokens: usage.completionTokens,
+			},
+			priceTable,
+		) ?? usage.costUsd
+	);
 }
 
 function leaseLostVerdict(): HandlerVerdict {
@@ -777,7 +814,9 @@ function createHandler(
 						},
 						onUsage: async (usage: AgentUsage) => {
 							// Spend is persisted per model call before the next turn so
-							// caps and accounting see the real provider numbers.
+							// caps and accounting see the real provider numbers. The cost
+							// comes from the trusted table, never from model output.
+							const costUsd = trustedModelCostUsd(deps.priceTable, usage);
 							await deps.usageSink.record({
 								organizationId: job.organizationId,
 								taskId: job.taskId,
@@ -785,7 +824,7 @@ function createHandler(
 								modelId: usage.modelId,
 								promptTokens: usage.promptTokens,
 								completionTokens: usage.completionTokens,
-								costUsd: usage.costUsd,
+								costUsd,
 							});
 							if (Number.isFinite(usage.promptTokens)) {
 								promptTokens += Math.max(0, usage.promptTokens);
@@ -793,8 +832,8 @@ function createHandler(
 							if (Number.isFinite(usage.completionTokens)) {
 								completionTokens += Math.max(0, usage.completionTokens);
 							}
-							if (usage.costUsd !== null && Number.isFinite(usage.costUsd)) {
-								spentUsd += Math.max(0, usage.costUsd);
+							if (costUsd !== null && Number.isFinite(costUsd)) {
+								spentUsd += Math.max(0, costUsd);
 							}
 						},
 						...(sandboxBackend === undefined
@@ -864,10 +903,15 @@ function createHandler(
 								data: { turn },
 							});
 						}
+						const turnStartedAt = now();
 						const output = await runtime.runTurn({
 							prompt,
 							context,
 							signal: ctx.signal,
+						});
+						emitMetric(ctx.logger, WORKER_METRICS.turnLatencyMs, {
+							turn,
+							durationMs: Math.max(0, now() - turnStartedAt),
 						});
 						if (mode !== null) {
 							await mode.lifecycle.event({
@@ -1163,6 +1207,9 @@ function createHandler(
 							actor: "worker",
 							data: { stage: "command", status: "skipped" },
 						});
+						emitMetric(ctx.logger, WORKER_METRICS.validationOutcome, {
+							outcome: "skipped",
+						});
 					} else {
 						await mode.lifecycle.event({
 							organizationId: job.organizationId,
@@ -1299,12 +1346,22 @@ function createHandler(
 								reason: "validation failed",
 								validation: validation.report,
 							};
+							emitMetric(ctx.logger, WORKER_METRICS.validationOutcome, {
+								outcome: "failed",
+								durationMs: validation.report.durationMs,
+							});
 							return {
 								outcome: "dead_letter",
 								code: "VALIDATION_FAILED",
 								note: "validation failed",
 							};
 						}
+					}
+					if (validationReport !== null) {
+						emitMetric(ctx.logger, WORKER_METRICS.validationOutcome, {
+							outcome: "passed",
+							durationMs: validationReport.durationMs,
+						});
 					}
 
 					const diff = await workspaceGit.diffPatch(
@@ -1575,19 +1632,26 @@ function createHandler(
 					// threw, so accrued sandbox spend is not silently lost.
 					const endedAt = now();
 					const wallSeconds = Math.max(0, (endedAt - createdAt) / 1000);
+					// Attempt bookkeeping keeps the measured sandbox time so the run
+					// summary can report it without a second table.
+					attemptOutcome = {
+						...attemptOutcome,
+						sandboxSeconds: Math.floor(wallSeconds),
+					};
+					emitMetric(ctx.logger, WORKER_METRICS.sandboxSeconds, {
+						seconds: wallSeconds,
+					});
 					try {
 						await deps.provider.destroy(handle);
 					} finally {
-						const priceTable = deps.sandboxPriceTable;
-						const costUsd =
-							priceTable === null || priceTable === undefined
-								? null
-								: deps.sandbox.cpuCount *
-										wallSeconds *
-										priceTable.cpuSecondUsd +
-									(deps.sandbox.memoryMb / 1024) *
-										wallSeconds *
-										priceTable.gibSecondUsd;
+						const costUsd = sandboxCostUsd(
+							{
+								cpuCount: deps.sandbox.cpuCount,
+								memoryMb: deps.sandbox.memoryMb,
+								seconds: wallSeconds,
+							},
+							deps.priceTable ?? null,
+						);
 						await deps.usageSink.record({
 							organizationId: job.organizationId,
 							taskId: job.taskId,

@@ -12,6 +12,7 @@ import type {
 	TaskStatus,
 } from "@isolate/shared";
 import type { HandlerVerdict, JobHandler } from "./contracts";
+import { emitMetric, WORKER_METRICS } from "./metrics";
 import { readApprovalId, readTaskId } from "./payload";
 import {
 	PULL_REQUEST_APPROVAL_ACTION,
@@ -169,10 +170,26 @@ export function createPullRequestHandler(
 		},
 
 		async handle(job, ctx): Promise<HandlerVerdict> {
+			/**
+			 * Wave 11: one bounded `worker.pr.outcome` record per attempt at this
+			 * job. Only the outcome (and a bounded code) is emitted.
+			 */
+			const prOutcome = (
+				outcome: "created" | "recorded" | "failed" | "skipped",
+				code?: string,
+			): void => {
+				emitMetric(ctx.logger, WORKER_METRICS.prOutcome, {
+					taskId: job.taskId,
+					outcome,
+					...(code === undefined ? {} : { code }),
+				});
+			};
+
 			if (
 				readTaskId(job.payload) === null ||
 				readApprovalId(job.payload) === null
 			) {
+				prOutcome("skipped", "VALIDATION_FAILED");
 				return REJECTED_PAYLOAD;
 			}
 
@@ -181,6 +198,7 @@ export function createPullRequestHandler(
 				taskId: job.taskId,
 			});
 			if (task === null) {
+				prOutcome("failed", "NOT_FOUND");
 				return {
 					outcome: "dead_letter",
 					code: "NOT_FOUND",
@@ -193,12 +211,15 @@ export function createPullRequestHandler(
 				task.status === "pull_request_created" ||
 				task.pullRequestNumber !== null
 			) {
+				prOutcome("skipped", "ALREADY_RECORDED");
 				return { outcome: "complete", note: "pull request already recorded" };
 			}
 			if (INELIGIBLE_STATUSES.has(task.status)) {
+				prOutcome("skipped", "TASK_NOT_ELIGIBLE");
 				return { outcome: "complete", note: "task not eligible" };
 			}
 			if (!PR_ELIGIBLE_STATUSES.has(task.status)) {
+				prOutcome("skipped", "APPROVAL_REQUIRED");
 				return {
 					outcome: "complete",
 					note: "task not awaiting pull request approval",
@@ -206,18 +227,23 @@ export function createPullRequestHandler(
 			}
 
 			const approvalId = readApprovalId(job.payload);
-			if (approvalId === null) return REJECTED_PAYLOAD;
+			if (approvalId === null) {
+				prOutcome("skipped", "VALIDATION_FAILED");
+				return REJECTED_PAYLOAD;
+			}
 			const approval = await deps.lifecycle.approvalStatus({
 				organizationId: job.organizationId,
 				taskId: job.taskId,
 				approvalId,
 			});
 			if (approval === null) {
+				prOutcome("skipped", "NOT_FOUND");
 				return { outcome: "complete", note: "approval not found" };
 			}
 			// Rejected / expired / still pending: no PR. The control plane fails
 			// the task on rejection; this handler must not retry.
 			if (approval.status !== "approved") {
+				prOutcome("skipped", "APPROVAL_REQUIRED");
 				return { outcome: "complete", note: `approval ${approval.status}` };
 			}
 
@@ -226,12 +252,14 @@ export function createPullRequestHandler(
 				taskId: job.taskId,
 			});
 			if (target === null) {
+				prOutcome("skipped", "NOT_FOUND");
 				return { outcome: "complete", note: "pull request target unavailable" };
 			}
 			const expectedPayloadSha256 =
 				await pullRequestApprovalPayloadSha256(target);
 			if (approval.payloadSha256.toLowerCase() !== expectedPayloadSha256) {
 				// The approval is bound to a different request: no PR, no retry.
+				prOutcome("skipped", "DEPENDENCY_CONFLICT");
 				return { outcome: "complete", note: "approval payload mismatch" };
 			}
 
@@ -252,6 +280,7 @@ export function createPullRequestHandler(
 				ctx.logger.warn("pull request creation failed", {
 					code: clampErrorCode(created.code),
 				});
+				prOutcome("failed", clampErrorCode(created.code));
 				return failureVerdict(created.code, created.message);
 			}
 
@@ -263,6 +292,7 @@ export function createPullRequestHandler(
 				pullRequestUrl: record.url,
 			});
 			if (!recorded.ok) {
+				prOutcome("failed", "NOT_FOUND");
 				return {
 					outcome: "dead_letter",
 					code: "NOT_FOUND",
@@ -297,6 +327,7 @@ export function createPullRequestHandler(
 				},
 			});
 			ctx.logger.info("pull request recorded", { number: record.number });
+			prOutcome(created.created ? "created" : "recorded");
 			return {
 				outcome: "complete",
 				note: created.created

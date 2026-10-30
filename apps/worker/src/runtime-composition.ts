@@ -1,21 +1,26 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+	type ArtifactRepository,
 	createDb,
 	type PgSql,
+	PostgresArtifactRepository,
 	PostgresAuditRepository,
 	PostgresBranchLockRepository,
 	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
 	PostgresRepositoryRepository,
 	PostgresRunEventRepository,
+	PostgresTaskAttemptRepository,
 	PostgresTaskContextRepository,
 	PostgresTaskRepository,
 	PostgresToolInvocationRepository,
 	PostgresUsageRepository,
 	type RepositoryRepository,
 	type RunEventRepository,
+	type TaskAttemptRepository,
 	type TaskRepository,
+	type UsageRepository,
 } from "@isolate/db";
 import {
 	createGitHubAppTokenProvider,
@@ -34,8 +39,9 @@ import {
 import {
 	type Logger,
 	type OrganizationId,
-	type RepositoryId,
 	PlatformError,
+	type RepositoryId,
+	type RunSummary,
 	type TaskId,
 	type TaskStatus,
 	type UsageSink,
@@ -47,12 +53,14 @@ import type {
 	CreatePullRequestSeam,
 	PullRequestTaskState,
 } from "./create-pull-request-handler";
+import { loadCostPriceTable } from "./pricing";
 import {
 	PULL_REQUEST_APPROVAL_ACTION,
 	type PullRequestTarget,
 	parseGitHubFullName,
 	parsePullRequestApprovalEventData,
 } from "./pull-request-approval";
+import { buildRunSummary } from "./run-summary";
 import {
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
@@ -90,6 +98,12 @@ export type ConfiguredWorkerComposition = {
 	inferenceProvider: string;
 	/** True when a GitHub App broker is configured (no token is exposed). */
 	githubAuth: boolean;
+	/**
+	 * Wave 11 tenant-scoped run summary reader (`usage_records` +
+	 * `task_attempts` + `artifacts`). Bound whenever a database exists; the
+	 * control plane wires its API consumer later.
+	 */
+	summarizeTask?: RunSummaryReader;
 };
 
 export type CompositionDependencies = {
@@ -102,6 +116,54 @@ function usageSinkFor(repository: PostgresUsageRepository): UsageSink {
 		async record(input) {
 			await repository.record(input);
 		},
+	};
+}
+
+/** Tenant-scoped per-task rollup read; `null` for a missing/foreign task. */
+export type RunSummaryReader = (input: {
+	organizationId: OrganizationId;
+	taskId: TaskId;
+}) => Promise<RunSummary | null>;
+
+/**
+ * Binds `buildRunSummary` to the Postgres reads that are already part of the
+ * worker composition. The task read is the tenant gate: a foreign or missing
+ * task is indistinguishable from absent (`null`). Usage uses the existing
+ * exact-decimal aggregate (`sumByTask`), so the summary never re-sums floats.
+ */
+export function createRunSummaryReader(deps: {
+	tasks: Pick<TaskRepository, "get">;
+	usage: Pick<UsageRepository, "sumByTask">;
+	attempts: Pick<TaskAttemptRepository, "listByTask">;
+	artifacts: Pick<ArtifactRepository, "listByTask">;
+}): RunSummaryReader {
+	return async (input) => {
+		const task = await deps.tasks.get(input.taskId);
+		if (task === null || task.organization_id !== input.organizationId) {
+			return null;
+		}
+		const [totals, attempts, artifacts] = await Promise.all([
+			deps.usage.sumByTask(input.taskId),
+			deps.attempts.listByTask(input.taskId),
+			deps.artifacts.listByTask({
+				organizationId: input.organizationId,
+				taskId: input.taskId,
+			}),
+		]);
+		return buildRunSummary({
+			task,
+			// `sumByTask` already returns the bounded per-task totals; the summary
+			// only needs token and cost sums, so one aggregate row is enough.
+			usage: [
+				{
+					prompt_tokens: totals.promptTokens,
+					completion_tokens: totals.completionTokens,
+					cost_usd: totals.costUsd,
+				},
+			],
+			attempts,
+			artifacts,
+		});
 	};
 }
 
@@ -413,6 +475,9 @@ export async function createConfiguredWorkerComposition(
 	deps: CompositionDependencies = {},
 ): Promise<ConfiguredWorkerComposition> {
 	const inferenceProvider = readInferenceProvider(env);
+	// Wave 11: validated at boot. Absence is fine (unknown cost); a present but
+	// malformed table fails closed before any job is claimed.
+	const priceTable = loadCostPriceTable(env);
 	if (!config.databaseUrl) {
 		logger.warn(
 			"worker has no DATABASE_URL; queue, usage and task context stay unbound",
@@ -427,18 +492,23 @@ export async function createConfiguredWorkerComposition(
 
 	const sql = (deps.createDb ?? createDb)(config.databaseUrl);
 	const queue = new PostgresQueueRepository(sql);
-	const usageSink = usageSinkFor(new PostgresUsageRepository(sql));
+	const usageRepository = new PostgresUsageRepository(sql);
+	const usageSink = usageSinkFor(usageRepository);
 	const loadTaskContext = createTaskContextLoader(
 		new PostgresTaskContextRepository(sql),
 	);
 	const taskRepository = new PostgresTaskRepository(sql);
 	const repositoryRepository = new PostgresRepositoryRepository(sql);
 	const runEventRepository = new PostgresRunEventRepository(sql);
+	const taskAttemptRepository = new PostgresTaskAttemptRepository(sql);
+	const artifactRepository = new PostgresArtifactRepository(sql);
 	const branchLocks = new PostgresBranchLockRepository(sql);
 
 	const overrides: WorkerCompositionOverrides = {
 		usageSink,
 		loadTaskContext,
+		// Wave 11: trusted, config-loaded prices. `null` records unknown cost.
+		priceTable,
 		// Wave 7: one durable lifecycle per worker. It is inert until a task
 		// actually moves through the new handler path.
 		lifecycle: new PostgresExecutionLifecycle(sql),
@@ -507,5 +577,13 @@ export async function createConfiguredWorkerComposition(
 		providerName: sandbox.provider.name,
 		inferenceProvider,
 		githubAuth: githubTokenProvider !== null,
+		// Wave 11: read-only rollup over durable rows; the consumer (API) is
+		// wired by the coordinator, not here.
+		summarizeTask: createRunSummaryReader({
+			tasks: taskRepository,
+			usage: usageRepository,
+			attempts: taskAttemptRepository,
+			artifacts: artifactRepository,
+		}),
 	};
 }

@@ -453,22 +453,22 @@ Goal: the agent is triggered by real operational signals and resolves them end t
 Lanes are defined now so future agents can claim them without re-deriving context. Contracts first (coordinator), then two parallel lanes, then integration.
 
 ### W11-0 — Contracts (coordinator)
--  interface in  ( with size + content-type + sha256),  type,  read shape (per-task tokens, sandbox seconds, cost, gate outcomes). No implementation.
+- `BlobStore` interface in `@isolate/shared` (`put/get/list/delete` with size, content type and sha256), `CostPriceTable` type, and a `RunSummary` read shape (per-task tokens, sandbox seconds, cost, gate outcomes). No implementation.
 
-### W11-PLAN —  + docs (owner: agent W11-PLAN, branch )
-- Retire  and its tests; record the decision (already in DECISIONS); document the handler as the runtime of record in . If the user chooses plan execution instead, the lane instead rewrites the workflow around the current helpers with a documented storage/resume design — decide before coding and record it.
+### W11-PLAN — `packages/mastra/**` + docs (owner: agent W11-PLAN, branch `task/w11-plan`)
+- Retire `createSdlcWorkflow` and its tests; the decision is already recorded in `DECISIONS.md`; document the handler as the runtime of record in `ARCHITECTURE.md §3`. If the user chooses plan execution instead, rewrite the workflow around the current helpers with a documented storage/resume design — decide first and record it.
 - DoD: no dead lifecycle left, docs consistent, gates green ×2.
 
-### W11-OBS —  +  +  (owner: agent W11-OBS, branch )
-- A trusted **price table** (config-driven, no guessed numbers) so  is populated from measured tokens/seconds; a  read over  +  +  for a run summary; **structured metrics** emitted through the existing logger ( records with fixed names: claimed/completed/failed/dead_letter, turn latency, sandbox seconds, validation outcome, PR outcome).
-- DoD offline tests with fake clocks/rows; no external backend required; docs updated with the metric vocabulary.
+### W11-OBS — `packages/shared/**` + `apps/worker/**` + `scripts/**` (owner: agent W11-OBS, branch `task/w11-obs`)
+- A trusted **price table** (config-driven, never guessed) so `usage_records.cost_usd` is populated from measured tokens and sandbox seconds; a `summarizeTask` read over `usage_records` + `task_attempts` + `artifacts`; and **structured metrics** through the existing logger (`isolate.metric` records with fixed names: claimed/completed/failed/dead_letter, turn latency, sandbox seconds, validation outcome, PR outcome).
+- DoD: offline tests with fake clocks/rows, no external backend required, docs updated with the metric vocabulary.
 
-### W11-STORE —  +  (owner: agent W11-STORE, branch )
--  over an inline/DB-backed implementation with a 2 MiB ceiling and a documented S3/R2 seam; large diffs and log bundles move to the store,  points at it, and the 256 KiB inline column stays for small payloads. No cloud credentials are introduced in this lane.
-- DoD: migration if needed, tenant-scoped reads, live suite that skips without , worker writes through the store.
+### W11-STORE — `packages/db/**` + `apps/worker/**` (owner: agent W11-STORE, branch `task/w11-store`)
+- `BlobStore` over an inline/DB-backed implementation with a 2 MiB ceiling and a documented S3/R2 seam; large diffs and log bundles move to the store, `artifacts.storage_ref` points at it, and the 256 KiB inline column stays for small payloads. No cloud credentials in this lane.
+- DoD: migration if needed, tenant-scoped reads, live suite that skips without `DATABASE_URL`, worker writes through the store.
 
 ### W11-OPS — Coordinator
-- Merge green lanes, apply any migration with user approval, run full validate ×2, extend  where behaviour changed, update STATUS/CHALLENGES, and confirm the wave-9 live proofs still hold.
+- Merge green lanes, apply any migration with user approval, run full validate ×2, extend `acceptance:offline` where behaviour changed, update STATUS/CHALLENGES, and confirm the wave-9 live proofs still hold.
 
 ## Wave 12 — Product surface (web UI) and deployment decision (planned; the user has design input)
 

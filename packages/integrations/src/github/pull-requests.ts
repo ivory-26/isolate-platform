@@ -56,6 +56,23 @@ import type {
 const CREDENTIAL_LIKE_PATTERN =
 	/(?:github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,})/;
 
+/** `https://user:pass@host` userinfo never survives into a call-site message. */
+const URL_USERINFO_PATTERN = /\/\/[^\s/@]+@/g;
+
+/**
+ * Single choke point for untrusted text (fetch throwables, provider messages):
+ * strip URL userinfo, then every known secret shape plus the live token.
+ */
+function sanitizeMessage(
+	text: string,
+	secrets: readonly string[] = [],
+): string {
+	return redactSecrets(
+		text.replace(URL_USERINFO_PATTERN, "//[credentials-redacted]@"),
+		secrets,
+	);
+}
+
 /**
  * The exact payload a wave-8 approval is bound to. Key order is part of the
  * contract: the worker computes the same string before persisting the
@@ -225,7 +242,7 @@ export async function createPullRequestForTask(
 			auditDetails,
 		);
 	}
-	const redact = (text: string): string => redactSecrets(text, [token]);
+	const redact = (text: string): string => sanitizeMessage(text, [token]);
 	if (validated.title.includes(token) || validated.body.includes(token)) {
 		return refuse(
 			"VALIDATION_FAILED",

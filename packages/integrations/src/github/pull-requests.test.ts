@@ -474,9 +474,9 @@ describe("createPullRequestForTask", () => {
 		expect(calls).toHaveLength(3);
 	});
 
-	test("a thrown fetch error is mapped and redacted", async () => {
+	test("a thrown fetch error is mapped and redacted, including URL userinfo", async () => {
 		const { deps } = buildService({
-			throwOnCreate: `request failed with Bearer ${TOKEN} and ${FABRICATED_TOKEN}`,
+			throwOnCreate: `request failed with Bearer ${TOKEN}, ${FABRICATED_TOKEN} at https://user:pass@api.github.com/repos`,
 		});
 		const failure = expectFailure(
 			await createPullRequestForTask(deps, await approvedInput()),
@@ -485,6 +485,8 @@ describe("createPullRequestForTask", () => {
 		expect(failure.code).toBe("INTEGRATION_UNAVAILABLE");
 		expect(failure.message).not.toContain(TOKEN);
 		expect(failure.message).not.toContain(FABRICATED_TOKEN);
+		expect(failure.message).not.toContain("user:pass");
+		expect(failure.message).toContain("//[credentials-redacted]@");
 	});
 
 	test("malformed create response maps to INTEGRATION_UNAVAILABLE", async () => {

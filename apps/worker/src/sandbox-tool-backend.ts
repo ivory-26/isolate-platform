@@ -33,10 +33,36 @@ const MAX_MATCHES = 1000;
 const MAX_PREVIEW = 300;
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** Wave 7 write surface bounds (the tool layer applies the same caps). */
+export const MAX_WRITE_BYTES = 262_144;
+export const MAX_DIFF_BYTES = 65_536;
+const MAX_DIFF_FILES = 200;
+const MAX_COMMIT_MESSAGE_CHARS = 200;
+const MAX_AUTHOR_NAME_CHARS = 100;
+const MAX_AUTHOR_EMAIL_CHARS = 200;
+const MAX_BRANCH_NAME_CHARS = 200;
+
+const DEFAULT_AUTHOR_NAME = "Isolate Worker";
+const DEFAULT_AUTHOR_EMAIL = "worker@isolate.local";
+
+/**
+ * Trusted file-write executor: argv-only Bun, content arrives on stdin so it
+ * never appears in the process list, logs or a shell. Exact literal, part of
+ * the command policy below.
+ */
+export const WRITE_FILE_SCRIPT =
+	'const fs=require("fs");fs.writeFileSync(process.argv[1],fs.readFileSync(0))';
+
 const ABS_PATH =
 	/^\/(?:[A-Za-z0-9_][A-Za-z0-9_. -]{0,127}\/)*[A-Za-z0-9_][A-Za-z0-9_. -]{0,127}$/;
 const QUERY = /^[A-Za-z0-9_.][A-Za-z0-9_./ :@=+,-]{0,1023}$/;
 const EXECUTABLE = /^[a-z][a-z0-9-]{0,63}$/;
+const COMMIT_MESSAGE = /^[\x20-\x7E]{1,200}$/;
+const AUTHOR_NAME_ARG = /^user\.name=[\x20-\x7E]{1,100}$/;
+const AUTHOR_EMAIL_ARG =
+	/^user\.email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+const DIFF_RANGE = /^origin\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.\.\.HEAD$/;
+const BRANCH_NAME = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
 const PATH_RULE: ArgumentRule = {
 	kind: "pattern",
@@ -47,6 +73,26 @@ const QUERY_RULE: ArgumentRule = {
 	kind: "pattern",
 	pattern: QUERY,
 	maxLength: MAX_QUERY_LENGTH,
+};
+const COMMIT_MESSAGE_RULE: ArgumentRule = {
+	kind: "pattern",
+	pattern: COMMIT_MESSAGE,
+	maxLength: MAX_COMMIT_MESSAGE_CHARS,
+};
+const AUTHOR_NAME_RULE: ArgumentRule = {
+	kind: "pattern",
+	pattern: AUTHOR_NAME_ARG,
+	maxLength: MAX_AUTHOR_NAME_CHARS + "user.name=".length,
+};
+const AUTHOR_EMAIL_RULE: ArgumentRule = {
+	kind: "pattern",
+	pattern: AUTHOR_EMAIL_ARG,
+	maxLength: MAX_AUTHOR_EMAIL_CHARS + "user.email=".length,
+};
+const DIFF_RANGE_RULE: ArgumentRule = {
+	kind: "pattern",
+	pattern: DIFF_RANGE,
+	maxLength: MAX_BRANCH_NAME_CHARS + "origin/...HEAD".length,
 };
 
 /**
@@ -103,6 +149,62 @@ export function createWorkspaceToolPolicy(
 					{ kind: "oneOf", values: ["test", "typecheck", "lint"] },
 				],
 			},
+			// Wave 7 write surface: content is stdin, never argv.
+			{
+				executable: "bun",
+				args: [
+					{ kind: "literal", value: "-e" },
+					{ kind: "literal", value: WRITE_FILE_SCRIPT },
+					PATH_RULE,
+				],
+			},
+			// Commit shape: stage everything, fixed identity config, bounded message.
+			{
+				executable: "git",
+				args: [
+					{ kind: "literal", value: "add" },
+					{ kind: "literal", value: "-A" },
+					{ kind: "literal", value: "--" },
+					{ kind: "literal", value: "." },
+				],
+			},
+			{
+				executable: "git",
+				args: [
+					{ kind: "literal", value: "-c" },
+					AUTHOR_NAME_RULE,
+					{ kind: "literal", value: "-c" },
+					AUTHOR_EMAIL_RULE,
+					{ kind: "literal", value: "commit" },
+					{ kind: "literal", value: "-m" },
+					COMMIT_MESSAGE_RULE,
+				],
+			},
+			{
+				executable: "git",
+				args: [
+					{ kind: "literal", value: "rev-parse" },
+					{ kind: "literal", value: "HEAD" },
+				],
+			},
+			// Bounded diff shapes against the task base ref.
+			{
+				executable: "git",
+				args: [
+					{ kind: "literal", value: "diff" },
+					{ kind: "literal", value: "--numstat" },
+					DIFF_RANGE_RULE,
+				],
+			},
+			{
+				executable: "git",
+				args: [
+					{ kind: "literal", value: "diff" },
+					{ kind: "literal", value: "--no-ext-diff" },
+					{ kind: "literal", value: "--unified=3" },
+					DIFF_RANGE_RULE,
+				],
+			},
 		],
 		maxTimeoutMs: DEFAULT_TIMEOUT_MS,
 		maxOutputBytes: MAX_OUTPUT_BYTES,
@@ -115,6 +217,17 @@ export type SandboxToolBackendOptions = {
 	sandbox: SandboxHandle;
 	policy: CommandPolicy;
 	signal?: AbortSignal;
+	/**
+	 * Wave 7: base branch for `diffSummary`/`diffPatch` (compared as
+	 * `origin/<base>...HEAD`). Supplied by the handler from the task context;
+	 * the backend never stores a whole `TaskContext`.
+	 */
+	baseBranch?: string;
+	/**
+	 * Wave 7: checkout inside the sandbox. Defaults to `<root>/repo`, which is
+	 * where the execution handler clones (`${sandbox.workspaceRoot}/repo`).
+	 */
+	repoPath?: string;
 };
 
 /** Resolves a tool path inside the workspace; never a host path. */
@@ -194,6 +307,49 @@ function platformError(error: unknown): PlatformError {
 	return new PlatformError("AGENT_EXECUTION_FAILED", "sandbox tool failed");
 }
 
+function sha256Hex(value: string): string {
+	return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+}
+
+function boundedBytes(
+	value: number | undefined,
+	fallback: number,
+	cap: number,
+): number {
+	const requested =
+		value === undefined || !Number.isFinite(value)
+			? fallback
+			: Math.floor(value);
+	return Math.max(1, Math.min(requested, cap));
+}
+
+/** `user.name=` / `user.email=` argv values, validated before the policy gate. */
+function authorArg(
+	kind: "name" | "email",
+	value: string | undefined,
+	fallback: string,
+): string {
+	const resolved = value === undefined ? fallback : value;
+	const candidate = `user.${kind}=${resolved}`;
+	const rule = kind === "name" ? AUTHOR_NAME_ARG : AUTHOR_EMAIL_ARG;
+	if (resolved.trim().length === 0 || !rule.test(candidate)) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			`invalid commit author ${kind}`,
+		);
+	}
+	return candidate;
+}
+
+/** True for the mapped form of a sandbox `OUTPUT_LIMIT` failure. */
+function isOutputLimit(error: unknown): boolean {
+	return (
+		error instanceof PlatformError &&
+		error.code === "AGENT_EXECUTION_FAILED" &&
+		error.message === "sandbox output limit exceeded"
+	);
+}
+
 export function createSandboxToolBackend(
 	options: SandboxToolBackendOptions,
 ): SandboxToolBackend {
@@ -204,12 +360,45 @@ export function createSandboxToolBackend(
 			"sandbox policy does not belong to this sandbox",
 		);
 	}
+	// The handler clones to `<root>/repo`; a caller may override the checkout
+	// path, but it always has to resolve inside this workspace.
+	const repoPath = resolveSandboxPath(
+		sandbox.workspaceRoot,
+		options.repoPath ?? `${sandbox.workspaceRoot}/repo`,
+	);
+
+	function diffRange(): string {
+		const baseBranch = options.baseBranch;
+		if (
+			typeof baseBranch !== "string" ||
+			baseBranch.length === 0 ||
+			baseBranch.length > MAX_BRANCH_NAME_CHARS ||
+			!BRANCH_NAME.test(baseBranch) ||
+			baseBranch
+				.split("/")
+				.some(
+					(segment) =>
+						segment === "" ||
+						segment === "." ||
+						segment === ".." ||
+						segment.startsWith("-"),
+				)
+		) {
+			throw new PlatformError(
+				"MISSING_CONFIG",
+				"workspace base branch is not configured",
+			);
+		}
+		return `origin/${baseBranch}...HEAD`;
+	}
 
 	async function run(
 		executable: string,
 		args: readonly string[],
 		timeoutMs?: number,
 		maxOutputBytes?: number,
+		stdinText?: string,
+		cwd?: string,
 	): Promise<CommandResult> {
 		if (signal?.aborted) {
 			throw new PlatformError("LEASE_LOST", "sandbox command cancelled");
@@ -222,12 +411,13 @@ export function createSandboxToolBackend(
 				{
 					executable,
 					args: [...args],
-					cwd: sandbox.workspaceRoot,
+					cwd: cwd ?? sandbox.workspaceRoot,
 					timeoutMs: boundedTimeout(timeoutMs, policy),
 					maxOutputBytes: boundedOutput(maxOutputBytes, policy),
 					egress: { mode: "deny" },
 				},
 				signal,
+				stdinText,
 			);
 		} catch (error) {
 			throw platformError(error);
@@ -331,6 +521,155 @@ export function createSandboxToolBackend(
 			}
 			const result = await run("git", args, gitOptions?.timeoutMs);
 			return toExecResult(result);
+		},
+
+		async writeFile(path, content, writeOptions) {
+			const absolute = resolveSandboxPath(sandbox.workspaceRoot, path);
+			if (typeof content !== "string") {
+				throw new PlatformError("VALIDATION_FAILED", "invalid file content");
+			}
+			const bytes = Buffer.byteLength(content, "utf8");
+			const limit = boundedBytes(
+				writeOptions?.maxBytes,
+				MAX_WRITE_BYTES,
+				MAX_WRITE_BYTES,
+			);
+			if (bytes > limit) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"file content exceeds the write budget",
+				);
+			}
+			// Content travels on stdin only: no shell, no argv-sized payload and
+			// nothing to observe in a process listing.
+			const result = await run(
+				"bun",
+				["-e", WRITE_FILE_SCRIPT, absolute],
+				policy.maxTimeoutMs,
+				undefined,
+				content,
+				sandbox.workspaceRoot,
+			);
+			if (result.exitCode !== 0) {
+				throw new PlatformError(
+					"AGENT_EXECUTION_FAILED",
+					"file could not be written",
+				);
+			}
+			return { bytesWritten: bytes, sha256: sha256Hex(content) };
+		},
+
+		async commitAll(message, commitOptions) {
+			if (typeof message !== "string" || !COMMIT_MESSAGE.test(message)) {
+				throw new PlatformError("VALIDATION_FAILED", "invalid commit message");
+			}
+			const name = authorArg(
+				"name",
+				commitOptions?.authorName,
+				DEFAULT_AUTHOR_NAME,
+			);
+			const email = authorArg(
+				"email",
+				commitOptions?.authorEmail,
+				DEFAULT_AUTHOR_EMAIL,
+			);
+			const staged = await run(
+				"git",
+				["add", "-A", "--", "."],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
+			if (staged.exitCode !== 0) {
+				throw new PlatformError("GIT_OPERATION_FAILED", "git add failed");
+			}
+			const committed = await run(
+				"git",
+				["-c", name, "-c", email, "commit", "-m", message],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
+			if (committed.exitCode !== 0) {
+				throw new PlatformError("GIT_OPERATION_FAILED", "git commit failed");
+			}
+			const head = await run(
+				"git",
+				["rev-parse", "HEAD"],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
+			const commitSha = head.stdout.trim();
+			if (head.exitCode !== 0 || !/^[0-9a-f]{40,64}$/i.test(commitSha)) {
+				throw new PlatformError(
+					"GIT_OPERATION_FAILED",
+					"git commit sha unavailable",
+				);
+			}
+			return { commitSha };
+		},
+
+		async diffSummary() {
+			const result = await run(
+				"git",
+				["diff", "--numstat", diffRange()],
+				policy.maxTimeoutMs,
+				undefined,
+				undefined,
+				repoPath,
+			);
+			if (result.exitCode !== 0) {
+				throw new PlatformError("GIT_OPERATION_FAILED", "git diff failed");
+			}
+			let filesChanged = 0;
+			let insertions = 0;
+			let deletions = 0;
+			const files: string[] = [];
+			for (const line of result.stdout.split("\n")) {
+				if (line.trim() === "") continue;
+				const [added, removed, ...pathParts] = line.split("\t");
+				if (added === undefined || removed === undefined) continue;
+				filesChanged += 1;
+				if (Number.isSafeInteger(Number(added))) insertions += Number(added);
+				if (Number.isSafeInteger(Number(removed))) {
+					deletions += Number(removed);
+				}
+				if (files.length < MAX_DIFF_FILES) {
+					files.push(pathParts.join("\t"));
+				}
+			}
+			return { filesChanged, insertions, deletions, files };
+		},
+
+		async diffPatch(patchOptions) {
+			const limit = boundedBytes(
+				patchOptions?.maxBytes,
+				MAX_DIFF_BYTES,
+				MAX_DIFF_BYTES,
+			);
+			try {
+				const result = await run(
+					"git",
+					["diff", "--no-ext-diff", "--unified=3", diffRange()],
+					policy.maxTimeoutMs,
+					limit,
+					undefined,
+					repoPath,
+				);
+				if (result.exitCode !== 0) {
+					throw new PlatformError("GIT_OPERATION_FAILED", "git diff failed");
+				}
+				return { patch: result.stdout, truncated: false };
+			} catch (error) {
+				// An oversized patch is an explicit truncation, not a failure: the
+				// artifact keeps its bounded bytes and the caller sees the flag.
+				if (isOutputLimit(error)) return { patch: "", truncated: true };
+				throw error;
+			}
 		},
 	};
 }

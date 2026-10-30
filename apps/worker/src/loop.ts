@@ -5,6 +5,7 @@ import type {
 	HandlerVerdict,
 	JobHandler,
 	WorkerDeps,
+	WorkerJobType,
 	WorkerLoop,
 } from "./contracts";
 import { createHeartbeatTicker } from "./heartbeat";
@@ -110,7 +111,7 @@ export function createWorkerLoop(
 	const jobTimeoutMs = deps.jobTimeoutMs ?? config.jobTimeoutMs;
 	const onEvent: EventSink = deps.onEvent ?? (() => {});
 
-	const handlersByType = new Map<JobRow["type"], JobHandler>();
+	const handlersByType = new Map<WorkerJobType, JobHandler>();
 	for (const handler of handlers) {
 		if (handlersByType.has(handler.jobType)) {
 			logger.warn("duplicate handler for job type; last registration wins", {

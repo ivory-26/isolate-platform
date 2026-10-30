@@ -5,6 +5,7 @@ import { type Logger, PlatformError, type UsageSink } from "@isolate/shared";
 import type { WorkerConfig } from "./config";
 import type { JobHandler } from "./contracts";
 import {
+	createResumeTaskHandler,
 	createTaskExecutionHandler,
 	createUnconfiguredRuntimeFactory,
 	type TaskExecutionDeps,
@@ -126,10 +127,21 @@ export function createOfflineWorkerDeps(
 		maxCostUsdPerTask: overrides.maxCostUsdPerTask ?? config.maxCostUsdPerTask,
 		sandboxPriceTable: overrides.sandboxPriceTable ?? null,
 		now: overrides.now,
+		// Wave 7 seams. When `lifecycle` is absent the handler keeps the wave-6
+		// semantics and the resume handler is not registered.
+		lifecycle: overrides.lifecycle,
+		createWorkspaceGit: overrides.createWorkspaceGit,
+		pushEnabled: overrides.pushEnabled ?? false,
 	};
 
 	return {
 		taskExecution,
-		handlers: [createTaskExecutionHandler(taskExecution)],
+		handlers:
+			taskExecution.lifecycle === undefined
+				? [createTaskExecutionHandler(taskExecution)]
+				: [
+						createTaskExecutionHandler(taskExecution),
+						createResumeTaskHandler(taskExecution),
+					],
 	};
 }

@@ -8,11 +8,18 @@ import type {
 } from "@isolate/mastra";
 import type {
 	CommandPolicy,
+	CreateTaskWorkspaceGit,
 	SandboxHandle,
 	SandboxProvider,
 	SandboxSpec,
+	TaskWorkspace,
+	TaskWorkspaceGit,
 } from "@isolate/sandbox";
-import type { UsageSink } from "@isolate/shared";
+import type {
+	ExecutionLifecycle,
+	LifecycleTransitionInput,
+	UsageSink,
+} from "@isolate/shared";
 import {
 	errorCodeOf,
 	isPlatformError,
@@ -25,30 +32,43 @@ import type { HandlerContext, HandlerVerdict, JobHandler } from "./contracts";
 import { clampErrorCode, sanitizeMessage } from "./sanitize";
 
 /**
- * Task execution handler (`run_task`).
+ * Task execution handler (`run_task`) and its wave-7 companion
+ * (`resume_task`).
  *
  * One job = one isolated sandbox = at most `max_agent_turns` agent turns.
  * Everything external (provider, runtime factory, usage sink, task loader,
- * clock) is injected so the handler is exercisable against fakes and so the
- * composition root decides which adapters are real.
+ * workspace git, lifecycle, clock) is injected so the handler is exercisable
+ * against fakes and so the composition root decides which adapters are real.
+ *
+ * Wave 7 adds an opt-in execution lifecycle: when `deps.lifecycle` is present
+ * the handler records one attempt, drives `queued -> planning -> executing ->
+ * validating -> review_ready`, clones the repository through
+ * `CreateTaskWorkspaceGit`, gates completion on a non-empty diff, stores a
+ * bounded diff artifact and — when `pushEnabled` — pauses on a human approval
+ * **before** any sandbox is provisioned. Without `lifecycle` the handler is
+ * byte-for-byte the wave-4/6 implementation (no transitions, no clone).
  *
  * Security / spend invariants:
  * - no credentials or environment values are read here; the prompt carries
  *   only bounded task metadata (goal, repo/branch, acceptance criteria,
  *   ownership, limits), with any URL userinfo stripped.
- * - sandbox egress is always `deny`; the sandbox root comes from the trusted
- *   policy, never from the job payload.
+ * - tool commands always run with `egress: deny`; the sandbox-level allowlist
+ *   is limited to the GitHub endpoints needed by clone/push and only exists in
+ *   lifecycle mode.
  * - `destroy` runs exactly once for every created sandbox (success, thrown
  *   error, abort) and the sandbox usage row is written after teardown.
  * - logs and verdicts carry bounded ids/codes/counts only: no tool payloads,
  *   summaries, prompt text, provider messages or stack frames.
+ * - the approval is bound to `{action, repoUrl, branch}`; the exact canonical
+ *   JSON bytes are hashed and never recomputed by the persistence layer.
  *
  * Idempotency: leases may expire and redeliver a job (at-least-once). The
  * handler keeps no durable local state; a redelivered job re-provisions a new
  * sandbox and may write duplicate `usage_records` rows for work that was
- * already billed. Wave 4 deliberately does not add a dedupe table — duplicate
- * spend rows are preferred over lost spend, and the queue's attempt budget
- * bounds redelivery. Any future dedupe must key on (taskId, turn/run id).
+ * already billed. A redelivered `run_task` whose task already moved past
+ * `queued` tolerates the transition CONFLICT and continues. Duplicate pending
+ * approvals are treated as idempotent success (the DB has a partial unique
+ * index on `(task_id, action)`).
  */
 
 /**
@@ -66,6 +86,13 @@ const MAX_PROMPT_LIST_ITEM_CHARS = 500;
 const MAX_LOGGED_TOOL_CALLS = 50;
 const MAX_LOGGED_TURN = 10_000;
 
+/** Bounded inline diff artifact (matches the DB `artifacts.content` cap). */
+const MAX_ARTIFACT_BYTES = 65_536;
+/** Approval validity window; the resume job must arrive before this. */
+const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+/** Hosts the clone/push helpers are allowed to reach inside the sandbox. */
+const WORKSPACE_EGRESS_HOSTS = ["github.com", "codeload.github.com"] as const;
+
 const TURN_STATUSES: ReadonlySet<string> = new Set([
 	"started",
 	"finished",
@@ -75,6 +102,14 @@ const TURN_STATUSES: ReadonlySet<string> = new Set([
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Bounded approval id: opaque, single component, no control characters. */
+const APPROVAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+const REJECTED_PAYLOAD: HandlerVerdict = {
+	outcome: "dead_letter",
+	code: "VALIDATION_FAILED",
+	note: "job payload rejected by handler",
+};
 
 export type TaskExecutionDeps = {
 	provider: SandboxProvider;
@@ -87,6 +122,10 @@ export type TaskExecutionDeps = {
 	createSandboxBackend?: (input: {
 		sandbox: SandboxHandle;
 		signal: AbortSignal;
+		/** Wave 7: repository base branch, for the backend's diff commands. */
+		baseBranch?: string;
+		/** Wave 7: checkout path inside the sandbox, for the same commands. */
+		repoPath?: string;
 	}) => SandboxToolBackend;
 	usageSink: UsageSink;
 	loadTaskContext(input: {
@@ -113,6 +152,18 @@ export type TaskExecutionDeps = {
 	maxCostUsdPerTask: number;
 	sandboxPriceTable?: { cpuSecondUsd: number; gibSecondUsd: number } | null;
 	now?: () => number;
+	/**
+	 * Wave 7 execution lifecycle. Absent keeps the wave-6 handler semantics:
+	 * no transitions, no events, no clone, no approval gate.
+	 */
+	lifecycle?: ExecutionLifecycle;
+	/** Wave 7 workspace git factory; required whenever `lifecycle` is present. */
+	createWorkspaceGit?: CreateTaskWorkspaceGit;
+	/**
+	 * Approval gate switch. When true (and `lifecycle` is present) a
+	 * `run_task` pauses at `awaiting_approval` before any sandbox exists.
+	 */
+	pushEnabled?: boolean;
 };
 
 /** Reads a UUID taskId from an untrusted payload without throwing. */
@@ -125,6 +176,63 @@ function readTaskId(payload: unknown): string | null {
 	} catch {
 		// Hostile getters/proxies must never make `supports()` throw.
 		return null;
+	}
+}
+
+/** Reads the bounded `resume_task` approval id without throwing. */
+function readApprovalId(payload: unknown): string | null {
+	try {
+		if (payload === null || typeof payload !== "object") return null;
+		if (Array.isArray(payload)) return null;
+		const value = (payload as Record<string, unknown>).approvalId;
+		return typeof value === "string" && APPROVAL_ID_PATTERN.test(value)
+			? value
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Canonical approval payload for `git push_branch`. The field order is part of
+ * the contract: the worker and the approval reader must hash identical bytes.
+ */
+export function pushApprovalPayloadSha256(
+	repoUrl: string,
+	branch: string,
+): string {
+	const canonical = JSON.stringify({
+		action: "git.push_branch",
+		repoUrl,
+		branch,
+	});
+	return new Bun.CryptoHasher("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * A stale optimistic transition. `DEPENDENCY_CONFLICT` is the shared
+ * `ErrorCode`; the lifecycle docs call the outcome `CONFLICT`, so a plain
+ * object carrying that literal is accepted too.
+ */
+function isLifecycleConflict(error: unknown): boolean {
+	const code = (error as { code?: unknown } | null)?.code;
+	return code === "CONFLICT" || code === "DEPENDENCY_CONFLICT";
+}
+
+async function transitionLifecycle(
+	lifecycle: ExecutionLifecycle,
+	logger: Logger,
+	input: LifecycleTransitionInput,
+	tolerateConflict: boolean,
+): Promise<void> {
+	try {
+		await lifecycle.transition(input);
+	} catch (error) {
+		if (tolerateConflict && isLifecycleConflict(error)) {
+			logger.debug("lifecycle transition conflict tolerated", { to: input.to });
+			return;
+		}
+		throw error;
 	}
 }
 
@@ -238,45 +346,91 @@ function toVerdict(error: unknown, ctx: HandlerContext): HandlerVerdict {
 	return { outcome: "retry", code: "INTERNAL" };
 }
 
-export function createTaskExecutionHandler(
+/** How a bounded turn loop finished; mapped to transitions outside. */
+type TurnStop =
+	| { readonly kind: "finished" }
+	| { readonly kind: "cancelled" }
+	| { readonly kind: "lease_lost" }
+	| { readonly kind: "budget"; readonly note: string };
+
+type LifecycleMode = {
+	readonly lifecycle: ExecutionLifecycle;
+	readonly isResume: boolean;
+	readonly pushEnabled: boolean;
+};
+
+function createHandler(
 	deps: TaskExecutionDeps,
+	handlerType: "run_task" | "resume_task",
 ): JobHandler {
 	const now = deps.now ?? Date.now;
 	const maxSandboxMs = Math.max(1, deps.maxSandboxSeconds) * 1000;
 	const maxCostUsd = Math.max(0, deps.maxCostUsdPerTask);
 
 	return {
-		jobType: "run_task",
+		jobType: handlerType,
 
 		supports(payload) {
-			return readTaskId(payload) !== null;
+			if (readTaskId(payload) === null) return false;
+			return handlerType === "run_task" || readApprovalId(payload) !== null;
 		},
 
 		async handle(job, ctx): Promise<HandlerVerdict> {
 			if (readTaskId(job.payload) === null) {
 				// Defensive: the loop already rejected unsupported payloads.
-				return {
-					outcome: "dead_letter",
-					code: "VALIDATION_FAILED",
-					note: "job payload rejected by handler",
-				};
+				return REJECTED_PAYLOAD;
 			}
+			const isResume = handlerType === "resume_task";
+			const resumeApprovalId = isResume ? readApprovalId(job.payload) : null;
+			if (isResume && resumeApprovalId === null) return REJECTED_PAYLOAD;
 
 			let createdAt = 0;
 			let promptTokens = 0;
 			let completionTokens = 0;
 			let spentUsd = 0;
 
-			try {
-				const context = await deps.loadTaskContext({
-					organizationId: job.organizationId,
-					taskId: job.taskId,
-				});
+			let attemptId: string | null = null;
+			let attemptOutcome: Readonly<Record<string, unknown>> = {
+				status: "failed",
+			};
+			let attemptRecorded = false;
+			const finishAttempt = async (): Promise<void> => {
+				const lifecycle = deps.lifecycle;
+				if (lifecycle === undefined || attemptId === null || attemptRecorded) {
+					return;
+				}
+				attemptRecorded = true;
+				try {
+					await lifecycle.attemptFinished({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						attemptId,
+						outcome: attemptOutcome,
+					});
+				} catch (error) {
+					// Attempt bookkeeping must never replace the job's verdict.
+					ctx.logger.warn("attempt finish not recorded", {
+						code: clampErrorCode(errorCodeOf(error)),
+					});
+				}
+			};
 
-				const allowedTurns = Math.floor(context.limits.max_agent_turns);
-				if (!Number.isFinite(allowedTurns) || allowedTurns < 1) {
-					// No turn can run: fail before provisioning anything.
-					return budgetVerdict("task turn budget exhausted");
+			/**
+			 * Provisions one sandbox, optionally clones/branches, runs the
+			 * bounded turns, applies the completion gate and tears down exactly
+			 * once. `mode === null` reproduces the wave-6 flow.
+			 */
+			const runWithSandbox = async (
+				context: TaskContext,
+				allowedTurns: number,
+				mode: LifecycleMode | null,
+			): Promise<HandlerVerdict> => {
+				const createWorkspaceGit = deps.createWorkspaceGit;
+				if (mode !== null && createWorkspaceGit === undefined) {
+					throw new PlatformError(
+						"MISSING_CONFIG",
+						"workspace git not configured",
+					);
 				}
 
 				const spec: SandboxSpec = {
@@ -287,16 +441,99 @@ export function createTaskExecutionHandler(
 					),
 					memoryMb: deps.sandbox.memoryMb,
 					cpuCount: deps.sandbox.cpuCount,
-					egress: { mode: "deny" },
+					// Clone/push need the GitHub endpoints; every tool command still
+					// carries its own `egress: deny` authorization.
+					egress:
+						mode === null
+							? { mode: "deny" }
+							: { mode: "allowlist", hosts: [...WORKSPACE_EGRESS_HOSTS] },
 				};
+
+				if (mode !== null) {
+					const cancelled = await mode.lifecycle.isCancelled({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+					});
+					if (cancelled) {
+						await transitionLifecycle(
+							mode.lifecycle,
+							ctx.logger,
+							{
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								from: mode.isResume ? "executing" : "planning",
+								to: "cancelled",
+								actor: "worker",
+								reason: "task cancelled",
+							},
+							true,
+						);
+						attemptOutcome = { status: "cancelled" };
+						return { outcome: "complete", note: "task cancelled" };
+					}
+				}
 
 				createdAt = now();
 				const handle = await deps.provider.create(spec);
 
 				try {
+					let workspaceGit: TaskWorkspaceGit | null = null;
+					let workspace: TaskWorkspace | null = null;
+					if (mode !== null && createWorkspaceGit !== undefined) {
+						workspaceGit = createWorkspaceGit({
+							provider: deps.provider,
+							sandbox: handle,
+							signal: ctx.signal,
+						});
+						await workspaceGit.assertToolchain(ctx.signal);
+						workspace = await workspaceGit.cloneAndCheckout(
+							{
+								repoUrl: context.repoUrl,
+								baseBranch: context.baseBranch,
+								targetPath: `${handle.workspaceRoot}/repo`,
+							},
+							ctx.signal,
+						);
+						await workspaceGit.createBranch(
+							workspace,
+							context.isolatedBranch,
+							ctx.signal,
+						);
+						await mode.lifecycle.event({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							type: "workspace.cloned",
+							actor: "worker",
+							data: {
+								baseBranch: context.baseBranch,
+								branch: context.isolatedBranch,
+							},
+						});
+						if (!mode.isResume) {
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "planning",
+									to: "executing",
+									actor: "worker",
+									reason: "workspace cloned",
+								},
+								true,
+							);
+						}
+					}
+
+					const repoPath = `${handle.workspaceRoot}/repo`;
 					const sandboxBackend = deps.createSandboxBackend?.({
 						sandbox: handle,
 						signal: ctx.signal,
+						...(mode === null
+							? {}
+							: { baseBranch: context.baseBranch, repoPath }),
 					});
 					const runtime = deps.createRuntime({
 						caps: deps.caps,
@@ -333,54 +570,310 @@ export function createTaskExecutionHandler(
 										organizationId: job.organizationId,
 										taskId: job.taskId,
 										scopes: [],
+										// Wave 7: the tool gate only permits writes inside
+										// the authored ownership list.
+										...(mode === null
+											? {}
+											: { fileOwnership: [...context.fileOwnership] }),
 									},
 								}),
 					});
 
 					const prompt = buildTaskPrompt(context);
-					let verdict: HandlerVerdict = budgetVerdict(
-						"agent turn budget exhausted",
-					);
+					let stop: TurnStop = {
+						kind: "budget",
+						note: "agent turn budget exhausted",
+					};
 
 					for (let turn = 1; turn <= allowedTurns; turn++) {
 						// A false heartbeat means the lease is gone (the loop aborts
 						// the job signal on lease loss); never start another turn.
 						const alive = await ctx.heartbeat();
 						if (!alive || ctx.signal.aborted) {
-							verdict = leaseLostVerdict();
+							stop = { kind: "lease_lost" };
 							break;
 						}
+						if (mode !== null) {
+							const cancelled = await mode.lifecycle.isCancelled({
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+							});
+							if (cancelled) {
+								stop = { kind: "cancelled" };
+								break;
+							}
+						}
 						if (now() - createdAt > maxSandboxMs) {
-							verdict = budgetVerdict("sandbox wall-time budget exhausted");
+							stop = {
+								kind: "budget",
+								note: "sandbox wall-time budget exhausted",
+							};
 							break;
 						}
 						if (promptTokens + completionTokens >= deps.caps.maxTaskTokens) {
-							verdict = budgetVerdict("agent token budget exhausted");
+							stop = { kind: "budget", note: "agent token budget exhausted" };
 							break;
 						}
 						if (spentUsd > 0 && spentUsd >= maxCostUsd) {
-							verdict = budgetVerdict("task cost budget exhausted");
+							stop = { kind: "budget", note: "task cost budget exhausted" };
 							break;
 						}
 
+						if (mode !== null) {
+							await mode.lifecycle.event({
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								workflowRunId: null,
+								type: "agent.turn_started",
+								actor: "worker",
+								data: { turn },
+							});
+						}
 						const output = await runtime.runTurn({
 							prompt,
 							context,
 							signal: ctx.signal,
 						});
+						if (mode !== null) {
+							await mode.lifecycle.event({
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								workflowRunId: null,
+								type: "agent.turn_finished",
+								actor: "worker",
+								data: {
+									turn,
+									emptyOutput: output.trim() === COMPLETION_OUTPUT,
+								},
+							});
+						}
 						if (ctx.signal.aborted) {
-							verdict = leaseLostVerdict();
+							stop = { kind: "lease_lost" };
 							break;
 						}
 						if (output.trim() === COMPLETION_OUTPUT) {
-							verdict = {
-								outcome: "complete",
-								note: "agent reported no further work",
-							};
+							stop = { kind: "finished" };
 							break;
 						}
 					}
-					return verdict;
+
+					if (stop.kind === "lease_lost") {
+						attemptOutcome = { status: "retry" };
+						return leaseLostVerdict();
+					}
+					if (stop.kind === "budget") {
+						if (mode !== null) {
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "executing",
+									to: "failed",
+									actor: "worker",
+									reason: "budget exhausted",
+								},
+								true,
+							);
+							attemptOutcome = { status: "failed", reason: "budget exhausted" };
+						}
+						return budgetVerdict(stop.note);
+					}
+					if (stop.kind === "cancelled") {
+						if (mode !== null) {
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "executing",
+									to: "cancelled",
+									actor: "worker",
+									reason: "task cancelled",
+								},
+								true,
+							);
+							attemptOutcome = { status: "cancelled" };
+						}
+						return { outcome: "complete", note: "task cancelled" };
+					}
+
+					if (mode === null || workspaceGit === null || workspace === null) {
+						return {
+							outcome: "complete",
+							note: "agent reported no further work",
+						};
+					}
+
+					// Completion gate: wave 7 requires a non-empty diff. Ownership
+					// enforcement happens in the tool layer before each write.
+					const stat = await workspaceGit.diffStat(
+						workspace,
+						context.baseBranch,
+						ctx.signal,
+					);
+					if (stat.filesChanged === 0) {
+						await transitionLifecycle(
+							mode.lifecycle,
+							ctx.logger,
+							{
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								from: "executing",
+								to: "failed",
+								actor: "worker",
+								reason: "empty diff",
+							},
+							true,
+						);
+						attemptOutcome = { status: "failed", reason: "empty diff" };
+						return {
+							outcome: "dead_letter",
+							code: "VALIDATION_FAILED",
+							note: "empty diff",
+						};
+					}
+
+					await transitionLifecycle(
+						mode.lifecycle,
+						ctx.logger,
+						{
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							from: "executing",
+							to: "validating",
+							actor: "worker",
+							reason: "diff present",
+						},
+						false,
+					);
+					const diff = await workspaceGit.diffPatch(
+						workspace,
+						context.baseBranch,
+						{ maxBytes: MAX_ARTIFACT_BYTES },
+						ctx.signal,
+					);
+					const sha256 = new Bun.CryptoHasher("sha256")
+						.update(diff.patch)
+						.digest("hex");
+					const bytes = Buffer.byteLength(diff.patch, "utf8");
+					const artifact = await mode.lifecycle.artifact({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						kind: "diff",
+						contentType: "text/x-diff",
+						content: diff.patch,
+						sha256,
+					});
+					await mode.lifecycle.event({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						workflowRunId: null,
+						type: "validation.finished",
+						actor: "worker",
+						data: {
+							filesChanged: stat.filesChanged,
+							insertions: stat.insertions,
+							deletions: stat.deletions,
+							truncated: diff.truncated,
+							artifactId: artifact.artifactId,
+							bytes,
+						},
+					});
+					await mode.lifecycle.event({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						workflowRunId: null,
+						type: "artifact.created",
+						actor: "worker",
+						data: {
+							artifactId: artifact.artifactId,
+							kind: "diff",
+							sha256,
+							bytes,
+							truncated: diff.truncated,
+						},
+					});
+					await transitionLifecycle(
+						mode.lifecycle,
+						ctx.logger,
+						{
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							from: "validating",
+							to: "review_ready",
+							actor: "worker",
+							reason: "diff artifact stored",
+						},
+						false,
+					);
+					attemptOutcome = {
+						status: "review_ready",
+						filesChanged: stat.filesChanged,
+						insertions: stat.insertions,
+						deletions: stat.deletions,
+					};
+
+					if (mode.pushEnabled) {
+						const cancelled = await mode.lifecycle.isCancelled({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+						});
+						if (cancelled) {
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "review_ready",
+									to: "cancelled",
+									actor: "worker",
+									reason: "task cancelled",
+								},
+								true,
+							);
+							attemptOutcome = { status: "cancelled" };
+							return { outcome: "complete", note: "task cancelled" };
+						}
+						try {
+							await workspaceGit.pushBranch(
+								workspace,
+								context.isolatedBranch,
+								ctx.signal,
+							);
+						} catch (error) {
+							ctx.logger.warn("workspace push failed", {
+								code: clampErrorCode(errorCodeOf(error)),
+							});
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "review_ready",
+									to: "failed",
+									actor: "worker",
+									reason: "push failed",
+								},
+								true,
+							);
+							attemptOutcome = { status: "failed", reason: "push failed" };
+							return {
+								outcome: "dead_letter",
+								code: "GIT_OPERATION_FAILED",
+								note: "push failed",
+							};
+						}
+					}
+
+					return {
+						outcome: "complete",
+						note: "agent reported no further work",
+					};
 				} finally {
 					// Teardown is unconditional and exactly once. The spend row is
 					// written after destroy (measured wall time) even if destroy
@@ -411,14 +904,227 @@ export function createTaskExecutionHandler(
 						});
 					}
 				}
+			};
+
+			try {
+				const context = await deps.loadTaskContext({
+					organizationId: job.organizationId,
+					taskId: job.taskId,
+				});
+
+				const allowedTurns = Math.floor(context.limits.max_agent_turns);
+				if (!Number.isFinite(allowedTurns) || allowedTurns < 1) {
+					// No turn can run: fail before provisioning anything.
+					return budgetVerdict("task turn budget exhausted");
+				}
+
+				const lifecycle = deps.lifecycle;
+				if (lifecycle === undefined) {
+					return await runWithSandbox(context, allowedTurns, null);
+				}
+
+				const started = await lifecycle.attemptStarted({
+					organizationId: job.organizationId,
+					taskId: job.taskId,
+					workflowRunId: null,
+				});
+				attemptId = started.attemptId;
+
+				// `queued -> planning`; a stale `from` means a redelivery (or a
+				// resume) already moved the task and is treated as started.
+				await transitionLifecycle(
+					lifecycle,
+					ctx.logger,
+					{
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						from: "queued",
+						to: "planning",
+						actor: "worker",
+						reason: "worker claimed task",
+					},
+					true,
+				);
+
+				if (isResume && resumeApprovalId !== null) {
+					const approval = await lifecycle.approvalStatus({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						approvalId: resumeApprovalId,
+					});
+					const expectedSha = pushApprovalPayloadSha256(
+						context.repoUrl,
+						context.isolatedBranch,
+					);
+
+					if (approval === null) {
+						attemptOutcome = { status: "failed", reason: "approval not found" };
+						return {
+							outcome: "dead_letter",
+							code: "NOT_FOUND",
+							note: "approval not found",
+						};
+					}
+					if (approval.status !== "approved") {
+						const code =
+							approval.status === "rejected"
+								? "APPROVAL_REJECTED"
+								: approval.status === "expired"
+									? "APPROVAL_EXPIRED"
+									: "APPROVAL_REQUIRED";
+						const reason = `approval ${approval.status}`;
+						await transitionLifecycle(
+							lifecycle,
+							ctx.logger,
+							{
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								from: "awaiting_approval",
+								to: "failed",
+								actor: "worker",
+								reason,
+							},
+							true,
+						);
+						attemptOutcome = { status: "failed", reason };
+						return { outcome: "dead_letter", code, note: reason };
+					}
+					if (approval.payloadSha256 !== expectedSha) {
+						await transitionLifecycle(
+							lifecycle,
+							ctx.logger,
+							{
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								from: "awaiting_approval",
+								to: "failed",
+								actor: "worker",
+								reason: "approval payload mismatch",
+							},
+							true,
+						);
+						attemptOutcome = {
+							status: "failed",
+							reason: "approval payload mismatch",
+						};
+						return {
+							outcome: "dead_letter",
+							code: "DEPENDENCY_CONFLICT",
+							note: "approval payload mismatch",
+						};
+					}
+					await transitionLifecycle(
+						lifecycle,
+						ctx.logger,
+						{
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							from: "awaiting_approval",
+							to: "executing",
+							actor: "worker",
+							reason: "approval granted",
+						},
+						true,
+					);
+					return await runWithSandbox(context, allowedTurns, {
+						lifecycle,
+						isResume: true,
+						pushEnabled: deps.pushEnabled === true,
+					});
+				}
+
+				if (deps.pushEnabled === true) {
+					// Approval is requested before any sandbox exists: a paused task
+					// holds no lease, no sandbox and no spend.
+					const payloadSha256 = pushApprovalPayloadSha256(
+						context.repoUrl,
+						context.isolatedBranch,
+					);
+					const expiresAt = new Date(now() + APPROVAL_TTL_MS);
+					let requestedApprovalId: string | null = null;
+					try {
+						const requested = await lifecycle.approvalRequested({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							workflowRunId: null,
+							action: "git.push_branch",
+							payloadSha256,
+							requestedBy: "worker",
+							expiresAt,
+						});
+						requestedApprovalId = requested.approvalId;
+					} catch (error) {
+						// A duplicate pending approval is idempotent success (the
+						// partial unique index rejects the second insert).
+						if (!isLifecycleConflict(error)) throw error;
+					}
+					await transitionLifecycle(
+						lifecycle,
+						ctx.logger,
+						{
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							from: "planning",
+							to: "awaiting_approval",
+							actor: "worker",
+							reason: "git push approval required",
+						},
+						true,
+					);
+					await lifecycle.event({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+						workflowRunId: null,
+						type: "approval.requested",
+						actor: "worker",
+						data: {
+							action: "git.push_branch",
+							payloadSha256,
+							expiresAt: expiresAt.toISOString(),
+							...(requestedApprovalId === null
+								? {}
+								: { approvalId: requestedApprovalId }),
+						},
+					});
+					attemptOutcome = {
+						status: "awaiting_approval",
+						...(requestedApprovalId === null
+							? {}
+							: { approvalId: requestedApprovalId }),
+					};
+					return { outcome: "complete", note: "awaiting approval" };
+				}
+
+				return await runWithSandbox(context, allowedTurns, {
+					lifecycle,
+					isResume: false,
+					pushEnabled: false,
+				});
 			} catch (error) {
 				ctx.logger.warn("task execution failed; mapped to bounded verdict", {
 					code: clampErrorCode(errorCodeOf(error)),
 				});
 				return toVerdict(error, ctx);
+			} finally {
+				await finishAttempt();
 			}
 		},
 	};
+}
+
+/** `run_task` handler: the full wave-7 flow when a lifecycle is injected. */
+export function createTaskExecutionHandler(
+	deps: TaskExecutionDeps,
+): JobHandler {
+	return createHandler(deps, "run_task");
+}
+
+/**
+ * `resume_task` handler: verifies the stored approval (status, expiry, exact
+ * payload SHA) before re-entering the execution flow.
+ */
+export function createResumeTaskHandler(deps: TaskExecutionDeps): JobHandler {
+	return createHandler(deps, "resume_task");
 }
 
 /**

@@ -127,13 +127,17 @@ function sandboxBackendFactory(
 ): (input: {
 	sandbox: { id: string; workspaceRoot: string };
 	signal: AbortSignal;
+	baseBranch?: string;
+	repoPath?: string;
 }) => SandboxToolBackend {
-	return ({ sandbox, signal }) =>
+	return ({ sandbox, signal, baseBranch, repoPath }) =>
 		createSandboxToolBackend({
 			provider,
 			sandbox,
 			policy: createWorkspaceToolPolicy(sandbox.workspaceRoot),
 			signal,
+			...(baseBranch === undefined ? {} : { baseBranch }),
+			...(repoPath === undefined ? {} : { repoPath }),
 		});
 }
 

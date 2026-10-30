@@ -23,8 +23,18 @@ export type HandlerVerdict =
 	  }
 	| { outcome: "dead_letter"; code: string; note?: string };
 
+/**
+ * Queue job types the worker can own.
+ *
+ * `resume_task` is the wave-7 approval-resume job. It is declared here (rather
+ * than only in `@isolate/db`) because the db package's `JobType` union is
+ * owned by another lane; the worker must be able to register a handler for it
+ * without redefining the queue schema.
+ */
+export type WorkerJobType = JobRow["type"] | "resume_task";
+
 export interface JobHandler {
-	jobType: JobRow["type"];
+	jobType: WorkerJobType;
 	/** Pure check before the work starts; a false answer skips the claim. */
 	supports(payload: Record<string, unknown>): boolean;
 	handle(job: JobRow, ctx: HandlerContext): Promise<HandlerVerdict>;

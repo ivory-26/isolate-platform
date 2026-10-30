@@ -287,7 +287,9 @@ function createDeps(
 			const denied = await callTool(registry, "git.push_branch", {
 				branch: "main",
 			});
-			assert.deepEqual(denied, { state: "denied", reason: "POLICY_DENIED" });
+			// Wave 7: push is a sensitive band, so the gate returns APPROVAL_REQUIRED
+			// and the implementation (and backend) is never reached.
+			assert.deepEqual(denied, { state: "denied", reason: "APPROVAL_REQUIRED" });
 			assert.equal(calls.git.length, 0, "denied tool never reached backend");
 
 			if (options.onUsage) {

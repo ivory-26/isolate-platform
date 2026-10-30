@@ -10,6 +10,7 @@
 	},
 	"dependencies": {
 		"@isolate/db": "workspace:*",
+		"@isolate/integrations": "workspace:*",
 		"@isolate/mastra": "workspace:*",
 		"@isolate/sandbox": "workspace:*",
 		"@isolate/shared": "workspace:*",

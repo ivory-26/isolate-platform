@@ -76,6 +76,37 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 		]);
 	});
 
+	test("an implementation-level policy rejection is audited as denied", async () => {
+		const decisions: ToolDecisionRecord[] = [];
+		const registry = wirePlatformTools({
+			policy: allowEverything(),
+			implementations: {
+				"repo.read_file": async () => {
+					// Wave 7 second gate (task ownership) rejects after the policy.
+					throw new PlatformError("POLICY_DENIED", "outside ownership");
+				},
+			},
+			onDecision: (record) => {
+				decisions.push(record);
+			},
+		});
+		const output = await callTool(
+			registry.forTask(taskContext),
+			"repo.read_file",
+			{ path: "src/a.ts" },
+		);
+		expect(output).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(decisions).toEqual([
+			{
+				tool: "repo.read_file",
+				taskId: "task-1",
+				organizationId: "org-1",
+				outcome: "denied",
+				reason: "POLICY_DENIED",
+			},
+		]);
+	});
+
 	test("deny-by-default denies allowlisted tools that missed the risk table", async () => {
 		let implementationCalls = 0;
 		const registry = wirePlatformTools({

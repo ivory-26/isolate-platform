@@ -16,7 +16,11 @@ import { parseJsonbColumn } from "../client";
  */
 
 /** Bounded job vocabulary; mirrors the jobs_type_check SQL constraint. */
-export type JobType = "run_task" | "validate_attempt" | "finalize_review";
+export type JobType =
+	| "run_task"
+	| "validate_attempt"
+	| "finalize_review"
+	| "resume_task";
 
 /** Bounded lifecycle status; mirrors the jobs_status_check SQL constraint. */
 export type JobStatus = "pending" | "claimed" | "done" | "dead_letter";

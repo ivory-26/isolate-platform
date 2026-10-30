@@ -38,6 +38,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@isolate/db": "workspace:*",
+        "@isolate/integrations": "workspace:*",
         "@isolate/mastra": "workspace:*",
         "@isolate/sandbox": "workspace:*",
         "@isolate/shared": "workspace:*",

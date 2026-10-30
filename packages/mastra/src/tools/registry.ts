@@ -240,25 +240,45 @@ export function wirePlatformTools(
 							} satisfies WiredToolOutput;
 						}
 
-						await options.onDecision?.({
-							tool: name,
-							taskId: context.taskId,
-							organizationId: context.organizationId,
-							outcome: "executed",
-							reason: null,
-						});
-
 						try {
 							const value = await implementation(args, context);
+							// Audit reflects what actually ran: an implementation that
+							// rejects on a second gate (task ownership) is a denial, not an
+							// execution, even though the policy allowed the call.
+							await options.onDecision?.({
+								tool: name,
+								taskId: context.taskId,
+								organizationId: context.organizationId,
+								outcome: "executed",
+								reason: null,
+							});
 							return {
 								state: "executed" as const,
 								audited: true,
 								value,
 							} satisfies WiredToolOutput;
 						} catch (error) {
+							const code = errorCodeOf(error);
+							if (code === "POLICY_DENIED" || code === "APPROVAL_REQUIRED") {
+								await options.onDecision?.({
+									tool: name,
+									taskId: context.taskId,
+									organizationId: context.organizationId,
+									outcome: "denied",
+									reason: code,
+								});
+							} else {
+								await options.onDecision?.({
+									tool: name,
+									taskId: context.taskId,
+									organizationId: context.organizationId,
+									outcome: "executed",
+									reason: null,
+								});
+							}
 							return {
 								state: "failed" as const,
-								code: errorCodeOf(error),
+								code,
 							} satisfies WiredToolOutput;
 						}
 					},

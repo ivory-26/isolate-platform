@@ -12,6 +12,7 @@
 		"test": "bun test",
 		"acceptance:offline": "bun scripts/acceptance-offline.ts",
 		"acceptance:live": "bun --env-file .env scripts/acceptance-live.ts",
+		"seed": "bun scripts/seed-workspace.ts",
 		"typecheck": "bun scripts/typecheck-all.ts",
 		"validate": "bun run check && bun run typecheck && bun test"
 	},

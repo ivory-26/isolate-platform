@@ -1,13 +1,19 @@
 import {
 	createDb,
 	type PgSql,
+	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
 	PostgresTaskContextRepository,
 	PostgresUsageRepository,
 } from "@isolate/db";
+import {
+	createGitHubAppTokenProvider,
+	type GitHubTokenProvider,
+} from "@isolate/integrations";
 import type { SandboxToolBackend } from "@isolate/mastra";
 import {
 	createModalSandboxClient,
+	createTaskWorkspaceGit,
 	ModalSandboxProvider,
 	NullProvider,
 	type SandboxProvider,
@@ -49,6 +55,8 @@ export type ConfiguredWorkerComposition = {
 	overrides: WorkerCompositionOverrides;
 	providerName: string;
 	inferenceProvider: string;
+	/** True when a GitHub App broker is configured (no token is exposed). */
+	githubAuth: boolean;
 };
 
 export type CompositionDependencies = {
@@ -141,6 +149,93 @@ function sandboxBackendFactory(
 		});
 }
 
+/**
+ * Builds the GitHub App token broker only when all three values are present.
+ * A partial configuration fails closed instead of silently cloning without a
+ * credential. No value is logged.
+ */
+export function selectGitHubTokenProvider(
+	env: Record<string, string | undefined>,
+): GitHubTokenProvider | null {
+	const appId = env.GITHUB_APP_ID?.trim();
+	const installationId = env.GITHUB_APP_INSTALLATION_ID?.trim();
+	const privateKeyPem = env.GITHUB_APP_PRIVATE_KEY?.replace(
+		/\\n/g,
+		"\n",
+	).trim();
+	const configured = [appId, installationId, privateKeyPem].filter(
+		(value) => value !== undefined && value.length > 0,
+	).length;
+	if (configured === 0) return null;
+	if (!appId || !installationId || !privateKeyPem) {
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			"GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY must all be set",
+		);
+	}
+	const apiBaseUrl = env.GITHUB_API_BASE_URL?.trim();
+	return createGitHubAppTokenProvider({
+		appId,
+		installationId,
+		privateKeyPem,
+		...(apiBaseUrl ? { apiBaseUrl } : {}),
+	});
+}
+
+/** `owner/name` from the task's clean https GitHub URL. */
+export function parseGitHubFullName(repoUrl: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(repoUrl);
+	} catch {
+		throw new PlatformError("VALIDATION_FAILED", "invalid repository URL");
+	}
+	const match = /^\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/.exec(
+		parsed.pathname,
+	);
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.hostname !== "github.com" ||
+		parsed.username !== "" ||
+		parsed.password !== "" ||
+		parsed.search !== "" ||
+		parsed.hash !== "" ||
+		match === null
+	) {
+		throw new PlatformError("VALIDATION_FAILED", "invalid repository URL");
+	}
+	return `${match[1]}/${match[2]}`;
+}
+
+/**
+ * Create-time sandbox environment for a private clone/push. The installation
+ * token is consumed by Git through `GIT_CONFIG_*` (`http.extraheader`), so the
+ * repository URL stays credential-free and the token never enters argv.
+ */
+export function createSandboxEnvResolver(provider: GitHubTokenProvider) {
+	return async (input: {
+		organizationId: string;
+		taskId: string;
+		repoUrl: string;
+	}): Promise<Record<string, string>> => {
+		const repositoryFullName = parseGitHubFullName(input.repoUrl);
+		const installation = await provider.getInstallationToken({
+			repositoryFullName,
+			contents: "write",
+		});
+		const basic = Buffer.from(
+			`x-access-token:${installation.token}`,
+			"utf8",
+		).toString("base64");
+		return {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
+			GIT_TERMINAL_PROMPT: "0",
+		};
+	};
+}
+
 export async function createConfiguredWorkerComposition(
 	config: WorkerConfig,
 	logger: Logger,
@@ -156,6 +251,7 @@ export async function createConfiguredWorkerComposition(
 			overrides: {},
 			providerName: readProviderName(env),
 			inferenceProvider,
+			githubAuth: false,
 		};
 	}
 
@@ -169,6 +265,10 @@ export async function createConfiguredWorkerComposition(
 	const overrides: WorkerCompositionOverrides = {
 		usageSink,
 		loadTaskContext,
+		// Wave 7: one durable lifecycle per worker. It is inert until a task
+		// actually moves through the new handler path.
+		lifecycle: new PostgresExecutionLifecycle(sql),
+		pushEnabled: false,
 	};
 
 	const sandbox = await selectSandboxProvider(env, deps);
@@ -178,14 +278,24 @@ export async function createConfiguredWorkerComposition(
 		overrides.provider = sandbox.provider;
 		overrides.sandboxPolicy = createWorkspaceToolPolicy(root);
 		overrides.createSandboxBackend = sandboxBackendFactory(sandbox.provider);
+		overrides.createWorkspaceGit = createTaskWorkspaceGit;
 	}
 	const createRuntime = selectRuntimeFactory(env);
 	if (createRuntime !== undefined) overrides.createRuntime = createRuntime;
+
+	const githubTokenProvider = selectGitHubTokenProvider(env);
+	if (githubTokenProvider !== null && sandbox.real) {
+		overrides.resolveSandboxEnv = createSandboxEnvResolver(githubTokenProvider);
+		// Push is the approval-gated action. Opt out explicitly with
+		// GITHUB_PUSH_ENABLED=false; without a broker, tasks stop at review_ready.
+		overrides.pushEnabled = env.GITHUB_PUSH_ENABLED?.trim() !== "false";
+	}
 
 	return {
 		queue,
 		overrides,
 		providerName: sandbox.provider.name,
 		inferenceProvider,
+		githubAuth: githubTokenProvider !== null,
 	};
 }

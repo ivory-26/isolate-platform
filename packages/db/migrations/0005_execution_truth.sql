@@ -11,6 +11,16 @@
 -- DO block below is intentionally a single line (one statement).
 
 -- ---------------------------------------------------------------------------
+-- Approval resume job --------------------------------------------------------
+-- ---------------------------------------------------------------------------
+
+-- Wave 7 pauses a push-enabled task before any sandbox exists and resumes it
+-- with a `resume_task` job. The constraint is replaced, not widened in place,
+-- because PostgreSQL has no ALTER CONSTRAINT for CHECK expressions.
+DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_type_check') THEN ALTER TABLE jobs DROP CONSTRAINT jobs_type_check; END IF; END $$;
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_type_check') THEN ALTER TABLE jobs ADD CONSTRAINT jobs_type_check CHECK (type IN ('run_task', 'validate_attempt', 'finalize_review', 'resume_task')); END IF; END $$;
+
+-- ---------------------------------------------------------------------------
 -- Bounded inline artifacts ---------------------------------------------------
 -- ---------------------------------------------------------------------------
 

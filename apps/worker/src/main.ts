@@ -68,6 +68,10 @@ if (isMain) {
 		queueBound: composition.queue !== undefined,
 		taskContextBound: composition.overrides.loadTaskContext !== undefined,
 		usageSinkBound: composition.overrides.usageSink !== undefined,
+		lifecycleBound: composition.overrides.lifecycle !== undefined,
+		workspaceGitBound: composition.overrides.createWorkspaceGit !== undefined,
+		githubAuth: composition.githubAuth,
+		pushApproval: composition.overrides.pushEnabled === true,
 	});
 	const loop = bootstrapWorkers({
 		config,

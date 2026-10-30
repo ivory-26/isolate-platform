@@ -160,6 +160,16 @@ export type TaskExecutionDeps = {
 	/** Wave 7 workspace git factory; required whenever `lifecycle` is present. */
 	createWorkspaceGit?: CreateTaskWorkspaceGit;
 	/**
+	 * Per-job create-time sandbox environment (wave 7 Git credential). Called
+	 * immediately before provisioning; `null` means no credential (public
+	 * clone). Values are handed to the provider only and never logged.
+	 */
+	resolveSandboxEnv?: (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		repoUrl: string;
+	}) => Promise<Readonly<Record<string, string>> | null>;
+	/**
 	 * Approval gate switch. When true (and `lifecycle` is present) a
 	 * `run_task` pauses at `awaiting_approval` before any sandbox exists.
 	 */
@@ -433,6 +443,15 @@ function createHandler(
 					);
 				}
 
+				const sandboxEnv =
+					mode !== null && deps.resolveSandboxEnv !== undefined
+						? await deps.resolveSandboxEnv({
+								organizationId: job.organizationId,
+								taskId: job.taskId,
+								repoUrl: context.repoUrl,
+							})
+						: null;
+
 				const spec: SandboxSpec = {
 					workspaceRoot: deps.sandboxPolicy.workspaceRoot,
 					lifetimeMs: Math.min(
@@ -447,6 +466,7 @@ function createHandler(
 						mode === null
 							? { mode: "deny" }
 							: { mode: "allowlist", hosts: [...WORKSPACE_EGRESS_HOSTS] },
+					...(sandboxEnv === null ? {} : { env: sandboxEnv }),
 				};
 
 				if (mode !== null) {

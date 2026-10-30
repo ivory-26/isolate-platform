@@ -25,6 +25,7 @@ import {
 	type BranchLockInput,
 	type BranchLockRepository,
 	requireBranchLockKey,
+	resolveBranchLockTtlMs,
 } from "../repositories/branch-lock-repository";
 import { clampPageLimit } from "../repositories/pagination";
 import {
@@ -314,33 +315,56 @@ export class InMemoryTaskRepository implements TaskRepository {
 type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
 
 /**
- * In-memory advisory lock. Shares `requireBranchLockKey` with the Postgres
- * driver, so key normalization and input bounds cannot drift; a second
- * acquire of a held triple returns `LOCKED`, and `release` is idempotent.
+ * In-memory row-lease lock, mirroring the Postgres `branch_locks` table.
+ *
+ * Shares `requireBranchLockKey` and `resolveBranchLockTtlMs` with the driver,
+ * so key and TTL bounds cannot drift. Like the real row: a live lease makes a
+ * second acquire `LOCKED`; an expired lease (`expiresAt <= now`) can be taken
+ * over; `release` deletes only the caller's lease and is idempotent. One
+ * injected clock drives both expiry checks, so a frozen clock cannot behave
+ * differently between `acquire` and `heldCount`.
  */
 export class InMemoryBranchLockRepository implements BranchLockRepository {
-	private readonly held = new Set<string>();
+	private readonly leases = new Map<
+		string,
+		{ ownerId: string; expiresAt: number }
+	>();
+
+	constructor(private readonly clock: () => Date = () => new Date()) {}
 
 	async acquire(input: BranchLockInput): Promise<BranchLockAcquireResult> {
 		const key = requireBranchLockKey(input);
-		if (this.held.has(key)) {
+		const ttlMs = resolveBranchLockTtlMs(input.ttlMs);
+		const now = this.clock().getTime();
+		const existing = this.leases.get(key);
+		if (existing && existing.expiresAt > now) {
 			return { ok: false, code: "LOCKED" };
 		}
-		this.held.add(key);
+		const ownerId = crypto.randomUUID();
+		this.leases.set(key, { ownerId, expiresAt: now + ttlMs });
 		let released = false;
 		return {
 			ok: true,
 			release: async () => {
 				if (released) return;
 				released = true;
-				this.held.delete(key);
+				// Owner-guarded: a lease already taken over stays with its new
+				// owner, exactly like `DELETE ... WHERE owner_id = $4`.
+				if (this.leases.get(key)?.ownerId === ownerId) {
+					this.leases.delete(key);
+				}
 			},
 		};
 	}
 
-	/** Test introspection only: number of held lock keys. */
+	/** Test introspection only: number of live (unexpired) leases. */
 	get heldCount(): number {
-		return this.held.size;
+		const now = this.clock().getTime();
+		let count = 0;
+		for (const lease of this.leases.values()) {
+			if (lease.expiresAt > now) count += 1;
+		}
+		return count;
 	}
 }
 

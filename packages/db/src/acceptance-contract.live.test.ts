@@ -6,25 +6,19 @@ import { PostgresRepositoryRepository } from "./repositories/repository-reposito
 import { PostgresTaskRepository } from "./repositories/task-repository";
 
 /**
- * Live suite for the wave-9 acceptance contract and branch advisory lock.
+ * Live suite for the wave-9 acceptance contract and the branch row lease.
  * Auto-skips without DATABASE_URL and cleanly skips when
  * `0007_acceptance_contract.sql` has not been applied (this lane never applies
  * migrations; the coordinator does).
+ *
+ * The branch-lock case runs on ANY endpoint, including Neon's `-pooler` host:
+ * the lease is a table row manipulated by single statements, so PgBouncer
+ * transaction pooling cannot split acquire/release across backends.
  *
  * Every value is a bound parameter and no environment value is printed.
  */
 const databaseUrl = process.env.DATABASE_URL;
 const hasDb = typeof databaseUrl === "string" && databaseUrl.length > 0;
-
-/** Session advisory locks require a direct endpoint, not PgBouncer pooling. */
-const pooledEndpoint = (() => {
-	if (!hasDb || !databaseUrl) return false;
-	try {
-		return /-pooler\./.test(new URL(databaseUrl).hostname);
-	} catch {
-		return false;
-	}
-})();
 
 const CHECKS = [
 	{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
@@ -214,55 +208,86 @@ test.skipIf(!hasDb)(
 );
 
 /**
- * Session advisory locks are only coherent on a direct connection. On Neon's
- * pooled host (`-pooler`) PgBouncer transaction pooling can route the unlock
- * to a different backend, so this case is skipped there rather than producing
- * a false failure. See the repository doc comment.
+ * The row lease has no session state, so this runs against pooled and direct
+ * endpoints alike (no `-pooler` skip). Two independent clients prove that a
+ * second CONNECTION cannot take a live lease. "Elapsed time" is simulated by
+ * moving `expires_at` into the past, so the case never sleeps.
  */
-test.skipIf(!hasDb || pooledEndpoint)(
-	"Neon live: branch advisory lock is exclusive per triple (direct endpoint)",
+test.skipIf(!hasDb)(
+	"Neon live: branch row lease is exclusive per triple and owner-guarded",
 	async () => {
 		const url = databaseUrl;
 		if (!url) throw new Error("DATABASE_URL is required for live tests");
-		const sql = createDb(url, { max: 3 });
+		const sqlA = createDb(url, { max: 2 });
+		const sqlB = createDb(url, { max: 2 });
 		const organizationId = asOrganizationId(crypto.randomUUID());
 		const repositoryId = asRepositoryId(crypto.randomUUID());
 		const branch = `task/lock-${crypto.randomUUID().slice(0, 8)}`;
 		const releases: Array<() => Promise<void>> = [];
 
 		try {
-			const locks = new PostgresBranchLockRepository(sql);
-			const first = await locks.acquire({
-				organizationId,
-				repositoryId,
-				branch,
-			});
+			const ready = (await sqlA.unsafe(
+				`SELECT
+					to_regclass('public.branch_locks') IS NOT NULL AS table_present,
+					to_regclass('public.branch_locks_expires_at_idx') IS NOT NULL AS index_present`,
+				[],
+			)) as Array<Record<string, unknown>>;
+			if (ready[0]?.table_present !== true) {
+				return; // 0007 not applied: clean skip
+			}
+			// The expiry-sweep index is part of the contract.
+			expect(ready[0]?.index_present).toBe(true);
+
+			const locksA = new PostgresBranchLockRepository(sqlA);
+			const locksB = new PostgresBranchLockRepository(sqlB);
+			const acquire = (lockRepo: PostgresBranchLockRepository) =>
+				lockRepo.acquire({
+					organizationId,
+					repositoryId,
+					branch,
+					ttlMs: 60_000,
+				});
+
+			const first = await acquire(locksA);
 			expect(first.ok).toBe(true);
 			if (!first.ok) return;
 			releases.push(first.release);
 
-			// Same triple, second caller: exclusive.
-			expect(
-				await locks.acquire({ organizationId, repositoryId, branch }),
-			).toEqual({ ok: false, code: "LOCKED" });
+			// A different pooled connection cannot take the live lease.
+			expect(await acquire(locksB)).toEqual({ ok: false, code: "LOCKED" });
 
 			// A different branch on the same repository is free.
-			const otherBranch = await locks.acquire({
+			const otherBranch = await locksB.acquire({
 				organizationId,
 				repositoryId,
 				branch: `${branch}-other`,
+				ttlMs: 60_000,
 			});
 			expect(otherBranch.ok).toBe(true);
 			if (otherBranch.ok) releases.push(otherBranch.release);
 
+			// Simulate lease expiry, then take over from the second client.
+			await sqlA.unsafe(
+				`UPDATE branch_locks SET expires_at = now() - interval '1 second'
+				 WHERE organization_id = $1::uuid
+				   AND repository_id = $2::uuid
+				   AND branch = $3`,
+				[organizationId, repositoryId, branch],
+			);
+			const takeover = await acquire(locksB);
+			expect(takeover.ok).toBe(true);
+			if (!takeover.ok) return;
+			releases.push(takeover.release);
+
+			// Wrong-owner release is a no-op: the old holder must not delete
+			// the lease that was handed to the new owner.
+			await first.release();
+			expect(await acquire(locksA)).toEqual({ ok: false, code: "LOCKED" });
+
 			// Release is idempotent and frees the triple for the next caller.
-			await first.release();
-			await first.release();
-			const reacquired = await locks.acquire({
-				organizationId,
-				repositoryId,
-				branch,
-			});
+			await takeover.release();
+			await takeover.release();
+			const reacquired = await acquire(locksA);
 			expect(reacquired.ok).toBe(true);
 			if (reacquired.ok) releases.push(reacquired.release);
 		} finally {
@@ -273,7 +298,17 @@ test.skipIf(!hasDb || pooledEndpoint)(
 					// Best effort; never mask the assertion failure.
 				}
 			}
-			await sql.end({ timeout: 5 });
+			try {
+				await sqlA.unsafe(
+					`DELETE FROM branch_locks
+					 WHERE organization_id = $1::uuid AND repository_id = $2::uuid`,
+					[organizationId, repositoryId],
+				);
+			} catch {
+				// Table may be absent: nothing to clean.
+			}
+			await sqlA.end({ timeout: 5 });
+			await sqlB.end({ timeout: 5 });
 		}
 	},
 	120000,

@@ -6,6 +6,7 @@ export * from "./types/errors";
 export * from "./types/events";
 export * from "./types/ids";
 export * from "./types/lifecycle";
+export * from "./types/observability";
 export * from "./types/result";
 export * from "./types/review";
 export * from "./types/schemas";

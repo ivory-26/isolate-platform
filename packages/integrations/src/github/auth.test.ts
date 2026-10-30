@@ -377,6 +377,31 @@ describe("bounded failures", () => {
 	}
 });
 
+describe("private key text formats", () => {
+	const variants: ReadonlyArray<readonly [string, (pem: string) => string]> = [
+		["real newlines (quoted multiline .env)", (pem) => pem],
+		["literal backslash-n escapes", (pem) => pem.replace(/\n/g, "\\n")],
+		["CRLF line endings", (pem) => pem.replace(/\n/g, "\r\n")],
+		["a single long line", (pem) => pem.replace(/\n/g, "")],
+		["surrounding double quotes", (pem) => `"${pem}"`],
+	];
+
+	for (const [label, transform] of variants) {
+		test(`accepts ${label}`, async () => {
+			const { impl } = recordingFetch(() =>
+				jsonResponse(201, tokenBody("token-value")),
+			);
+			const provider = providerFor(impl, {
+				privateKeyPem: transform(privateKeyPem),
+			});
+			await expect(provider.getInstallationToken(REQUEST)).resolves.toEqual({
+				token: "token-value",
+				expiresAt: EXPIRES_AT,
+			});
+		});
+	}
+});
+
 describe("configuration fails closed", () => {
 	const fetchStub = (async () => new Response()) as unknown as typeof fetch;
 	const cases: ReadonlyArray<

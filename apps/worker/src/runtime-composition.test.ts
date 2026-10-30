@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PgSql } from "@isolate/db";
 import { NullProvider } from "@isolate/sandbox";
 import type { Logger } from "@isolate/shared";
@@ -180,6 +183,44 @@ describe("GitHub App credential wiring", () => {
 		});
 		expect(provider).not.toBeNull();
 		expect(typeof provider?.getInstallationToken).toBe("function");
+	});
+
+	test("a key file path replaces an unquoted multiline .env value", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "isolate-key-"));
+		const keyPath = join(directory, "app.pkcs8.pem");
+		try {
+			writeFileSync(keyPath, await privateKeyPem(), "utf8");
+			const provider = selectGitHubTokenProvider({
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_INSTALLATION_ID: "2",
+				// Simulates dotenv truncating an unquoted multiline value at line 1.
+				GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----",
+				GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
+			});
+			expect(provider).not.toBeNull();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("an incomplete inline key without a path fails closed", () => {
+		expect(() =>
+			selectGitHubTokenProvider({
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_INSTALLATION_ID: "2",
+				GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----",
+			}),
+		).toThrow(/incomplete/);
+	});
+
+	test("an unreadable key file path fails closed", () => {
+		expect(() =>
+			selectGitHubTokenProvider({
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_INSTALLATION_ID: "2",
+				GITHUB_APP_PRIVATE_KEY_PATH: join(tmpdir(), "missing-isolate-key.pem"),
+			}),
+		).toThrow(/could not be read/);
 	});
 
 	test("sandbox env carries the credential through GIT_CONFIG, never the URL", async () => {

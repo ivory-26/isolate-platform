@@ -22,3 +22,4 @@ opencode.jsonc
 
 # Skills CLI generates machine-local symlinks here
 .claude/
+*.pem

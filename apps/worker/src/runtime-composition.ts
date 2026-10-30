@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
 	createDb,
 	type PgSql,
@@ -150,29 +152,59 @@ function sandboxBackendFactory(
 }
 
 /**
- * Builds the GitHub App token broker only when all three values are present.
- * A partial configuration fails closed instead of silently cloning without a
- * credential. No value is logged.
+ * Builds the GitHub App token broker only when the App identity and a complete
+ * private key are present. A partial configuration fails closed instead of
+ * silently cloning without a credential. No value is logged.
+ *
+ * The key may be supplied inline (`GITHUB_APP_PRIVATE_KEY`, quoted multiline or
+ * literal `\n` escapes) or as a server-side file path
+ * (`GITHUB_APP_PRIVATE_KEY_PATH`). The path form exists because an unquoted
+ * multiline `.env` value is truncated by the dotenv parser; the file is read at
+ * worker boot and never logged.
  */
 export function selectGitHubTokenProvider(
 	env: Record<string, string | undefined>,
 ): GitHubTokenProvider | null {
 	const appId = env.GITHUB_APP_ID?.trim();
 	const installationId = env.GITHUB_APP_INSTALLATION_ID?.trim();
-	const privateKeyPem = env.GITHUB_APP_PRIVATE_KEY?.replace(
-		/\\n/g,
-		"\n",
-	).trim();
-	const configured = [appId, installationId, privateKeyPem].filter(
+	const inlineKey = env.GITHUB_APP_PRIVATE_KEY?.trim();
+	const keyPath = env.GITHUB_APP_PRIVATE_KEY_PATH?.trim();
+	const inlineComplete = inlineKey?.includes("END PRIVATE KEY") === true;
+
+	const configured = [appId, installationId, inlineKey, keyPath].filter(
 		(value) => value !== undefined && value.length > 0,
 	).length;
 	if (configured === 0) return null;
-	if (!appId || !installationId || !privateKeyPem) {
+	if (!appId || !installationId) {
 		throw new PlatformError(
 			"MISSING_CONFIG",
-			"GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID and GITHUB_APP_PRIVATE_KEY must all be set",
+			"GITHUB_APP_ID and GITHUB_APP_INSTALLATION_ID are required",
 		);
 	}
+	if (!inlineComplete && !keyPath) {
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			inlineKey === undefined || inlineKey.length === 0
+				? "GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is required"
+				: "GITHUB_APP_PRIVATE_KEY is incomplete; quote the multiline value or set GITHUB_APP_PRIVATE_KEY_PATH",
+		);
+	}
+
+	let privateKeyPem: string;
+	if (inlineComplete && inlineKey !== undefined) {
+		privateKeyPem = inlineKey;
+	} else {
+		const resolvedPath = resolve(keyPath as string);
+		try {
+			privateKeyPem = readFileSync(resolvedPath, "utf8");
+		} catch {
+			throw new PlatformError(
+				"MISSING_CONFIG",
+				"GITHUB_APP_PRIVATE_KEY_PATH could not be read",
+			);
+		}
+	}
+
 	const apiBaseUrl = env.GITHUB_API_BASE_URL?.trim();
 	return createGitHubAppTokenProvider({
 		appId,

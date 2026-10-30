@@ -91,11 +91,23 @@ function parseNumericIdentifier(value: unknown, label: string): string {
 	return value;
 }
 
+/** Accepts PEM text with real newlines, literal `\n` escapes, CRLF, or quotes. */
+function normalizePemText(pem: string): string {
+	let normalized = pem.replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim();
+	if (
+		(normalized.startsWith('"') && normalized.endsWith('"')) ||
+		(normalized.startsWith("'") && normalized.endsWith("'"))
+	) {
+		normalized = normalized.slice(1, -1).trim();
+	}
+	return normalized;
+}
+
 function pemToDer(pem: unknown): ArrayBuffer {
 	if (typeof pem !== "string") {
 		throw configError("GitHub App private key must be a PKCS#8 PEM string");
 	}
-	const match = PKCS8_PEM_PATTERN.exec(pem);
+	const match = PKCS8_PEM_PATTERN.exec(normalizePemText(pem));
 	if (match === null) {
 		throw configError("GitHub App private key must be a PKCS#8 PEM block");
 	}

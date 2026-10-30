@@ -94,6 +94,8 @@ Worker wiring (wave 7): `runtime-composition.ts` binds `PostgresExecutionLifecyc
 
 Begin with one coding agent and one explicit workflow. Add planner/reviewer agents only where tests show a useful improvement.
 
+Runtime of record (wave 11): the worker executes a task through its imperative handler (`apps/worker/src/task-execution-handler.ts`) — clone, bounded turns, diff/ownership gate, validation command, acceptance checks, push and PR approvals. The wave-2 Mastra SDLC workflow was retired in wave 11: it encoded a post-execution approval order that waves 7–8 replaced, held a second durable state, and had no production caller. `@mastra/core` remains the agent/tool layer. A Mastra workflow is only reintroduced together with a plan-execution design for `compiled_plans`.
+
 Provider plan (wave 4, updated): inference has two mutually exclusive configurations selected by `INFERENCE_PROVIDER`:
 - `meta` — **local/dev and pre-production agent tests** on Meta Model API (`https://api.meta.ai/v1`), model `muse-spark-1.3-contributor` only. No other Meta model is accepted.
 - `baseten` — **production** on Baseten Model APIs (`https://inference.baseten.co/v1`, `BASETEN_API_KEY`, `meta-models/muse-spark-open-1026`).

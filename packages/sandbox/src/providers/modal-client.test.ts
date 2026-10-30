@@ -76,12 +76,24 @@ function fakeSdk(options: FakeSdkOptions = {}) {
 
 function fakeProcess(
 	overrides: {
+		stdin?: {
+			writeText?: (text: string) => Promise<void>;
+			close?: () => Promise<void>;
+		};
 		stdout?: () => Promise<string>;
 		stderr?: () => Promise<string>;
 		wait?: () => Promise<number>;
 	} = {},
 ): ModalSdkProcess {
 	return {
+		...(overrides.stdin
+			? {
+					stdin: {
+						writeText: overrides.stdin.writeText ?? (async () => {}),
+						close: overrides.stdin.close ?? (async () => {}),
+					},
+				}
+			: {}),
 		stdout: { readText: overrides.stdout ?? (async () => "out") },
 		stderr: { readText: overrides.stderr ?? (async () => "err") },
 		wait: overrides.wait ?? (async () => 0),
@@ -157,6 +169,7 @@ describe("createModalSandboxClient configuration", () => {
 			{ tokenId: "test-token-id", tokenSecret: "test-token-secret" },
 		]);
 		expect(calls.fromRegistry).toEqual([DEFAULT_MODAL_IMAGE]);
+		expect(DEFAULT_MODAL_IMAGE).toBe("oven/bun:1");
 		// App resolution is a network call and must wait for the first create.
 		expect(calls.fromName).toEqual([]);
 	});
@@ -245,6 +258,149 @@ describe("createModalSandboxClient operations", () => {
 			"github.com",
 		]);
 		expect(calls.create[0].params.blockNetwork).toBe(false);
+	});
+
+	test("forwards create-time env to the SDK without touching argv", async () => {
+		const token = "ghs_w7sbx_modal_secret";
+		const sandboxEnv = {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${token}`,
+		};
+		const { sandbox } = fakeSandbox();
+		const { module, calls } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create({ ...createParams, env: sandboxEnv });
+		expect(calls.create[0].params.env).toEqual(sandboxEnv);
+		expect(calls.create[0].params.command.join(" ")).not.toContain(token);
+		expect(Object.hasOwn(createParams, "env")).toBe(false);
+	});
+
+	test("writes and closes stdin before reading any output", async () => {
+		const events: string[] = [];
+		const { sandbox } = fakeSandbox({
+			exec: async () =>
+				fakeProcess({
+					stdin: {
+						writeText: async (text) => {
+							events.push(`write:${text}`);
+						},
+						close: async () => {
+							events.push("close");
+						},
+					},
+					stdout: async () => {
+						events.push("stdout");
+						return "out";
+					},
+					stderr: async () => {
+						events.push("stderr");
+						return "err";
+					},
+					wait: async () => {
+						events.push("wait");
+						return 0;
+					},
+				}),
+		});
+		const { module } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create(createParams);
+		const result = await client.exec(
+			"sb-1",
+			["cat"],
+			{ timeoutMs: 5_000, workdir: "/workspace" },
+			"payload",
+		);
+		expect(result).toEqual({
+			exitCode: 0,
+			stdout: "out",
+			stderr: "err",
+			timedOut: false,
+		});
+		expect(events).toEqual([
+			"write:payload",
+			"close",
+			"stdout",
+			"stderr",
+			"wait",
+		]);
+	});
+
+	test("does not touch stdin when no payload is provided", async () => {
+		let stdinUsed = false;
+		const { sandbox } = fakeSandbox({
+			exec: async () =>
+				fakeProcess({
+					stdin: {
+						writeText: async () => {
+							stdinUsed = true;
+						},
+						close: async () => {
+							stdinUsed = true;
+						},
+					},
+				}),
+		});
+		const { module } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create(createParams);
+		await client.exec("sb-1", ["git"], {
+			timeoutMs: 5_000,
+			workdir: "/workspace",
+		});
+		expect(stdinUsed).toBe(false);
+	});
+
+	test("maps stdin failures to PROVIDER_UNAVAILABLE without echoing the payload", async () => {
+		const payload = "trusted-file-content-secret";
+		const { sandbox } = fakeSandbox({
+			exec: async () =>
+				fakeProcess({
+					stdin: {
+						writeText: async () => {
+							throw new Error(`write failed: ${payload}`);
+						},
+					},
+				}),
+		});
+		const { module } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create(createParams);
+		let thrown: unknown;
+		try {
+			await client.exec(
+				"sb-1",
+				["cat"],
+				{ timeoutMs: 5_000, workdir: "/workspace" },
+				payload,
+			);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toMatchObject({
+			code: "PROVIDER_UNAVAILABLE",
+			message: "Modal command stdin failed",
+		});
+		expect((thrown as Error).message).not.toContain(payload);
+	});
+
+	test("refuses a payload when the SDK process exposes no stdin", async () => {
+		const { sandbox } = fakeSandbox();
+		const { module } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(env, async () => module);
+		await client.create(createParams);
+		await expect(
+			client.exec(
+				"sb-1",
+				["cat"],
+				{ timeoutMs: 5_000, workdir: "/workspace" },
+				"payload",
+			),
+		).rejects.toMatchObject({
+			code: "PROVIDER_UNAVAILABLE",
+			message: "Modal command stdin is unavailable",
+		});
 	});
 
 	test("maps a wait deadline to timedOut with partial output", async () => {

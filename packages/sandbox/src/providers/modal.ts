@@ -1,5 +1,6 @@
 import { deny, SandboxError } from "../errors";
 import type { AuthorizedCommand } from "../policy/command-policy";
+import { validateSandboxEnv } from "../policy/env";
 import { validateAbsolutePath } from "../policy/paths";
 import type {
 	CommandResult,
@@ -33,6 +34,8 @@ export interface ModalCreateParams {
 	readonly command: readonly string[];
 	readonly blockNetwork: boolean;
 	readonly outboundDomainAllowlist?: readonly string[];
+	/** Create-time environment; consumed by Git via `GIT_CONFIG_*`. */
+	readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface ModalExecParams {
@@ -58,6 +61,7 @@ export interface ModalSandboxClient {
 		id: string,
 		argv: readonly string[],
 		params: ModalExecParams,
+		stdinText?: string,
 	): Promise<ModalExecResult>;
 	/** Rejects when the sandbox is already gone; callers must tolerate that. */
 	terminate(id: string): Promise<void>;
@@ -174,6 +178,7 @@ export class ModalSandboxProvider implements SandboxProvider {
 		const idleTimeoutMs = spec.idleTimeoutMs ?? DEFAULT_MODAL_IDLE_TIMEOUT_MS;
 		validateIdleTimeout(idleTimeoutMs, spec.lifetimeMs);
 		const egress = egressParams(spec.egress);
+		const env = validateSandboxEnv(spec.env);
 
 		const params: ModalCreateParams = {
 			cpu: spec.cpuCount,
@@ -183,6 +188,7 @@ export class ModalSandboxProvider implements SandboxProvider {
 			workdir: workspaceRoot,
 			command: [...SANDBOX_COMMAND],
 			...egress,
+			...(env ? { env } : {}),
 		};
 
 		let created: { id: string };
@@ -208,6 +214,7 @@ export class ModalSandboxProvider implements SandboxProvider {
 		sandbox: SandboxHandle,
 		command: AuthorizedCommand,
 		signal?: AbortSignal,
+		stdinText?: string,
 	): Promise<CommandResult> {
 		if (signal?.aborted) throw cancelled();
 		if (
@@ -227,6 +234,7 @@ export class ModalSandboxProvider implements SandboxProvider {
 				sandbox.id,
 				[command.executable, ...command.args],
 				{ timeoutMs: command.timeoutMs, workdir: command.cwd },
+				stdinText,
 			);
 		} catch (error) {
 			if (signal?.aborted) throw cancelled();

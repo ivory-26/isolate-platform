@@ -147,6 +147,14 @@ const HEAD_SHA_PATTERN = /^[0-9a-f]{40,64}$/i;
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 /** Bounded requeue delay for a branch-lock miss (the queue owns real backoff). */
 const BRANCH_LOCK_BACKOFF_MS = 30_000;
+/**
+ * Wave 12: how often a held branch lease is renewed while the turn loop runs.
+ * Renewal rides the handler's existing heartbeat points (once per turn, before
+ * any work starts) and is throttled by this interval — never one row update
+ * per tool command. One third of the 15-minute default lease leaves room for
+ * two missed renewals before expiry.
+ */
+export const BRANCH_LOCK_RENEW_INTERVAL_MS = 5 * 60_000;
 /** Hosts the clone/push helpers are allowed to reach inside the sandbox. */
 const WORKSPACE_EGRESS_HOSTS = ["github.com", "codeload.github.com"] as const;
 
@@ -177,6 +185,12 @@ export type ToolInvocationAudit = {
 /** Idempotent handle returned by `acquireBranchLock`; release in `finally`. */
 export type BranchLockLease = {
 	release(): Promise<void> | void;
+	/**
+	 * Wave 12: extends the lease in place. Returns `false` once the lease is
+	 * gone (expired and taken over, or already released). Absent means the lock
+	 * seam cannot renew; the handler then keeps the wave-9 behaviour.
+	 */
+	renew?(): Promise<boolean>;
 };
 
 export type BranchLockAcquireInput = {
@@ -307,6 +321,8 @@ export type TaskExecutionDeps = {
 	 * context loads and before any sandbox is provisioned; released (idempotent)
 	 * in `finally`. `null` means another job holds it: the handler returns a
 	 * bounded retry and never becomes a second writer. Absent = no lock bound.
+	 * Wave 12: a lease that exposes `renew` is kept alive on the heartbeat
+	 * schedule and the turn aborts with LEASE_LOST if renewal fails.
 	 */
 	acquireBranchLock?: (
 		input: BranchLockAcquireInput,
@@ -627,6 +643,11 @@ function createHandler(
 
 			let attemptId: string | null = null;
 			let branchLock: BranchLockLease | null = null;
+			/**
+			 * Clock reading of the last successful renewal (or the acquire). Only
+			 * used to rate-limit `renew` to the heartbeat interval.
+			 */
+			let branchLockRenewedAt = 0;
 			let attemptOutcome: Readonly<Record<string, unknown>> = {
 				status: "failed",
 			};
@@ -886,6 +907,30 @@ function createHandler(
 						if (!alive || ctx.signal.aborted) {
 							stop = { kind: "lease_lost" };
 							break;
+						}
+						// Wave 12: keep the branch lease alive on the same per-job
+						// heartbeat schedule, throttled so a long job does not write
+						// one row update per turn. Losing it (no row / foreign owner
+						// / failed write) is a bounded LEASE_LOST retry: the attempt
+						// stops before another turn, and `finally` releases exactly
+						// once (a no-op when the row already belongs to someone else).
+						if (
+							branchLock?.renew !== undefined &&
+							now() - branchLockRenewedAt >= BRANCH_LOCK_RENEW_INTERVAL_MS
+						) {
+							let renewed = false;
+							try {
+								renewed = await branchLock.renew();
+							} catch (error) {
+								ctx.logger.warn("branch lock renewal failed", {
+									code: clampErrorCode(errorCodeOf(error)),
+								});
+							}
+							if (!renewed) {
+								stop = { kind: "lease_lost" };
+								break;
+							}
+							branchLockRenewedAt = now();
 						}
 						if (mode !== null) {
 							const cancelled = await mode.lifecycle.isCancelled({
@@ -1768,6 +1813,7 @@ function createHandler(
 							backoffMs: BRANCH_LOCK_BACKOFF_MS,
 						};
 					}
+					branchLockRenewedAt = now();
 				}
 
 				if (lifecycle === undefined) {

@@ -23,6 +23,10 @@ import type { PgSql } from "../client";
  *   overwrites a row whose lease already expired, RETURNING the owner id. A
  *   returned row equal to our freshly generated owner id means we hold the
  *   lease; no row means another owner's lease is live (`LOCKED`).
+ * - `renew` is ONE UPDATE guarded by `owner_id` that pushes `expires_at` out
+ *   by a fresh TTL and RETURNS the row. A row proves the same owner still
+ *   holds the lease; no row means the lease expired and was taken over (or
+ *   released) and is reported as `LOST`, never retried into a second writer.
  * - `release` is ONE DELETE guarded by `owner_id`, so a lease that expired and
  *   was handed to another owner is never deleted by the previous holder.
  *   Release is idempotent: a second call deletes zero rows and succeeds.
@@ -37,10 +41,11 @@ import type { PgSql } from "../client";
  * `ttlMs` must be an integer in [5 s, 1 h], default 15 min; out-of-range
  * values are rejected, never silently clamped. The lease MUST outlive the
  * job that protects it: a worker that runs past its lease can be taken over by
- * another worker. Callers with long jobs pass an explicit `ttlMs` (and renew
- * by re-acquiring) rather than relying on the default. Expired rows are
- * reclaimed lazily by the next acquire for the same triple; the
- * `branch_locks_expires_at_idx` index supports an explicit sweep later.
+ * another worker. Callers with long jobs pass an explicit `ttlMs` and keep the
+ * lease alive with `renew` on their heartbeat schedule rather than relying on
+ * the default. Expired rows are reclaimed lazily by the next acquire for the
+ * same triple; the `branch_locks_expires_at_idx` index supports an explicit
+ * sweep later.
  *
  * Keys are normalized by `evaluateBranchLockKey`; the row stores the same
  * normalized organization/repository UUIDs and the verbatim branch, so the
@@ -151,6 +156,12 @@ export type BranchLockAcquireResult =
 	| {
 			ok: true;
 			/**
+			 * Opaque owner token minted by `acquire`. It is the only proof the
+			 * holder can present to `renew` or `release`; it is not a secret
+			 * (guessing it grants nothing that taking the lease would not).
+			 */
+			ownerId: string;
+			/**
 			 * Deletes the lease row only if this caller still owns it. Idempotent:
 			 * later calls are no-ops, and an expired lease already taken over by
 			 * another owner is left untouched.
@@ -159,6 +170,27 @@ export type BranchLockAcquireResult =
 	  }
 	| { ok: false; code: "LOCKED" };
 
+export type BranchLockRenewInput = {
+	organizationId: OrganizationId;
+	repositoryId: RepositoryId;
+	branch: string;
+	/** Owner token returned by the successful `acquire`. */
+	ownerId: string;
+	/**
+	 * New lease duration from `now()`. Same bounds as acquire: an integer in
+	 * [5 s, 1 h], default 15 min.
+	 */
+	ttlMs?: number;
+};
+
+/**
+ * `LOST` is terminal for the holder: the row no longer carries this owner, so
+ * the lease expired and was taken over (or was already released). The caller
+ * must stop writing and let the job be retried; it must never acquire again
+ * inside the same attempt.
+ */
+export type BranchLockRenewResult = { ok: true } | { ok: false; code: "LOST" };
+
 export interface BranchLockRepository {
 	/**
 	 * Tries to take the lease for the triple. A miss is reported as `LOCKED`
@@ -166,6 +198,18 @@ export interface BranchLockRepository {
 	 * taken over atomically by the same statement.
 	 */
 	acquire(input: BranchLockInput): Promise<BranchLockAcquireResult>;
+	/**
+	 * Extends a held lease in place. One owner-guarded statement; no row means
+	 * the lease is gone (`LOST`), never a silent success.
+	 */
+	renew(input: BranchLockRenewInput): Promise<BranchLockRenewResult>;
+}
+
+/** Throwing owner-token check shared by both implementations. */
+function requireOwnerId(ownerId: string): void {
+	if (typeof ownerId !== "string" || ownerId.length === 0) {
+		throw new Error("branch lock ownerId must be a non-empty string");
+	}
 }
 
 /**
@@ -193,6 +237,18 @@ WHERE organization_id = $1::uuid
 	AND repository_id = $2::uuid
 	AND branch = $3
 	AND owner_id = $4`;
+
+/**
+ * One statement, owner-guarded. `RETURNING` is what makes a lost lease
+ * observable: an UPDATE that matches nothing reports zero rows.
+ */
+const RENEW_SQL = `UPDATE branch_locks
+SET expires_at = now() + $5::double precision * interval '1 millisecond'
+WHERE organization_id = $1::uuid
+	AND repository_id = $2::uuid
+	AND branch = $3
+	AND owner_id = $4
+RETURNING owner_id`;
 
 export class PostgresBranchLockRepository implements BranchLockRepository {
 	constructor(private readonly sql: PgSql) {}
@@ -232,6 +288,28 @@ export class PostgresBranchLockRepository implements BranchLockRepository {
 				ownerId,
 			]);
 		};
-		return { ok: true, release };
+		return { ok: true, ownerId, release };
+	}
+
+	async renew(input: BranchLockRenewInput): Promise<BranchLockRenewResult> {
+		// Same normalization and bounds as acquire; an invalid triple or TTL is
+		// a caller bug and throws before any statement runs.
+		requireBranchLockKey(input);
+		const ttlMs = resolveBranchLockTtlMs(input.ttlMs);
+		requireOwnerId(input.ownerId);
+
+		const rows = (await this.sql.unsafe(RENEW_SQL, [
+			input.organizationId.toLowerCase(),
+			input.repositoryId.toLowerCase(),
+			input.branch,
+			input.ownerId,
+			ttlMs,
+		])) as unknown as Record<string, unknown>[];
+
+		// The WHERE clause already pins the owner; match the returned row as a
+		// second proof (and to stay identical to acquire's row handling).
+		return rows[0]?.owner_id === input.ownerId
+			? { ok: true }
+			: { ok: false, code: "LOST" };
 	}
 }

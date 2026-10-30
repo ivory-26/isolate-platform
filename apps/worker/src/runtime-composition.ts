@@ -533,13 +533,28 @@ export async function createConfiguredWorkerComposition(
 		},
 		// Wave 9: one writer per repository+branch. A held lease is a bounded
 		// requeue in the handler; the row lease is safe under transaction pooling.
+		// Wave 12: the lease is renewable so a job longer than the 15-minute TTL
+		// is not taken over by the next worker; renewal uses the same owner token
+		// and reports `false` once the row is gone.
 		acquireBranchLock: async (input) => {
 			const lease = await branchLocks.acquire({
 				organizationId: input.organizationId,
 				repositoryId: input.repositoryId as RepositoryId,
 				branch: input.branch,
 			});
-			return lease.ok ? { release: () => lease.release() } : null;
+			if (!lease.ok) return null;
+			return {
+				release: () => lease.release(),
+				renew: async () => {
+					const renewed = await branchLocks.renew({
+						organizationId: input.organizationId,
+						repositoryId: input.repositoryId as RepositoryId,
+						branch: input.branch,
+						ownerId: lease.ownerId,
+					});
+					return renewed.ok;
+				},
+			};
 		},
 	};
 

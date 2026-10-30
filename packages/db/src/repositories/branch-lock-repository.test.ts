@@ -239,6 +239,133 @@ describe("InMemoryBranchLockRepository (row-lease contract)", () => {
 		await expect(locks.acquire(input({ ttlMs: 1 }))).rejects.toThrow(/ttlMs/);
 		expect(locks.heldCount).toBe(0);
 	});
+
+	test("renew extends the same lease instead of letting it expire", async () => {
+		let now = new Date("2026-01-01T00:00:00.000Z");
+		const locks = new InMemoryBranchLockRepository(() => now);
+		const first = await locks.acquire(input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS }));
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+
+		// One millisecond short of expiry: reachable only because the lease was
+		// renewed, proving the extension (not just the original TTL).
+		now = new Date(now.getTime() + MIN_BRANCH_LOCK_TTL_MS - 1);
+		expect(
+			await locks.renew({
+				...input(),
+				ownerId: first.ownerId,
+				ttlMs: MIN_BRANCH_LOCK_TTL_MS,
+			}),
+		).toEqual({ ok: true });
+		expect(locks.heldCount).toBe(1);
+
+		now = new Date(now.getTime() + MIN_BRANCH_LOCK_TTL_MS - 1);
+		expect(
+			await locks.acquire(input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS })),
+		).toEqual({ ok: false, code: "LOCKED" });
+
+		now = new Date(now.getTime() + 1);
+		const second = await locks.acquire(
+			input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS }),
+		);
+		expect(second.ok).toBe(true);
+		expect(locks.heldCount).toBe(1);
+
+		if (second.ok) await second.release();
+	});
+
+	test("renew after takeover is LOST and never revives the old lease", async () => {
+		let now = new Date("2026-01-01T00:00:00.000Z");
+		const locks = new InMemoryBranchLockRepository(() => now);
+		const first = await locks.acquire(input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS }));
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+
+		now = new Date(now.getTime() + MIN_BRANCH_LOCK_TTL_MS);
+		const second = await locks.acquire(
+			input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS }),
+		);
+		expect(second.ok).toBe(true);
+		if (!second.ok) return;
+
+		// The old owner can no longer extend; the new owner's lease is untouched
+		// and remains exclusive.
+		expect(
+			await locks.renew({
+				...input(),
+				ownerId: first.ownerId,
+				ttlMs: MIN_BRANCH_LOCK_TTL_MS,
+			}),
+		).toEqual({ ok: false, code: "LOST" });
+		expect(await locks.acquire(input())).toEqual({
+			ok: false,
+			code: "LOCKED",
+		});
+		expect(await locks.renew({ ...input(), ownerId: second.ownerId })).toEqual({
+			ok: true,
+		});
+
+		await first.release();
+		expect(locks.heldCount).toBe(1);
+		await second.release();
+		expect(locks.heldCount).toBe(0);
+	});
+
+	test("renew of an expired but untaken lease still succeeds (same row owner)", async () => {
+		let now = new Date("2026-01-01T00:00:00.000Z");
+		const locks = new InMemoryBranchLockRepository(() => now);
+		const first = await locks.acquire(input({ ttlMs: MIN_BRANCH_LOCK_TTL_MS }));
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+
+		now = new Date(now.getTime() + MIN_BRANCH_LOCK_TTL_MS);
+		// No takeover happened: the row still carries this owner, so extending is
+		// safe (the SQL UPDATE matches on key + owner only).
+		expect(
+			await locks.renew({
+				...input(),
+				ownerId: first.ownerId,
+				ttlMs: MIN_BRANCH_LOCK_TTL_MS,
+			}),
+		).toEqual({ ok: true });
+		expect(locks.heldCount).toBe(1);
+		expect(await locks.acquire(input())).toEqual({
+			ok: false,
+			code: "LOCKED",
+		});
+		await first.release();
+	});
+
+	test("renew after release is LOST", async () => {
+		const locks = new InMemoryBranchLockRepository();
+		const first = await locks.acquire(input());
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+		await first.release();
+		expect(await locks.renew({ ...input(), ownerId: first.ownerId })).toEqual({
+			ok: false,
+			code: "LOST",
+		});
+	});
+
+	test("renew validates the triple, TTL bounds and owner exactly like acquire", async () => {
+		const locks = new InMemoryBranchLockRepository();
+		const first = await locks.acquire(input());
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+
+		await expect(
+			locks.renew({ ...input({ branch: "" }), ownerId: first.ownerId }),
+		).rejects.toThrow(/branch lock requires UUID/);
+		await expect(
+			locks.renew({ ...input({ ttlMs: 1 }), ownerId: first.ownerId }),
+		).rejects.toThrow(/ttlMs/);
+		await expect(locks.renew({ ...input(), ownerId: "" })).rejects.toThrow(
+			/ownerId/,
+		);
+		expect(locks.heldCount).toBe(1);
+		await first.release();
+	});
 });
 
 type StubCall = { query: string; params: unknown[] };
@@ -325,6 +452,75 @@ describe("PostgresBranchLockRepository (statement shape)", () => {
 			"task/demo",
 			calls[0].params[3],
 		]);
+	});
+
+	test("renew is ONE owner-guarded UPDATE that extends expires_at", async () => {
+		const { sql, calls } = stubSql((call) => [{ owner_id: call.params[3] }]);
+		const locks = new PostgresBranchLockRepository(sql);
+		const acquired = await locks.acquire(
+			input({ organizationId: asOrganizationId(ORG.toUpperCase()) }),
+		);
+		expect(acquired.ok).toBe(true);
+		if (!acquired.ok) return;
+
+		expect(
+			await locks.renew({
+				...input({ organizationId: asOrganizationId(ORG.toUpperCase()) }),
+				ownerId: acquired.ownerId,
+				ttlMs: 60_000,
+			}),
+		).toEqual({ ok: true });
+
+		expect(calls).toHaveLength(2);
+		const renew = calls[1];
+		expect(renew.query).toContain("UPDATE branch_locks");
+		expect(renew.query).toContain("SET expires_at = now()");
+		expect(renew.query).toContain("AND owner_id = $4");
+		expect(renew.query).toContain("RETURNING owner_id");
+		// Bound, normalized key, owner token from acquire, resolved TTL.
+		expect(renew.params).toEqual([
+			ORG,
+			REPO,
+			"task/demo",
+			acquired.ownerId,
+			60_000,
+		]);
+
+		await acquired.release();
+	});
+
+	test("renew with no row or a foreign owner row is LOST", async () => {
+		const empty = stubSql(() => []);
+		expect(
+			await new PostgresBranchLockRepository(empty.sql).renew({
+				...input(),
+				ownerId: "owner-1",
+			}),
+		).toEqual({ ok: false, code: "LOST" });
+		expect(empty.calls).toHaveLength(1);
+
+		const foreign = stubSql(() => [{ owner_id: "someone-else" }]);
+		expect(
+			await new PostgresBranchLockRepository(foreign.sql).renew({
+				...input(),
+				ownerId: "owner-1",
+			}),
+		).toEqual({ ok: false, code: "LOST" });
+	});
+
+	test("renew throws on an invalid key, TTL or owner before any statement", async () => {
+		const { sql, calls } = stubSql(() => [{ owner_id: "owner-1" }]);
+		const locks = new PostgresBranchLockRepository(sql);
+		await expect(
+			locks.renew({ ...input({ branch: "" }), ownerId: "owner-1" }),
+		).rejects.toThrow(/branch lock requires UUID/);
+		await expect(
+			locks.renew({ ...input({ ttlMs: 1 }), ownerId: "owner-1" }),
+		).rejects.toThrow(/ttlMs/);
+		await expect(locks.renew({ ...input(), ownerId: "" })).rejects.toThrow(
+			/ownerId/,
+		);
+		expect(calls).toHaveLength(0);
 	});
 
 	test("invalid key or ttl throws before any statement runs", async () => {

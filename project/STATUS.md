@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-30 (wave 8 merged, migration `0006` applied and verified; offline + live Neon gates green; no live PR by request)
+Last updated: 2026-10-30 (wave 8 merged and migrated; **live PR acceptance passed** — real Meta + Modal run created `ivory-26/agent-bank#1`)
 
 ## Current: wave 8 — Review close: validation gate, PR approval, rerun (merged, migrated, offline-complete)
 
@@ -14,9 +14,22 @@ Wave 8 turns `review_ready` into a reviewable outcome: the repository's configur
 - **No UI**: `apps/web` routes, components and styles are untouched; the client sweep is unchanged at 30 checks. The approval buttons, run-detail timeline and repository onboarding page are wave 9, together with the design system.
 - **Gates on `main`**: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **1398 pass / 0 fail / 6 skip** offline, twice, identical · **1398 pass / 0 fail with live Neon** after `0006` · web production build green · client sweep **30 checks** · production smoke green (307 → `/login`) · `acceptance:offline` PASS with **7 scenarios** (success, throw, abort, validation-passed, validation-failed, pull-request, retry).
 
+### Live PR acceptance — PASSED (2026-10-30, bounded sequential runs)
+
+Task `2960432e-e63a-404d-bf34-cacae5d4fe3d`, branch `task/w8-live-24b80218`, PR **[ivory-26/agent-bank#1](https://github.com/ivory-26/agent-bank/pull/1)** (`open`, base `main`, one changed file `LIVE_PR_ACCEPTANCE.md`, head `b0d5700`), task status `pull_request_created`. The worker requested the push approval, paused, resumed after approval, cloned with a repo-scoped token, ran two Meta turns, produced a 379-byte diff artifact, requested the **second** approval bound to the pushed HEAD, and the `create_pull_request` job opened exactly one PR.
+
+Measured: Meta calls **6380 prompt / 3528 completion** and **8735 / 2631** tokens (`cost_usd` null — no trusted price table); one Modal sandbox `0.125 CPU / 512 MiB`; sandbox destroyed; **0 sandboxes running** verified through `client.sandboxes.list()`. Validation recorded `skipped` because the target repo's vitest suite needs installed dependencies that a deny-egress sandbox cannot fetch.
+
+Three defects were found and fixed by this run (not present in the offline evidence):
+1. `createOfflineWorkerDeps` dropped `resolveSandboxEnv` and `createSandboxBackend` from the provider composition — real jobs cloned **without a credential** and ran the agent **tool-less**. Fixed with a regression test (`ade7d5f`).
+2. A productive turn that ended with a summary instead of the empty sentinel was dead-lettered when the turn budget ran out, discarding a valid diff. The handler now accepts a produced in-bounds diff on **turn**-budget exhaustion only; token/cost/time caps still fail hard (`5abf9d8`).
+3. The acceptance verifier minted its read token with `contents` only, so its own `GET /pulls` returned 403 while the PR itself was fine (`43a43f6`-class fix: request `pullRequests: "read"`).
+
+Runs 1–3 of the same script failed earlier (missing git credential, then the per-turn cap, then the completion protocol); each was diagnosed from persisted rows and fixed before the next attempt, with no retries after a success.
+
 ### Wave 8 open items (need the user)
 
-1. **Live PR acceptance deferred by the user** (2026-10-30). No GitHub or provider call was made in this wave; the PR path is proven by 94 connector tests, 196 worker tests and the offline acceptance. When wanted: one bounded run on `ivory-26/agent-bank`.
+1. **Close the acceptance PR/branches** when the evidence is no longer needed: PR `#1`, branch `task/w8-live-24b80218`, and wave 7's `task/w7-live-da35089b`.
 2. **Wave 9 = the product surface**: design system, run detail (`/runs/$taskId`), approvals page, repository onboarding, navigation — built on the server actions that now exist.
 3. **Approval decision is not a distributed transaction**: `decide` (with its audit row) commits before the follow-up job is enqueued. A queue failure at that instant leaves an approved row with no job; replay returns `CONFLICT`. Documented in `CHALLENGES.md`; recovery today is an operator re-enqueue.
 4. **Validation-image coverage**: `bun test` / `bun run <script>` are image-safe; `npm`/`pytest`/`cargo`/`go` are allowlisted but not preflighted in the sandbox image, so a missing binary surfaces as a failed report (exit 127) rather than a provisioning error.

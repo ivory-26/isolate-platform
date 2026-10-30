@@ -392,6 +392,12 @@ Merge commits: `a2c4e1e` (DB), `546551a` (VAL), `d27f4e2` (GH), `cfe1c2f` (WRK),
 
 **Deliberately not done**: no live GitHub or inference call (user deferred the live PR to a later request); no web UI (routes/components/styles untouched). Wave 9 owns the design system, run detail, approvals page and repository onboarding.
 
+### Wave 8 live acceptance record (2026-10-30)
+
+**PASSED** after three diagnosed failures: task `2960432e-e63a-404d-bf34-cacae5d4fe3d`, branch `task/w8-live-24b80218`, PR `ivory-26/agent-bank#1` (open, one file, head `b0d5700`), status `pull_request_created`. Real Meta (`6380/3528` and `8735/2631` tokens, cost null) and one Modal sandbox (`0.125 CPU / 512 MiB`, destroyed, 0 running). Validation `skipped` on this repo (vitest needs installed deps; deny-egress sandbox cannot fetch them).
+
+Fixes produced by the live path: `ade7d5f` (composition forwarded `resolveSandboxEnv` + `createSandboxBackend`; before it, jobs cloned without a credential and ran tool-less), `5abf9d8` (turn-budget exhaustion with a produced diff is completion), and the acceptance verifier now requests `pullRequests: "read"`. Runner: `scripts/acceptance-live-pr.ts` (`LIVE_PR=1`); diagnostic: `scripts/diagnose-live-clone.ts` (`DIAGNOSE_LIVE=1`, one tiny sandbox).
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

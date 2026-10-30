@@ -297,6 +297,8 @@ try {
 	const installation = await broker.getInstallationToken({
 		repositoryFullName: repoFullName,
 		contents: "read",
+		// The verification reads the PR itself and its files.
+		pullRequests: "read",
 	});
 	const headers = {
 		Authorization: `Bearer ${installation.token}`,

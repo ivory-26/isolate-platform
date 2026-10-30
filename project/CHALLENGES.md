@@ -418,3 +418,24 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: `TASK_COLUMNS` now selects `pull_request_number`, `pull_request_url`, `retry_of`, `retry_depth`; the columns did not exist yet, so every live task read failed. The DB lane had flagged this dependency in its report.
 - Correction: applied `0006` (user-approved) and re-ran the suite: 1398/0 with live Neon.
 - Prevention: a migration that adds columns to a table read by existing suites makes the live suite depend on migration order. The lane report must state it (it did), and the coordinator must apply the migration before treating live failures as regressions.
+
+## 2026-10-30 — W8 live: the composed worker dropped the git credential and the tool backend
+
+- Symptom: the first live PR acceptance failed at resume with `GIT_FAILED`, no `workspace.cloned` event and no diff. The same credential cloned the repo from the host in 1.9 s and in a diagnostic Modal sandbox in 0.8 s.
+- Root cause: `createOfflineWorkerDeps` builds `TaskExecutionDeps` by hand from `WorkerCompositionOverrides`, and it copied `lifecycle`, `createWorkspaceGit`, `pushEnabled` and the validation read but **not** `resolveSandboxEnv` or `createSandboxBackend`. The overrides type is `Partial<Omit<TaskExecutionDeps, …>>`, so TypeScript cannot see a field that is simply never read. The real composition therefore provisioned a sandbox with no `GIT_CONFIG_*` credential (clone → auth failure) and gave the agent no write tools.
+- Correction: both seams are forwarded, with a regression test that asserts the exact function identities survive composition (`ade7d5f`). The live rerun then cloned successfully.
+- Prevention: a hand-built dependency object is a contract boundary. Every seam the composition advertises must be asserted in a composition test, not just in the handler tests that inject deps directly. Wave 7's live run passed because its script assembled deps by hand and never exercised this composition path.
+
+## 2026-10-30 — W8 live: a productive turn that ends with a summary was treated as a budget failure
+
+- Symptom: the second live run cloned and ran two Meta turns (2 and 6 tool calls) but dead-lettered with `BUDGET_EXCEEDED`; a third run did the same with a 4096-token cap. No diff artifact existed because the failure happened before the diff gate.
+- Root cause: the loop's completion protocol is "end the turn with an empty response". Muse Spark 1.3 answers with a summary instead, so the turn budget ran out even though the work was done, and budget exhaustion was an unconditional failure transition.
+- Correction: on **turn**-budget exhaustion the handler now checks the diff; a non-empty in-bounds diff continues to the normal diff/validation/approval flow, and an empty diff still fails closed. Token, cost and wall-time caps remain hard failures (`5abf9d8`, two new tests).
+- Prevention: a model-behaviour protocol must not be the only completion signal. Use the artifact the system can verify (the diff) as evidence, and keep spend caps strict so "completed" can never mean "ran out of money".
+
+## 2026-10-30 — W8 live: the acceptance verifier used an under-scoped token
+
+- Symptom: the successful run created PR #1, then the script's own verification failed with `403 !== 200` on `GET /repos/.../pulls/1`.
+- Root cause: the verifier minted an installation token with `contents: "read"` only. Reading a pull request requires the `pull_requests` permission on the token request, even though the App itself has it.
+- Correction: the verifier requests `pullRequests: "read"` alongside `contents: "read"`; the PR was confirmed independently through `gh` (open, base `main`, one file, head `b0d5700`). The platform action was never in doubt — only the check was wrong.
+- Prevention: a verification step is code too. When a check fails, first prove whether the action or the check is wrong before touching the implementation; here the persisted `tasks.pull_request_*` and the GitHub PR both predated the assertion.

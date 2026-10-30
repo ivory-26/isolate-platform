@@ -1,27 +1,27 @@
 # Status
 
-Last updated: 2026-10-30 (wave 7 merged offline; migration `0005` pending user-approved application; wave 6 shipped)
+Last updated: 2026-10-30 (wave 7 merged; migration `0005` applied; one bounded Meta + Modal pass complete; GitHub credentials pending)
 
-## Current: wave 7 — Execution truth (merged offline, migration pending)
+## Current: wave 7 — Execution truth (merged, migrated, live pass complete)
 
-Wave 7 closes the five gaps that stopped an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. A task can now be planned, cloned, edited, committed, recorded and paused at a human approval gate before push — proven offline with fakes, with no Baseten/Modal/GitHub credential in use.
+Wave 7 closes the five gaps that stopped an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. A task can now be planned, cloned, edited, committed, recorded and paused at a human approval gate before push.
 
 - **Merged on `main`** (`--no-ff`, zero conflicts): W7-DB `e1db88f`, W7-SBX `00f8e5a`, W7-TOOLS `5dbe398`, W7-GH `cf44b78`, W7-WRK `4f8c74e`. Contracts were committed first at `7392fb9`/`7313446`/`d379c8b`/`478960e`/`f4235a1`.
-- **Data plane**: migration `0005_execution_truth.sql` (bounded inline artifact content, repository/attempt uniqueness, one pending approval per task/action, org-scoped task list, `resume_task` job type); `RepositoryRepository`, `ArtifactRepository`, `PostgresExecutionLifecycle` + in-memory fake. Migration is **written but NOT applied** to Neon.
+- **Data plane**: migration `0005_execution_truth.sql` is **applied to Neon `isolate-platform`** (`br-steep-poetry-ar5iwdkb`) and verified: `artifacts.content text` + 256 KiB byte CHECK, `jobs_type_check` includes `resume_task`, all four new indexes present, zero duplicate pending approvals before apply. `RepositoryRepository`, `ArtifactRepository`, `PostgresExecutionLifecycle` + in-memory fake are merged.
 - **Sandbox**: `TaskWorkspaceGit` (toolchain preflight, clean-URL shallow clone, branch, commit, bounded diff, non-force push); create-time `SandboxSpec.env` credential via `GIT_CONFIG_*`; Modal stdin for trusted file writes; default image `oven/bun:1`; clone/push egress allowlist; every other command stays deny.
 - **Tools**: risk-table policy (`read_only`/`scoped_write` allowed, `sensitive` → `APPROVAL_REQUIRED`, `destructive` denied); `repo.write_file`, `git.commit_local`, `git.diff_summary`; bounded ownership globs; second-gate denials are audited as denials.
-- **GitHub**: real `createGitHubAppTokenProvider` (RS256 App JWT via WebCrypto, repo-scoped onboarding token, cache until expiry−300 s, credential-free errors) with generated-key tests.
+- **GitHub**: real `createGitHubAppTokenProvider` (RS256 App JWT via WebCrypto, repo-scoped installation token, cache until expiry−300 s, credential-free errors) with generated-key tests. **No live GitHub call has run; credentials are the next step.**
 - **Worker**: handler v2 records attempts/events, clones, runs bounded turns with ownership-bound write tools, validates a non-empty in-bounds diff, stores a bounded artifact, and pauses at `awaiting_approval` **before** any sandbox when push is enabled. `resume_task` verifies approval status + payload SHA; cancellation is checked before turns/push; teardown stays exactly once. Composition binds the DB lifecycle, workspace git, Modal provider, token broker and `GITHUB_PUSH_ENABLED` without logging credentials.
 - **Seed**: `bun run seed` (`scripts/seed-workspace.ts`) creates the repository + workflow definition/version a Postgres submission needs; it refuses without `DATABASE_URL`, validates membership and compiles the graph before inserting.
-- **Gates on `main`**: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **1203 pass / 0 fail / 5 skip** offline ×2 · web production build green · client sweep **30 checks** · production smoke green · `acceptance:offline` PASS (wave-6 lifecycle path; the wave-7 path is covered by 152 worker tests).
+- **Gates on `main`**: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **1203 pass / 0 fail / 5 skip** offline ×2 · **1208 pass / 0 fail with live Neon** (includes the new `0005` lifecycle test) · web production build green · client sweep **30 checks** · production smoke green · `acceptance:offline` PASS (wave-6 lifecycle path; the wave-7 path is covered by 152 worker tests).
+- **Live acceptance (2026-10-30, one bounded sequential pass)**: Meta agent turn **6.1 s**, 60-char plan, **103 prompt / 429 completion tokens**; one Modal sandbox at **0.125 CPU / 512 MiB / 60 s** ran `echo isolate-ok` exit 0 and was destroyed; **0 running sandboxes** verified via `client.sandboxes.list()`; temporary usage org and rows cleaned (`0` leftovers). `cost_usd` is null because no trusted price table is configured.
 - **Worktrees**: all five `task/w7-*` branches merged and pruned; `git worktree list` now shows only `main`.
 
 ### Wave 7 open items (need the user)
 
-1. **Apply migration `0005`** to Neon `isolate-platform` — additive, but requires explicit approval. Until applied, the live DB suite skips the new lifecycle test and the seed/worker query paths that depend on `artifacts.content`/`resume_task` are unavailable.
-2. **No live provider run.** Wave 7 used zero Baseten/Modal/GitHub credentials. The next keyed step is a single bounded Modal clone/echo/terminate pass plus one Meta turn — separate explicit approval.
-3. **PR creation and approval UI are wave 8.** Wave 7 pushes an approved branch and stops at `review_ready`; the page that records approve/reject and the live GitHub App wiring are wave 8.
-4. **Validation gate is diff-based, not test-based.** `review_ready` means "an in-bounds change exists"; running the repo's formatter/lint/typecheck/tests as a gate is wave 8.
+1. **GitHub credentials are not configured.** The broker is implemented and unit-tested, but no App token has been minted live. Needed: `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (PKCS#8 PEM), optionally `GITHUB_API_BASE_URL`, plus the App installed on the target repository. Do not paste secrets in chat; add them to `.env` and say when ready.
+2. **PR creation and approval UI are wave 8.** Wave 7 pushes an approved branch and stops at `review_ready`; the page that records approve/reject and PR creation remain wave 8.
+3. **Validation gate is diff-based, not test-based.** `review_ready` means "an in-bounds change exists"; running the repo's formatter/lint/typecheck/tests as a gate is wave 8.
 
 ## Previous: wave 6 — Google sign-in, task intent persisted, real adapters bound
 

@@ -287,7 +287,11 @@ Merge commits: `e1db88f`, `00f8e5a`, `5dbe398`, `cf44b78`, `4f8c74e`. Post-merge
 
 Coordinator integration added after the merges: `resume_task` in `JobType` + `jobs_type_check`; `PostgresExecutionLifecycle`, `createTaskWorkspaceGit`, GitHub token broker and `resolveSandboxEnv` bound in the real composition; `pushEnabled` only with a real sandbox + broker; second-gate denials audited as denials; `scripts/seed-workspace.ts` + `bun run seed`; acceptance expectation updated from `POLICY_DENIED` to `APPROVAL_REQUIRED` for `git.push_branch`.
 
-Not done: migration `0005` is not applied; no live provider/GitHub call; the acceptance script still exercises the wave-6 lifecycle path (the wave-7 path is covered by 152 worker tests); PR creation and all UI remain wave 8.
+**Migration applied (2026-10-30, user-approved via Neon MCP)**: `0005` applied to `isolate-platform` / `br-steep-poetry-ar5iwdkb` in one transaction after confirming zero duplicate pending approvals. Verified: `artifacts.content text` + `octet_length(content) <= 262144`, `jobs_type_check` includes `resume_task`, and all four indexes (`repositories_org_full_name_unique`, `task_attempts_task_attempt_unique`, `approvals_pending_task_action_unique`, `tasks_org_created_idx`).
+
+**Live acceptance (2026-10-30, one bounded sequential pass)**: Meta plan turn 6.1 s / 103 prompt + 429 completion tokens; one Modal sandbox 0.125 CPU / 512 MiB / 60 s, `echo isolate-ok` exit 0, destroyed; zero running sandboxes verified; temporary usage org/rows cleaned; `cost_usd` null (no price table). No Baseten call and no GitHub call were made. After migration, the full suite with live Neon passed **1208/1208** (includes the new `0005` lifecycle roundtrip).
+
+Not done: no live GitHub App token has been minted (credentials pending); the acceptance script still exercises the wave-6 lifecycle path (the wave-7 path is covered by 152 worker tests); PR creation and all UI remain wave 8.
 
 ### Wave 7 risks
 - Clone credentials are the highest-risk surface: the lane must prove the token is absent from argv, URLs, output, logs and fixtures.

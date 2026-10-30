@@ -81,7 +81,7 @@ export type AgentTurnCaps = {
 	maxSteps: number;
 };
 
-/** Minimal agent-facing surface used by the SDLC workflow. */
+/** Minimal agent-facing surface driven by the worker's imperative handler. */
 export type CodingAgentRuntime = {
 	id: string;
 	name: string;

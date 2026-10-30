@@ -33,15 +33,8 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 
 const OVERRIDDEN_SECRET_MARKER = "[token-redacted]";
 
-/**
- * Removes every known credential shape and every explicitly injected secret
- * from `text`, then caps the result. Secrets shorter than 8 characters are
- * ignored (not creditable credentials).
- */
-export function redactSecrets(
-	text: string,
-	extraSecrets: readonly string[] = [],
-): string {
+/** Replaces every known credential shape and injected secret; no length cap. */
+function redactAll(text: string, extraSecrets: readonly string[]): string {
 	let out = text;
 	for (const secret of extraSecrets) {
 		if (typeof secret === "string" && secret.length >= 8) {
@@ -51,8 +44,34 @@ export function redactSecrets(
 	for (const [pattern, replacement] of SECRET_PATTERNS) {
 		out = out.replace(pattern, replacement);
 	}
+	return out;
+}
+
+/**
+ * Removes every known credential shape and every explicitly injected secret
+ * from `text`, then caps the result. Secrets shorter than 8 characters are
+ * ignored (not creditable credentials).
+ */
+export function redactSecrets(
+	text: string,
+	extraSecrets: readonly string[] = [],
+): string {
+	const out = redactAll(text, extraSecrets);
 	if (out.length > MAX_SANITIZED_MESSAGE_LENGTH) {
 		return `${out.slice(0, MAX_SANITIZED_MESSAGE_LENGTH)}…`;
 	}
 	return out;
+}
+
+/**
+ * Context-excerpt variant (§4.6): redaction runs **before** truncation and the
+ * 480-character message cap does not apply — the excerpt cap belongs to the
+ * bundle assembler, after redaction. A secret split across the cut point is
+ * already scrubbed here, so a fragment cannot survive.
+ */
+export function redactSecretsUnbounded(
+	text: string,
+	extraSecrets: readonly string[] = [],
+): string {
+	return redactAll(text, extraSecrets);
 }

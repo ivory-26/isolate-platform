@@ -83,6 +83,8 @@ Composition (wave 6): `apps/worker/src/runtime-composition.ts` binds the Postgre
 
 Execution lifecycle (wave 7): the handler writes durable state through an injected `ExecutionLifecycle` (`@isolate/shared`). One job records one `task_attempts` row, transitions `queued → planning → executing → validating → review_ready` (or `awaiting_approval`), and appends `run_events` for clone, agent turns, validation and artifact creation. The lifecycle implementation in `@isolate/db` keeps every read/write tenant-scoped and reuses the task state machine; the worker never issues raw SQL. A sensitive action persists an approval bound to the payload SHA, moves the task to `awaiting_approval`, suspends the run and acks the job; a separate `resume_task` job continues only for an approved record with the same SHA. `isCancelled` is checked before every turn and before push, and teardown remains exactly-once.
 
+Worker wiring (wave 7): `runtime-composition.ts` binds `PostgresExecutionLifecycle`, `createTaskWorkspaceGit` (only with a real sandbox provider) and, when `GITHUB_APP_*` is complete, the installation-token broker plus `resolveSandboxEnv` (create-time `GIT_CONFIG_*` credential). `pushEnabled` is true only with a real sandbox **and** a broker, and can be opted out with `GITHUB_PUSH_ENABLED=false`. A partial GitHub configuration fails closed with `MISSING_CONFIG`; no token is logged. The queue vocabulary gained `resume_task` in the same change as the `jobs_type_check` migration.
+
 ### Mastra agents and workflows
 - **Agents** reason within a defined role and receive only the tools they need.
 - **Workflows** define the SDLC state machine, branching, retries, persisted state, and approval boundaries.

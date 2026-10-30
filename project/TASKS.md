@@ -260,7 +260,7 @@ Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w7-*`, one `task/w7-*` b
 - Cherry-pick/merge green lanes into `main` with `--no-ff`; verify ownership (`git diff --stat main...<branch> -- packages/` empty for non-owner lanes); remove each lane worktree and delete its branch after merge.
 - Add `scripts/seed-workspace.ts` + `bun run seed` (demo organization, repository, workflow definition/version) and extend `scripts/acceptance-offline.ts` with the new path: submit → claim → clone (fake) → write/commit (fake) → lifecycle rows → diff artifact → approval pause → resume → teardown.
 - Full `bun run validate` ×2, web build + client sweep + smoke, `acceptance:offline`; prepare `0005` for Neon and apply it **only with explicit user approval** (Neon MCP); update STATUS/DECISIONS/CHALLENGES/ARCHITECTURE/SKILL-REGISTRY.
-- Status: planned.
+- Status: **done offline** — see the execution record below; migration application and any keyed pass remain open.
 
 ### Dependency graph / parallelism
 `C0 contracts (main 7392fb9) → {W7-DB, W7-SBX, W7-TOOLS, W7-GH in parallel} → W7-WRK (codes to contracts + fakes; composition wired by W7-OPS) → W7-OPS`.
@@ -270,6 +270,24 @@ W7-WRK must NOT import a database class that only exists on another lane: it dep
 - No UI redesign and no new functional pages; approval decisions are exercised through the service/repository layer offline. The product surface and design system are wave 8.
 - No test-execution validation gate (formatter/lint/typecheck/test); the wave-7 validation gate is "non-empty diff + ownership honored". Running repository toolchains as a gate needs a per-repo command contract and is wave 8.
 - No live GitHub App, no deployment origin, no object storage, no workflow editor.
+
+### Wave 7 execution record (2026-10-30)
+
+All five lanes reported, were independently re-gated twice by the coordinator, and merged with `--no-ff` (zero conflicts):
+
+| Lane | Commit | Coordinator gates (×2) |
+|---|---|---|
+| W7-DB | `740ae54` | biome 0 errors / 10 pre-existing warnings · typecheck 8/8 · 208 tests (5 live skips) |
+| W7-SBX | `33ad23b` | biome clean · typecheck 8/8 · 292 tests |
+| W7-TOOLS | `b55e1ae` | biome clean · typecheck 8/8 · 84 tests |
+| W7-GH | `14c3e5f` | biome clean · typecheck 8/8 · 61 tests |
+| W7-WRK | `bd7e012` | biome clean · typecheck 8/8 · 146 tests |
+
+Merge commits: `e1db88f`, `00f8e5a`, `5dbe398`, `cf44b78`, `4f8c74e`. Post-merge `main`: biome 0 errors (10 warnings) · typecheck 8/8 · **1203 pass / 0 fail / 5 skip** ×2 · web build + 30-check sweep + smoke · `acceptance:offline` PASS.
+
+Coordinator integration added after the merges: `resume_task` in `JobType` + `jobs_type_check`; `PostgresExecutionLifecycle`, `createTaskWorkspaceGit`, GitHub token broker and `resolveSandboxEnv` bound in the real composition; `pushEnabled` only with a real sandbox + broker; second-gate denials audited as denials; `scripts/seed-workspace.ts` + `bun run seed`; acceptance expectation updated from `POLICY_DENIED` to `APPROVAL_REQUIRED` for `git.push_branch`.
+
+Not done: migration `0005` is not applied; no live provider/GitHub call; the acceptance script still exercises the wave-6 lifecycle path (the wave-7 path is covered by 152 worker tests); PR creation and all UI remain wave 8.
 
 ### Wave 7 risks
 - Clone credentials are the highest-risk surface: the lane must prove the token is absent from argv, URLs, output, logs and fixtures.

@@ -306,3 +306,31 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: Bun auto-loads `.env` for `bun run`, and the offline script deliberately refuses to start when any `BASETEN_*`/`MODAL_*` variable is present — exactly the guard that keeps CI key-free.
 - Correction: run the offline acceptance with `bun --no-env-file scripts/acceptance-offline.ts` in a keyed workspace, or keep the keyed `.env` outside that invocation. CI has no `.env`, so its plain command still exercises the guard.
 - Prevention: treat "offline acceptance refuses" as a key-presence signal, not a bug. Make the key-free invocation explicit (`--no-env-file`) in local runbooks.
+
+## 2026-10-30 — W7: the approval gate cannot live after the sandbox is destroyed
+
+- Symptom: the first design paused a completed task in `awaiting_approval` with the commit still inside the sandbox. The sandbox is torn down in `finally`, so the commit (and the branch to push) would not exist when a human approved.
+- Root cause: approval placement was chosen from the state-machine diagram, not from resource lifetime. A sandbox is a disposable, job-scoped resource; anything that must outlive the job needs durable storage.
+- Correction: request approval **before** execution, during `planning`, bound to the exact `{repoUrl, branch}` payload SHA. The paused task holds no lease and no sandbox; `resume_task` re-checks status + SHA and then executes/pushes. The state machine gained `executing → awaiting_approval` and `review_ready → awaiting_approval`.
+- Prevention: when placing a human gate, ask "what resource is still alive when the human answers?" If the answer is "none", either move the gate earlier or persist the artifact first.
+
+## 2026-10-30 — W7: a risk-band change broke the CI acceptance script
+
+- Symptom: after W7-TOOLS moved `git.push_branch` from denied to `APPROVAL_REQUIRED`, `acceptance:offline` failed on `expected 'POLICY_DENIED', received 'APPROVAL_REQUIRED'` and reported the whole lifecycle as `failed` instead of `completed`.
+- Root cause: the acceptance script is outside `typecheck-all` and asserts policy outcomes by literal string. A policy table change is a behavior change that no TypeScript gate sees.
+- Correction: the coordinator updated the assertion to the new band; the script passed again. The failure was a correct signal, not a flake.
+- Prevention: treat `scripts/` as a consumer of every policy change. When a risk band or tool name changes, grep `scripts/` and CI for the old expectation in the same edit.
+
+## 2026-10-30 — W7: the queue's job vocabulary spans two packages
+
+- Symptom: the worker needed a `resume_task` handler and widened `WorkerJobType` locally, but `@isolate/db`'s `JobType` and the `jobs_type_check` constraint did not accept the value, so a real enqueue would fail at the database.
+- Root cause: `JobType` is declared in `packages/db` and consumed by `apps/worker`; the lane that adds a job type does not own the queue schema.
+- Correction: the coordinator added `resume_task` to the union and replaced the CHECK constraint in `0005` (drop + add, idempotent).
+- Prevention: queue vocabulary belongs in the cross-package contracts commit. Any new job type must land in the same commit as the type union and a migration note.
+
+## 2026-10-30 — W7: sandbox stdin is written before output is read
+
+- Symptom: the Modal adapter writes the whole `stdinText` and closes EOF before awaiting stdout/stderr. For a command that reads stdin first (the `bun -e` file-writer), this is correct; for a command that writes a large output before reading stdin, the pipe could fill and deadlock.
+- Root cause: the provider contract has no streaming stdin; adding one safely means concurrent read/write.
+- Correction: `stdinText` is limited to the trusted file-write path, whose consumer reads stdin to EOF first. Documented here and in the provider contract.
+- Prevention: do not use `stdinText` for arbitrary commands. If a future tool needs concurrent stdin/stdout, extend the adapter with a streaming contract and a bounded writer.

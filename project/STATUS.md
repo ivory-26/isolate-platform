@@ -1,17 +1,27 @@
 # Status
 
-Last updated: 2026-10-30 (wave 7 planned; cross-package execution contracts committed on `main`; wave 6 shipped)
+Last updated: 2026-10-30 (wave 7 merged offline; migration `0005` pending user-approved application; wave 6 shipped)
 
-## Current: wave 7 — Execution truth (planned, contracts committed)
+## Current: wave 7 — Execution truth (merged offline, migration pending)
 
-Wave 7 closes the five gaps that still stop an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. The outcome is a task that can be claimed, provisioned, cloned, edited, committed, recorded and stopped at a human approval gate before push/PR — **proven offline with fakes**, with no Baseten/Modal/GitHub credential in use.
+Wave 7 closes the five gaps that stopped an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. A task can now be planned, cloned, edited, committed, recorded and paused at a human approval gate before push — proven offline with fakes, with no Baseten/Modal/GitHub credential in use.
 
-- **Contracts first** (`main` `7392fb9`): `SandboxSpec.env` (create-time, never model-visible), `TaskWorkspaceGit`, `ExecutionLifecycle`, `workspace.cloned`/`artifact.created` run events, optional sandbox write-surface methods, and `GitHubTokenProvider` with a fail-closed placeholder. Typecheck 8/8, biome clean, **954 pass / 0 fail / 4 skip** offline.
-- **Lanes** (one worktree + `task/w7-*` branch each): W7-DB (migration `0005`, repositories, lifecycle sink), W7-SBX (clone/commit/diff/push, env credential, egress allowlist, image preflight), W7-TOOLS (write tools, risk table, ownership guard), W7-GH (installation-token broker), W7-WRK (handler v2: lifecycle, clone, approval pause/resume, cancellation). Full specs and DoD: [`TASKS.md`](TASKS.md#wave-7--execution-truth-seed--clone--edit--commit--lifecycle--approval-gate-planned-2026-10-30).
-- **Validation loop**: agent self-gates → coordinator re-runs scoped gates ×2 → red lanes returned with exact output (max 2 iterations) → merge only green → full `bun run validate` + web build/sweep + `acceptance:offline`.
-- **Worktrees**: merged wave-5/6 worktrees were pruned (`task/w5-auth`, `task/w6-finish` deleted after merge verification); wave-7 worktrees are `../worktrees-platform/w7-*`.
-- **Explicitly not in wave 7**: UI redesign, functional run/approval pages, test-execution gates, live GitHub App, deployment origin, object storage. Frontend design starts **after** this wave merges (wave 8), when lifecycle/approval/artifact APIs are stable.
-- **Open before merge**: lane reports + coordinator gates; migration `0005` is written but **not applied** to Neon (needs explicit user approval).
+- **Merged on `main`** (`--no-ff`, zero conflicts): W7-DB `e1db88f`, W7-SBX `00f8e5a`, W7-TOOLS `5dbe398`, W7-GH `cf44b78`, W7-WRK `4f8c74e`. Contracts were committed first at `7392fb9`/`7313446`/`d379c8b`/`478960e`/`f4235a1`.
+- **Data plane**: migration `0005_execution_truth.sql` (bounded inline artifact content, repository/attempt uniqueness, one pending approval per task/action, org-scoped task list, `resume_task` job type); `RepositoryRepository`, `ArtifactRepository`, `PostgresExecutionLifecycle` + in-memory fake. Migration is **written but NOT applied** to Neon.
+- **Sandbox**: `TaskWorkspaceGit` (toolchain preflight, clean-URL shallow clone, branch, commit, bounded diff, non-force push); create-time `SandboxSpec.env` credential via `GIT_CONFIG_*`; Modal stdin for trusted file writes; default image `oven/bun:1`; clone/push egress allowlist; every other command stays deny.
+- **Tools**: risk-table policy (`read_only`/`scoped_write` allowed, `sensitive` → `APPROVAL_REQUIRED`, `destructive` denied); `repo.write_file`, `git.commit_local`, `git.diff_summary`; bounded ownership globs; second-gate denials are audited as denials.
+- **GitHub**: real `createGitHubAppTokenProvider` (RS256 App JWT via WebCrypto, repo-scoped onboarding token, cache until expiry−300 s, credential-free errors) with generated-key tests.
+- **Worker**: handler v2 records attempts/events, clones, runs bounded turns with ownership-bound write tools, validates a non-empty in-bounds diff, stores a bounded artifact, and pauses at `awaiting_approval` **before** any sandbox when push is enabled. `resume_task` verifies approval status + payload SHA; cancellation is checked before turns/push; teardown stays exactly once. Composition binds the DB lifecycle, workspace git, Modal provider, token broker and `GITHUB_PUSH_ENABLED` without logging credentials.
+- **Seed**: `bun run seed` (`scripts/seed-workspace.ts`) creates the repository + workflow definition/version a Postgres submission needs; it refuses without `DATABASE_URL`, validates membership and compiles the graph before inserting.
+- **Gates on `main`**: biome **0 errors** (10 pre-existing warnings) · typecheck **8/8** · **1203 pass / 0 fail / 5 skip** offline ×2 · web production build green · client sweep **30 checks** · production smoke green · `acceptance:offline` PASS (wave-6 lifecycle path; the wave-7 path is covered by 152 worker tests).
+- **Worktrees**: all five `task/w7-*` branches merged and pruned; `git worktree list` now shows only `main`.
+
+### Wave 7 open items (need the user)
+
+1. **Apply migration `0005`** to Neon `isolate-platform` — additive, but requires explicit approval. Until applied, the live DB suite skips the new lifecycle test and the seed/worker query paths that depend on `artifacts.content`/`resume_task` are unavailable.
+2. **No live provider run.** Wave 7 used zero Baseten/Modal/GitHub credentials. The next keyed step is a single bounded Modal clone/echo/terminate pass plus one Meta turn — separate explicit approval.
+3. **PR creation and approval UI are wave 8.** Wave 7 pushes an approved branch and stops at `review_ready`; the page that records approve/reject and the live GitHub App wiring are wave 8.
+4. **Validation gate is diff-based, not test-based.** `review_ready` means "an in-bounds change exists"; running the repo's formatter/lint/typecheck/tests as a gate is wave 8.
 
 ## Previous: wave 6 — Google sign-in, task intent persisted, real adapters bound
 

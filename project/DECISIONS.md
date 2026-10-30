@@ -244,3 +244,11 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: merged worktrees accumulate `node_modules`, stale `.env` files and EOL noise; leaving them invites edits against a dead branch. The EOL guard prevents force-removal from hiding real uncommitted work.
 - Consequences: `git worktree list` shows only active lanes plus `main`; wave-5/6 trees were pruned on 2026-10-30 after both branches were confirmed merged.
 - Alternatives rejected: keeping every worktree forever (disk and confusion); deleting on merge without the EOL check (could discard real work).
+
+## 2026-10-30 — W7 integration: queue vocabulary, seed, and credential wiring
+
+- Decision: `resume_task` is added to `JobType` and the `jobs_type_check` constraint in `0005` (drop + add, idempotent) rather than emulated in the worker. `scripts/seed-workspace.ts` (`bun run seed`) creates the repository + workflow definition/version using raw SQL because no workflow-definition writer repository exists yet; it validates membership and compiles the graph before inserting.
+- Decision: `runtime-composition.ts` binds the DB lifecycle and `createTaskWorkspaceGit` when a real sandbox provider is selected, and builds the GitHub broker only when all three `GITHUB_APP_*` values are present. The per-job `resolveSandboxEnv` returns `GIT_CONFIG_*` (`http.extraheader`) values for a repo-scoped installation token; `pushEnabled` requires both a real sandbox and a broker and is opt-out via `GITHUB_PUSH_ENABLED=false`.
+- Rationale: the queue's vocabulary and the worker's handler registration must agree at the database, not just in TypeScript; a local worker union would pass typecheck and fail on the first real enqueue. Seed data is the precondition for any Postgres submission, and credential wiring must be fail-closed on partial configuration.
+- Consequences: a partial GitHub configuration stops worker boot with `MISSING_CONFIG`; a public repository still clones without a broker. `0005` must be applied before the seed/worker paths that touch `artifacts.content`, `resume_task` or the new unique indexes are usable.
+- Alternatives rejected: widening only the worker's type union (runtime failure at enqueue); a full workflow-authoring repository/UI in wave 7 (wave 8 surface work); passing the token in the clone URL (leaks into `.git/config`).

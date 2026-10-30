@@ -369,3 +369,10 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: the handler carried `deps.sandbox.idleTimeoutMs` but never forwarded it into `SandboxSpec`. `ModalSandboxProvider` then used its 300 s default idle window, while the live spec lifetime was 240 s; `validateIdleTimeout(idle, lifetime)` correctly denied it before any sandbox existed.
 - Correction: the handler now computes one bounded `lifetimeMs` and forwards `idleTimeoutMs` clamped to that lifetime (or omits it when unset). The handler test asserts the forwarded spec includes the clamped idle bound.
 - Prevention: when a provider has a default for a resource bound, validate that default against the other configured bounds and forward every explicit limit. A missing optional field is not "no constraint"; it is the adapter's default.
+
+## 2026-10-30 — W7: `oven/bun:1` ships Bun but not git
+
+- Symptom: the third live push attempt created a sandbox and immediately failed the toolchain preflight with `SANDBOX_IMAGE_UNSUPPORTED`. A sandbox usage row was written, the sandbox was destroyed, and zero sandboxes remained. No clone or push occurred.
+- Root cause: the `oven/bun:1` final stage is `debian:trixie` with Bun and CA certificates only; `git` is not installed. The adapter defaulted to that image when wave 7 changed the image for Bun support, and `assertToolchain` correctly rejected it.
+- Correction: `createModalSandboxClient` accepts `imageSetupCommands` and builds the base image with `apt-get install git grep` via `Image.dockerfileCommands(...).build(app)`, memoized per client. `selectSandboxProvider` enables the setup layer for the default Bun image and supports `MODAL_IMAGE_SETUP=off` for a custom image that already has the toolchain.
+- Prevention: treat an image name as a hypothesis and the preflight as the guarantee. Any image change must be validated for every binary the toolchain and tools rely on; a missing binary is a deterministic failure, not a transient one.

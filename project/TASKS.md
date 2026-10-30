@@ -303,6 +303,72 @@ Not done: no live GitHub App token has been minted (credentials pending); the ac
 - Approval pause/resume touches queue semantics; the job must not be retried into a second sandbox while paused.
 - The migration adds a partial unique approval index; duplicate pending approvals become a constraint violation, so the worker must treat an existing pending approval as idempotent success.
 
+## Wave 8 — Product surface + review close (planned 2026-10-30)
+
+Goal: the platform opens a pull request **only after the repository's configured validation command passes and a human approves that exact PR**, and a person can re-run failed work again inside the same task boundary instead of accepting the failure. **Scope decision (user, 2026-10-30): backend only — no web UI lane this wave.**
+
+Carried in from wave 7: PR creation, a test-based validation gate (instead of "diff present"), the user-triggered rerun path, and repository validation policy. The design-system/run-detail/approval UI moves to wave 9, together with the deployment origin. Wave 7's accepted branch `task/w7-live-da35089b` on `ivory-26/agent-bank` is evidence only and stays untouched until the user deletes it.
+
+Validation-failure policy (user, 2026-10-30): **no automatic repair turn.** A failed validation ends the attempt with a persisted report and no push; the user is then offered a **rerun in the same boundary** — same repository, goal, acceptance criteria and file ownership, as a new task linked to the failed one (`retry_of`), bounded to depth 3.
+
+Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w8-*`, one `task/w8-*` branch per lane. Rules unchanged: agents own ONLY the files listed; root files (`package.json`, root `bun.lock`, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package (`bunx biome check <owned>`, `bun scripts/typecheck-all.ts`, `bun test --no-env-file <owned-tests>`); commit on the branch before reporting; never push; never read/print `.env*`.
+
+**No UI lane.** `apps/web` route files, components and styles are untouched; only its server-side control-plane services gain the rerun action (W8-CTL), with no page, route, component or CSS change in this wave.
+
+### W8-0 — Coordinator contracts commit (before any lane, on `main`)
+- `@isolate/shared`: `validationReportSchema` (`command`, `argv`, `exitCode`, `durationMs`, `outputBytes`, `truncated`, `status: passed|failed|skipped`) and `pullRequestRecordSchema` (`number`, `url`, `headSha`, `base`); new run-event type `task.retried` (the existing `validation.started`/`validation.finished`/`approval.decided`/`pr.created` types are reused as-is).
+- `packages/db` (`JobType` only, contract edit): adds `create_pull_request`; the `jobs_type_check` change lands in `0006`. `run_task` covers a rerun, so no `retry_task` type is needed.
+- No state-machine change: `failed` stays terminal. A rerun is a **new task row** in the same boundary, not a reopened terminal state.
+- No implementation. Lanes code against these; nobody redefines them.
+
+### W8-DB — `packages/db/**` (owner: agent W8-DB, branch `task/w8-db`)
+- Migration `0006_review_surface.sql` (**idempotent; NOT applied by the lane**):
+  - `repositories.validation_command text NULL` (CHECK length ≤ 512), `repositories.validation_timeout_ms integer NOT NULL DEFAULT 300000` (CHECK 1000–900000);
+  - `tasks.pull_request_number integer NULL`, `tasks.pull_request_url text NULL` (CHECK length ≤ 512);
+  - `tasks.retry_of uuid NULL REFERENCES tasks(id)`, `tasks.retry_depth integer NOT NULL DEFAULT 0` (CHECK 0–3), index on `retry_of`;
+  - `jobs_type_check` recreated to include `create_pull_request`.
+- New/extended repositories: `RunEventRepository.listByTask` (tenant-scoped, oldest-first, bounded page), `ApprovalRepository.listByTask` + `decide` (`pending → approved|rejected` with a real `expectedStatus` guard, `CONFLICT` on a decided row; `decided_by`/`decided_at` already exist and are `text`/`timestamptz` — do not change their types), `TaskRepository.createRetry`/read for the rerun boundary, `RepositoryRepository.setValidationPolicy` + read.
+- Acceptance criteria: every read carries `organization_id`; a decision on a decided/expired approval is `CONFLICT`; the decision writes an `audit_events` row in the same transaction; a retry copies repository/goal/acceptance/ownership from the failed task only (never budget beyond the original cap), links `retry_of`, increments `retry_depth`, and refuses depth > 3 or a non-`failed` source; in-memory fakes share the same decision helpers; live suite skips without `DATABASE_URL`.
+- DoD: scoped gates green ×2; migration not applied; commit + report with evidence.
+
+### W8-VAL — `packages/sandbox/**` (owner: agent W8-VAL, branch `task/w8-val`)
+- `runValidationCommand(repoPath, { command, timeoutMs })` over the existing argv-only execution path: a bounded command string is tokenized **without a shell**, checked against `commandPolicy` (extended with an explicit validation allowlist: `bun test`, `bun run <bounded script>`, `npm test`, `npm run <bounded script>`, `pytest`, `cargo test`, `go test`), executed with the repo timeout, captured stdout+stderr under a 64 KiB inline cap plus a full-log byte cap, and mapped to a `ValidationReport` (exit code, duration, truncated flag).
+- Refusals before execution: empty/oversize command, shell metacharacters (`;|&><$\``), unknown executable, timeout outside bounds, egress other than `deny`.
+- DoD: offline fake-provider tests only; zero live calls; commit + report.
+
+### W8-GH — `packages/integrations/**` (owner: agent W8-GH, branch `task/w8-gh`)
+- `createPullRequestForTask(...)` over the existing `createPrCreator` + `GitHubTokenProvider`: approval-bound canonical payload SHA, repo-scoped token, idempotent on an already-open PR for the head branch (returns it, does not fail), branch head SHA verified before create, bounded error mapping (401/403/404/422/429), no token/URL-with-userinfo in errors or logs.
+- DoD: fake-`fetch` tests + generated RSA key; no network; commit + report.
+
+### W8-WRK — `apps/worker/**` (owner: agent W8-WRK, branch `task/w8-wrk`)
+- Handler v3 validation gate: after the diff/ownership gate, when `repositories.validation_command` is set, run it in the same sandbox before teardown; record `validation.started`/`validation.finished` with the bounded report, store a bounded log artifact, and **a failed validation ends the task `failed` with no push and no repair turn** (the rerun path replaces repair; recorded in DECISIONS). No validation command configured → `review_ready` keeps the wave-7 meaning and the event carries `skipped`.
+- PR stage: a `create_pull_request` job handler verifies approval status + SHA + expiry, re-checks the remote head SHA against the pushed commit, creates the PR, transitions `review_ready → pull_request_created`, persists number/URL and appends `pull_request.created`. The transition must already exist in `TASK_STATE_TRANSITIONS`; if it does not, the lane reports it instead of widening the machine locally.
+- Idempotency: redelivery of `create_pull_request` returns the same PR; a cancelled task never creates one; rejection/expiry moves the task to `failed`.
+- Composition: bind the validation-policy reader and PR service only when GitHub is configured; no provider SDK import; no secret in logs.
+- DoD: offline fakes for provider/workspace/lifecycle/token/PR; event ordering; teardown unchanged; commit + report.
+
+### W8-CTL — `apps/web` server-side control-plane actions (owner: agent W8-CTL, branch `task/w8-ctl`)
+- **No UI surface**: no file under `apps/web/src/routes/`, `apps/web/src/components/`, `apps/web/src/features/**/*.tsx` or `apps/web/src/styles.css` may change. Only server-side services, server functions and their tests.
+- `retryTask(scope, { failedTaskId })`: capability `task:submit` checked **before** any storage read; the source task must be `failed`, belong to the caller's organization, be inside `retry_depth ≤ 3`, and its payload must be reproduced verbatim (repository, goal, acceptance criteria, file ownership, budget caps); creates the retry task through the store, records `task.retried` on the source task and `task.enqueued` on the new one, enqueues exactly one `run_task` job, and returns the new task id. A redelivered request with the same idempotency key returns the same task.
+- Expose the action as a server function (no route) so wave 9 only adds a button; keep the existing no-store/CSRF and server-only boundaries.
+- Tests: capability gate (viewer denied before storage), foreign-tenant denial, non-`failed` source rejected, depth-4 rejection, verbatim boundary reproduction, one job, idempotent replay.
+- DoD: scoped gates green ×2, `apps/web` build + client sweep unchanged-green (no client surface added); commit + report.
+
+### W8-OPS — Coordinator integration (after all lanes report)
+- Merge green lanes into `main` with `--no-ff`; verify `git diff --stat main...<branch> -- <non-owned paths>` is empty; prune worktrees.
+- Extend `scripts/acceptance-offline.ts`: submit → claim → clone → write/commit → validation **pass** → approval pause → resume → push (fake) → `review_ready` → approve PR → `create_pull_request` (fake) → `pull_request_created`; and a second scenario: validation **fail** → `failed`, no push, then `retryTask` → new task in the same boundary → one `run_task`; zero provider credentials.
+- Full `bun run validate` ×2; web build + client sweep + smoke (must be unchanged-green with no new client surface); prepare `0006` for Neon and apply **only with explicit user approval** (Neon MCP); update STATUS/DECISIONS/CHALLENGES/ARCHITECTURE/SKILL-REGISTRY.
+- Live close-out (needs a separate explicit approval): one bounded run against `ivory-26/agent-bank` that passes validation and creates **one** real pull request from a fresh branch, then report measured spend and remaining branches.
+
+### Dependency graph / parallelism
+`W8-0 contracts (main) → {W8-DB, W8-VAL, W8-GH in parallel} → {W8-WRK, W8-CTL in parallel, after the first three merge} → W8-OPS`.
+W8-WRK codes only against the shared contracts plus fakes until `runValidationCommand`/`createPullRequestForTask` are on `main`; W8-CTL depends on `TaskRepository.createRetry` (W8-DB) and the shared event vocabulary.
+
+### Wave 8 non-goals
+- **All web UI** (design system, run detail, approvals page, repository onboarding, navigation) — deferred to wave 9 with the user's design input.
+- Workflow editor (React Flow), object storage for full patches, multi-agent/planner-reviewer topology, hosting/deploy pipeline, RLS, automatic repair turns.
+- Live inference beyond the single close-out acceptance; no retries after success.
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

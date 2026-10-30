@@ -1,7 +1,17 @@
 import { PlatformError } from "@isolate/shared";
 import { z } from "zod";
-import { denyByDefault, type ToolName, type ToolRiskBand } from "./policy";
 import {
+	createOwnershipMatcher,
+	MAX_OWNERSHIP_PATH_LENGTH,
+	normalizeOwnershipPath,
+} from "./ownership";
+import {
+	createRiskTablePolicy,
+	type ToolName,
+	type ToolRiskBand,
+} from "./policy";
+import {
+	type ToolCallContext,
 	type ToolDecisionRecord,
 	type ToolImplementation,
 	type WiredToolRegistry,
@@ -10,13 +20,18 @@ import {
 import type { SandboxToolBackend } from "./sandbox-backend";
 
 /**
- * Sandbox-backed tool implementations (wave 4).
+ * Sandbox-backed tool implementations (waves 4/7).
  *
- * The five tools below are read-only in the policy table; every other platform
- * tool (writes, pushes, migrations, deploys) stays absent and therefore
- * deny-by-default. Argument validation happens inside the implementation so a
- * malformed model call never reaches the sandbox backend, and failures surface
- * as a bounded `VALIDATION_FAILED` outcome rather than echoing argument values.
+ * Read-only tools execute for any task. Wave-7 writes (`repo.write_file`,
+ * `git.commit_local`) are `scoped_write`: they run only when the changed paths
+ * stay inside the task's persisted `fileOwnership`, which is supplied by
+ * trusted worker code and never by the model. `git.push_branch` and PR creation
+ * are `sensitive` (surfaced as `APPROVAL_REQUIRED` for the worker to execute
+ * after a persisted approval); merges, migrations and deploy requests are
+ * `destructive` and denied. Argument validation happens inside each
+ * implementation so a malformed model call never reaches the sandbox backend,
+ * and every failure surfaces as a bounded error code rather than echoing
+ * argument values, file content or paths.
  */
 
 const MAX_PATH_LENGTH = 4096;
@@ -26,6 +41,11 @@ const MAX_QUERY_LENGTH = 1024;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_ENTRIES_LIMIT = 1000;
 const MAX_MATCHES_LIMIT = 1000;
+/** 256 KiB of UTF-8 content per write. */
+const MAX_WRITE_CONTENT_BYTES = 262_144;
+const MAX_COMMIT_MESSAGE_LENGTH = 200;
+/** Changed files considered for one local commit. */
+const MAX_COMMIT_PATHS = 200;
 
 /** Strict: unknown keys are rejected, not silently forwarded. */
 const ReadFileArgs = z
@@ -61,6 +81,30 @@ const ExecArgs = z
 const GitReadArgs = z
 	.object({ args: ArgvSchema, timeoutMs: TimeoutSchema })
 	.strict();
+
+const utf8Encoder = new TextEncoder();
+
+function utf8ByteLength(value: string): number {
+	return utf8Encoder.encode(value).byteLength;
+}
+
+const WriteFileArgs = z
+	.object({
+		path: z.string().min(1).max(MAX_OWNERSHIP_PATH_LENGTH),
+		content: z
+			.string()
+			.refine(
+				(content) => utf8ByteLength(content) <= MAX_WRITE_CONTENT_BYTES,
+				"content exceeds 262144 bytes",
+			),
+	})
+	.strict();
+
+const CommitArgs = z
+	.object({ message: z.string().min(1).max(MAX_COMMIT_MESSAGE_LENGTH) })
+	.strict();
+
+const NoArgs = z.object({}).strict();
 
 /**
  * Read-only git subcommands. `git.read` is the only git surface exposed to the
@@ -119,6 +163,24 @@ function assertReadOnlyGitArgs(args: readonly string[]): void {
 	}
 }
 
+/**
+ * Enforces the task's persisted ownership before a write reaches the backend.
+ * Empty/absent ownership denies; malformed paths or patterns fail closed.
+ */
+function assertOwned(
+	context: ToolCallContext,
+	path: string,
+	tool: ToolName,
+): void {
+	const matcher = createOwnershipMatcher(context.fileOwnership);
+	if (!matcher.owns(path)) {
+		throw new PlatformError(
+			"POLICY_DENIED",
+			`${tool} path is outside task ownership`,
+		);
+	}
+}
+
 function execResultValue(result: {
 	exitCode: number;
 	stdout: string;
@@ -135,13 +197,26 @@ function execResultValue(result: {
 	};
 }
 
-/** The five sandbox tools are read-only; nothing else is allowlisted. */
+/**
+ * Wave-7 risk table. Reads are `read_only`; writes are `scoped_write` and are
+ * additionally constrained by task ownership; push/PR creation are `sensitive`
+ * (the worker executes them only after an approval); merges, migrations and
+ * deploys are `destructive` and stay denied.
+ */
 export const SANDBOX_TOOL_RISKS = {
 	"repo.read_file": "read_only",
 	"repo.list_files": "read_only",
 	"repo.search": "read_only",
 	"sandbox.exec": "read_only",
 	"git.read": "read_only",
+	"git.diff_summary": "read_only",
+	"repo.write_file": "scoped_write",
+	"git.commit_local": "scoped_write",
+	"git.push_branch": "sensitive",
+	"github.create_pull_request": "sensitive",
+	"github.merge_pull_request": "destructive",
+	"db.migrate": "destructive",
+	"deploy.request": "destructive",
 } as const satisfies Partial<Record<ToolName, ToolRiskBand>>;
 
 export function createSandboxToolImplementations(
@@ -201,6 +276,87 @@ export function createSandboxToolImplementations(
 			});
 			return execResultValue(result);
 		},
+		"git.diff_summary": async (args) => {
+			parseArgs(NoArgs, args, "git.diff_summary");
+			const diffSummary = backend.diffSummary?.bind(backend);
+			if (diffSummary === undefined) {
+				throw new PlatformError(
+					"MISSING_CONFIG",
+					"sandbox backend has no diff surface",
+				);
+			}
+			const summary = await diffSummary();
+			return {
+				filesChanged: summary.filesChanged,
+				insertions: summary.insertions,
+				deletions: summary.deletions,
+				files: [...summary.files],
+			};
+		},
+		"repo.write_file": async (args, context) => {
+			const parsed = parseArgs(WriteFileArgs, args, "repo.write_file");
+			const path = normalizeOwnershipPath(parsed.path);
+			if (path === null) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"invalid path for repo.write_file",
+				);
+			}
+			// Ownership is checked before the backend is consulted at all.
+			assertOwned(context, path, "repo.write_file");
+			const writeFile = backend.writeFile?.bind(backend);
+			if (writeFile === undefined) {
+				throw new PlatformError(
+					"MISSING_CONFIG",
+					"sandbox backend has no write surface",
+				);
+			}
+			const result = await writeFile(path, parsed.content, {
+				maxBytes: MAX_WRITE_CONTENT_BYTES,
+			});
+			return {
+				path,
+				bytesWritten: result.bytesWritten,
+				sha256: result.sha256,
+			};
+		},
+		"git.commit_local": async (args, context) => {
+			const parsed = parseArgs(CommitArgs, args, "git.commit_local");
+			const diffSummary = backend.diffSummary?.bind(backend);
+			const commitAll = backend.commitAll?.bind(backend);
+			if (diffSummary === undefined || commitAll === undefined) {
+				throw new PlatformError(
+					"MISSING_CONFIG",
+					"sandbox backend has no commit surface",
+				);
+			}
+			const summary = await diffSummary();
+			if (summary.filesChanged === 0 || summary.files.length === 0) {
+				throw new PlatformError("VALIDATION_FAILED", "no changes to commit");
+			}
+			if (
+				summary.filesChanged > MAX_COMMIT_PATHS ||
+				summary.files.length > MAX_COMMIT_PATHS
+			) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"too many changed files to commit",
+				);
+			}
+			if (summary.files.length !== summary.filesChanged) {
+				// Every changed path must be visible to the ownership check.
+				throw new PlatformError("VALIDATION_FAILED", "incomplete diff summary");
+			}
+			const matcher = createOwnershipMatcher(context.fileOwnership);
+			if (!summary.files.every((file) => matcher.owns(file))) {
+				throw new PlatformError(
+					"POLICY_DENIED",
+					"commit touches files outside task ownership",
+				);
+			}
+			const result = await commitAll(parsed.message);
+			return { commitSha: result.commitSha };
+		},
 	};
 }
 
@@ -210,16 +366,17 @@ export type SandboxToolWiringOptions = {
 };
 
 /**
- * Wires the sandbox tools through the existing deny-by-default policy gate.
- * All five tools are `read_only`; anything else in the registry is denied
- * before any implementation runs.
+ * Wires the sandbox tools through the wave-7 risk-table policy. Read-only and
+ * scoped-write tools execute (writes are ownership-checked in their
+ * implementations); sensitive and destructive bands resolve to structured
+ * denials before any implementation runs.
  */
 export function wireSandboxTools(
 	backend: SandboxToolBackend,
 	options: SandboxToolWiringOptions = {},
 ): WiredToolRegistry {
 	return wirePlatformTools({
-		policy: denyByDefault(SANDBOX_TOOL_RISKS),
+		policy: createRiskTablePolicy(SANDBOX_TOOL_RISKS),
 		implementations: createSandboxToolImplementations(backend),
 		onDecision: options.onDecision,
 	});

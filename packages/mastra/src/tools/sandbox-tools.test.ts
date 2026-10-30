@@ -22,13 +22,41 @@ const taskContext: ToolCallContext = {
 	scopes: ["repo:read"],
 };
 
+const ownedContext: ToolCallContext = {
+	...taskContext,
+	fileOwnership: ["src/**"],
+};
+
+type DiffSummary = {
+	filesChanged: number;
+	insertions: number;
+	deletions: number;
+	files: string[];
+};
+
 type BackendCalls = {
 	readFile: string[];
 	listFiles: string[];
 	search: string[];
 	exec: (readonly string[])[];
 	git: (readonly string[])[];
+	writeFile: { path: string; content: string }[];
+	commitAll: string[];
+	diffSummary: number;
 };
+
+function emptyCalls(): BackendCalls {
+	return {
+		readFile: [],
+		listFiles: [],
+		search: [],
+		exec: [],
+		git: [],
+		writeFile: [],
+		commitAll: [],
+		diffSummary: 0,
+	};
+}
 
 function execResult(stdout = "ok"): SandboxExecResult {
 	return {
@@ -40,14 +68,11 @@ function execResult(stdout = "ok"): SandboxExecResult {
 	};
 }
 
-function fakeBackend(): { backend: SandboxToolBackend; calls: BackendCalls } {
-	const calls: BackendCalls = {
-		readFile: [],
-		listFiles: [],
-		search: [],
-		exec: [],
-		git: [],
-	};
+function fakeBackend(diff?: DiffSummary): {
+	backend: SandboxToolBackend;
+	calls: BackendCalls;
+} {
+	const calls = emptyCalls();
 	const backend: SandboxToolBackend = {
 		async readFile(path) {
 			calls.readFile.push(path);
@@ -71,16 +96,60 @@ function fakeBackend(): { backend: SandboxToolBackend; calls: BackendCalls } {
 			calls.git.push(args);
 			return execResult("git-ok");
 		},
+		async writeFile(path, content) {
+			calls.writeFile.push({ path, content });
+			return {
+				bytesWritten: Buffer.byteLength(content, "utf8"),
+				sha256: `sha:${path}`,
+			};
+		},
+		async commitAll(message) {
+			calls.commitAll.push(message);
+			return { commitSha: "0123456789abcdef" };
+		},
+		async diffSummary() {
+			calls.diffSummary += 1;
+			return (
+				diff ?? {
+					filesChanged: 1,
+					insertions: 2,
+					deletions: 1,
+					files: ["src/a.ts"],
+				}
+			);
+		},
 	};
 	return { backend, calls };
+}
+
+/** Read-only backend: the optional wave-7 write surface is absent. */
+function readOnlyBackend(): SandboxToolBackend {
+	return {
+		async readFile() {
+			return { content: "", truncated: false };
+		},
+		async listFiles() {
+			return [];
+		},
+		async search() {
+			return [];
+		},
+		async exec() {
+			return execResult();
+		},
+		async git() {
+			return execResult();
+		},
+	};
 }
 
 async function callTool(
 	registry: ReturnType<typeof wireSandboxTools>,
 	name: keyof WiredToolCollection,
 	args: Record<string, unknown> = {},
+	context: ToolCallContext = taskContext,
 ): Promise<WiredToolOutput> {
-	const collection = registry.forTask(taskContext);
+	const collection = registry.forTask(context);
 	const tool = collection[name];
 	const execute = tool.execute;
 	if (!execute) throw new Error(`tool ${String(name)} has no execute`);
@@ -181,12 +250,16 @@ describe("sandbox tools behind the policy gate", () => {
 		expect(calls.git).toEqual([]);
 	});
 
-	test("write and approval-band tools stay denied and never reach the backend", async () => {
+	test("sensitive tools require approval and destructive tools stay denied", async () => {
 		const { backend, calls } = fakeBackend();
 		const registry = wireSandboxTools(backend);
 		expect(await callTool(registry, "git.push_branch")).toEqual({
 			state: "denied",
-			reason: "POLICY_DENIED",
+			reason: "APPROVAL_REQUIRED",
+		});
+		expect(await callTool(registry, "github.create_pull_request")).toEqual({
+			state: "denied",
+			reason: "APPROVAL_REQUIRED",
 		});
 		expect(await callTool(registry, "github.merge_pull_request")).toEqual({
 			state: "denied",
@@ -196,13 +269,11 @@ describe("sandbox tools behind the policy gate", () => {
 			state: "denied",
 			reason: "POLICY_DENIED",
 		});
-		expect(calls).toEqual({
-			readFile: [],
-			listFiles: [],
-			search: [],
-			exec: [],
-			git: [],
+		expect(await callTool(registry, "deploy.request")).toEqual({
+			state: "denied",
+			reason: "POLICY_DENIED",
 		});
+		expect(calls).toEqual(emptyCalls());
 	});
 
 	test("invalid arguments fail VALIDATION_FAILED without a backend call", async () => {
@@ -234,22 +305,33 @@ describe("sandbox tools behind the policy gate", () => {
 		expect(calls.search).toEqual([]);
 	});
 
-	test("risk table allowlists exactly the five read-only tools", () => {
+	test("risk table maps reads, writes, sensitive and destructive bands", () => {
 		expect(SANDBOX_TOOL_RISKS).toEqual({
 			"repo.read_file": "read_only",
 			"repo.list_files": "read_only",
 			"repo.search": "read_only",
 			"sandbox.exec": "read_only",
 			"git.read": "read_only",
+			"git.diff_summary": "read_only",
+			"repo.write_file": "scoped_write",
+			"git.commit_local": "scoped_write",
+			"git.push_branch": "sensitive",
+			"github.create_pull_request": "sensitive",
+			"github.merge_pull_request": "destructive",
+			"db.migrate": "destructive",
+			"deploy.request": "destructive",
 		});
 		const implementations = createSandboxToolImplementations(
 			fakeBackend().backend,
 		);
 		expect(Object.keys(implementations).sort()).toEqual([
+			"git.commit_local",
+			"git.diff_summary",
 			"git.read",
 			"repo.list_files",
 			"repo.read_file",
 			"repo.search",
+			"repo.write_file",
 			"sandbox.exec",
 		]);
 	});
@@ -264,6 +346,7 @@ describe("sandbox tools behind the policy gate", () => {
 		});
 		await callTool(registry, "repo.read_file", { path: "src/a.ts" });
 		await callTool(registry, "git.push_branch");
+		await callTool(registry, "db.migrate");
 		expect(decisions).toEqual([
 			{
 				tool: "repo.read_file",
@@ -277,8 +360,344 @@ describe("sandbox tools behind the policy gate", () => {
 				taskId: "task-1",
 				organizationId: "org-1",
 				outcome: "denied",
+				reason: "APPROVAL_REQUIRED",
+			},
+			{
+				tool: "db.migrate",
+				taskId: "task-1",
+				organizationId: "org-1",
+				outcome: "denied",
 				reason: "POLICY_DENIED",
 			},
 		]);
+	});
+});
+
+describe("repo.write_file", () => {
+	test("writes inside ownership and returns bounded metadata", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		const output = await callTool(
+			registry,
+			"repo.write_file",
+			{ path: "src/a.ts", content: "export const a = 1;\n" },
+			ownedContext,
+		);
+		expect(output).toEqual({
+			state: "executed",
+			audited: true,
+			value: {
+				path: "src/a.ts",
+				bytesWritten: 20,
+				sha256: "sha:src/a.ts",
+			},
+		});
+		expect(calls.writeFile).toEqual([
+			{ path: "src/a.ts", content: "export const a = 1;\n" },
+		]);
+	});
+
+	test("unowned writes are denied before the backend is called", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "docs/readme.md", content: "hi" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	test("empty or absent ownership means no write", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "hi" },
+				{ ...taskContext, fileOwnership: [] },
+			),
+		).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(
+			await callTool(registry, "repo.write_file", {
+				path: "src/a.ts",
+				content: "hi",
+			}),
+		).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	test("traversal and absolute paths fail before the backend", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		for (const path of [
+			"../src/a.ts",
+			"src/../../etc/passwd",
+			"/etc/passwd",
+			"C:\\Windows\\a.ts",
+		]) {
+			expect(
+				await callTool(
+					registry,
+					"repo.write_file",
+					{ path, content: "hi" },
+					{ ...taskContext, fileOwnership: ["**"] },
+				),
+			).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		}
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	test("oversize UTF-8 content fails validation", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "x".repeat(262_145) },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	test("multi-byte content is measured in UTF-8 bytes", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		// 100_000 three-byte characters = 300_000 bytes, under the char cap.
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "€".repeat(100_000) },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	test("extra arguments fail strict validation", async () => {
+		const { backend } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "hi", mode: "0777" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+	});
+
+	test("a malformed ownership pattern in the task row fails closed", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "hi" },
+				{ ...taskContext, fileOwnership: ["../**"] },
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.writeFile).toEqual([]);
+	});
+});
+
+describe("git.commit_local", () => {
+	test("commits when every changed file is owned", async () => {
+		const { backend, calls } = fakeBackend({
+			filesChanged: 2,
+			insertions: 5,
+			deletions: 1,
+			files: ["src/a.ts", "src/nested/b.ts"],
+		});
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "feat: add widget" },
+				ownedContext,
+			),
+		).toEqual({
+			state: "executed",
+			audited: true,
+			value: { commitSha: "0123456789abcdef" },
+		});
+		expect(calls.diffSummary).toBe(1);
+		expect(calls.commitAll).toEqual(["feat: add widget"]);
+	});
+
+	test("rejects the commit when any changed file is unowned", async () => {
+		const { backend, calls } = fakeBackend({
+			filesChanged: 2,
+			insertions: 3,
+			deletions: 0,
+			files: ["src/a.ts", "docs/readme.md"],
+		});
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "feat: add widget" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(calls.diffSummary).toBe(1);
+		expect(calls.commitAll).toEqual([]);
+	});
+
+	test("rejects when there is nothing to commit", async () => {
+		const { backend, calls } = fakeBackend({
+			filesChanged: 0,
+			insertions: 0,
+			deletions: 0,
+			files: [],
+		});
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "empty" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.commitAll).toEqual([]);
+	});
+
+	test("bounds the message and the changed-file count", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "m".repeat(201) },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+
+		const many = fakeBackend({
+			filesChanged: 201,
+			insertions: 0,
+			deletions: 0,
+			files: ["src/a.ts"],
+		});
+		const manyRegistry = wireSandboxTools(many.backend);
+		expect(
+			await callTool(
+				manyRegistry,
+				"git.commit_local",
+				{ message: "big" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.diffSummary).toBe(0);
+		expect(many.calls.commitAll).toEqual([]);
+	});
+
+	test("rejects an incomplete diff summary instead of committing unverified paths", async () => {
+		const { backend, calls } = fakeBackend({
+			filesChanged: 2,
+			insertions: 1,
+			deletions: 0,
+			files: ["src/a.ts"],
+		});
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "msg" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.commitAll).toEqual([]);
+	});
+
+	test("unowned commit with empty ownership fails closed", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(registry, "git.commit_local", { message: "msg" }),
+		).toEqual({ state: "failed", code: "POLICY_DENIED" });
+		expect(calls.commitAll).toEqual([]);
+	});
+});
+
+describe("git.diff_summary", () => {
+	test("returns the bounded summary without arguments", async () => {
+		const { backend, calls } = fakeBackend({
+			filesChanged: 3,
+			insertions: 10,
+			deletions: 4,
+			files: ["src/a.ts", "src/b.ts", "src/c.ts"],
+		});
+		const registry = wireSandboxTools(backend);
+		expect(await callTool(registry, "git.diff_summary")).toEqual({
+			state: "executed",
+			audited: true,
+			value: {
+				filesChanged: 3,
+				insertions: 10,
+				deletions: 4,
+				files: ["src/a.ts", "src/b.ts", "src/c.ts"],
+			},
+		});
+		expect(calls.diffSummary).toBe(1);
+	});
+
+	test("rejects unexpected arguments", async () => {
+		const { backend, calls } = fakeBackend();
+		const registry = wireSandboxTools(backend);
+		expect(
+			await callTool(registry, "git.diff_summary", { base: "main" }),
+		).toEqual({ state: "failed", code: "VALIDATION_FAILED" });
+		expect(calls.diffSummary).toBe(0);
+	});
+});
+
+describe("read-only backends refuse write tools", () => {
+	test("missing optional methods resolve to MISSING_CONFIG", async () => {
+		const registry = wireSandboxTools(readOnlyBackend());
+		expect(
+			await callTool(
+				registry,
+				"repo.write_file",
+				{ path: "src/a.ts", content: "hi" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "MISSING_CONFIG" });
+		expect(
+			await callTool(
+				registry,
+				"git.commit_local",
+				{ message: "msg" },
+				ownedContext,
+			),
+		).toEqual({ state: "failed", code: "MISSING_CONFIG" });
+		expect(await callTool(registry, "git.diff_summary")).toEqual({
+			state: "failed",
+			code: "MISSING_CONFIG",
+		});
+	});
+
+	test("read tools still work on a read-only backend", async () => {
+		const registry = wireSandboxTools(readOnlyBackend());
+		expect(
+			await callTool(registry, "repo.list_files", { path: "src" }),
+		).toEqual({
+			state: "executed",
+			audited: true,
+			value: { path: "src", entries: [] },
+		});
 	});
 });

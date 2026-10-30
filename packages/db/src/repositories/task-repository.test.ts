@@ -13,10 +13,12 @@ import {
 	deriveRetryBranch,
 	evaluateRetryEligibility,
 	guardTransition,
+	MAX_ACCEPTANCE_CHECKS,
 	MAX_RETRY_DEPTH,
 	requireNonEmpty,
 	requireNonNegativeInt,
 	requirePositiveInt,
+	validateAcceptanceChecks,
 } from "./task-repository";
 
 test("guardTransition accepts every declared transition when status matches", () => {
@@ -333,4 +335,98 @@ test("createRetry accepts an explicit branch for the rerun", async () => {
 	});
 	expect(result.ok && result.task.branch).toBe("task/rerun-explicit");
 	expect(result.ok && result.task.worktree).toBe("task/rerun-explicit");
+});
+
+const ACCEPTANCE_CHECKS = [
+	{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
+	{ kind: "content_matches", path: "README.md", pattern: "^# " },
+	{ kind: "command_exit_zero", command: "bun test" },
+] as const;
+
+test("validateAcceptanceChecks accepts the three bounded kinds", () => {
+	expect(validateAcceptanceChecks(ACCEPTANCE_CHECKS)).toEqual([
+		...ACCEPTANCE_CHECKS,
+	]);
+	expect(validateAcceptanceChecks([])).toEqual([]);
+});
+
+test("validateAcceptanceChecks rejects non-arrays, overflow and bad entries", () => {
+	expect(() => validateAcceptanceChecks({ kind: "path_exists" })).toThrow(
+		/must be an array/,
+	);
+	expect(() =>
+		validateAcceptanceChecks(
+			Array.from({ length: MAX_ACCEPTANCE_CHECKS + 1 }, () => ({
+				kind: "path_exists",
+				path: "a",
+			})),
+		),
+	).toThrow(/at most 32 checks/);
+	for (const bad of [
+		{ kind: "nope", path: "a" },
+		{ kind: "path_exists", path: "/etc/passwd" },
+		{ kind: "path_exists", path: "../escape" },
+		{ kind: "content_matches", path: "a", pattern: "" },
+		{ kind: "command_exit_zero", command: "" },
+		{ kind: "path_exists", path: "a", extra: true },
+	]) {
+		expect(() => validateAcceptanceChecks([bad])).toThrow(
+			/\[0\] is not a valid acceptance check/,
+		);
+	}
+});
+
+test("create persists acceptance checks and defaults to an empty list", async () => {
+	const repo = new InMemoryTaskRepository();
+	const withChecks = await repo.create({
+		...createInput("checks"),
+		acceptanceChecks: [...ACCEPTANCE_CHECKS],
+	});
+	expect(withChecks.acceptance_checks).toEqual([...ACCEPTANCE_CHECKS]);
+	expect((await repo.get(withChecks.id))?.acceptance_checks).toEqual([
+		...ACCEPTANCE_CHECKS,
+	]);
+
+	const withoutChecks = await repo.create(createInput("no-checks"));
+	expect(withoutChecks.acceptance_checks).toEqual([]);
+});
+
+test("create validates acceptance checks identically to the driver", async () => {
+	const repo = new InMemoryTaskRepository();
+	await expect(
+		repo.create({
+			...createInput("bad-checks"),
+			acceptanceChecks: [{ kind: "path_exists", path: "../x" }],
+		}),
+	).rejects.toThrow(/\[0\] is not a valid acceptance check/);
+	await expect(
+		repo.create({
+			...createInput("too-many-checks"),
+			acceptanceChecks: Array.from(
+				{ length: MAX_ACCEPTANCE_CHECKS + 1 },
+				() => ({ kind: "path_exists" as const, path: "a" }),
+			),
+		}),
+	).rejects.toThrow(/at most 32 checks/);
+});
+
+test("createRetry copies acceptance checks from the source", async () => {
+	const repo = new InMemoryTaskRepository();
+	const source = await repo.create({
+		...createInput("source-checks"),
+		acceptanceChecks: [...ACCEPTANCE_CHECKS],
+	});
+	await repo.transition({
+		taskId: source.id,
+		to: "failed",
+		expectedStatus: "queued",
+	});
+	const result = await repo.createRetry({
+		organizationId: orgA,
+		failedTaskId: source.id,
+		idempotencyKey: "rerun-checks",
+	});
+	expect(result.ok).toBe(true);
+	if (!result.ok) return;
+	expect(result.task.acceptance_checks).toEqual([...ACCEPTANCE_CHECKS]);
 });

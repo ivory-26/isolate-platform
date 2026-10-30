@@ -20,6 +20,12 @@ import {
 	evaluateApprovalDecision,
 	evaluateDecisionOutcome,
 } from "../repositories/approval-repository";
+import {
+	type BranchLockAcquireResult,
+	type BranchLockInput,
+	type BranchLockRepository,
+	requireBranchLockKey,
+} from "../repositories/branch-lock-repository";
 import { clampPageLimit } from "../repositories/pagination";
 import {
 	ackFailOutcome,
@@ -40,6 +46,7 @@ import {
 	type TaskRetryInput,
 	type TaskRetryResult,
 	type TaskTransitionFailureCode,
+	validateAcceptanceChecks,
 } from "../repositories/task-repository";
 import {
 	aggregateUsageRows,
@@ -93,6 +100,10 @@ export class InMemoryTaskRepository implements TaskRepository {
 			input.acceptanceCriteria ?? [],
 			"acceptanceCriteria",
 		);
+		// Identical boundary to the driver: same zod schema, same 32-entry cap.
+		const acceptanceChecks = validateAcceptanceChecks(
+			input.acceptanceChecks ?? [],
+		);
 		const fileOwnership = requireStringArray(
 			input.fileOwnership ?? [],
 			"fileOwnership",
@@ -124,6 +135,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			},
 			goal,
 			acceptance_criteria: acceptanceCriteria,
+			acceptance_checks: acceptanceChecks,
 			file_ownership: fileOwnership,
 			pull_request_number: null,
 			pull_request_url: null,
@@ -284,6 +296,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			budget_limits: { ...source.budget_limits },
 			goal: source.goal,
 			acceptance_criteria: [...source.acceptance_criteria],
+			acceptance_checks: [...source.acceptance_checks],
 			file_ownership: [...source.file_ownership],
 			pull_request_number: null,
 			pull_request_url: null,
@@ -299,6 +312,37 @@ export class InMemoryTaskRepository implements TaskRepository {
 }
 
 type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
+
+/**
+ * In-memory advisory lock. Shares `requireBranchLockKey` with the Postgres
+ * driver, so key normalization and input bounds cannot drift; a second
+ * acquire of a held triple returns `LOCKED`, and `release` is idempotent.
+ */
+export class InMemoryBranchLockRepository implements BranchLockRepository {
+	private readonly held = new Set<string>();
+
+	async acquire(input: BranchLockInput): Promise<BranchLockAcquireResult> {
+		const key = requireBranchLockKey(input);
+		if (this.held.has(key)) {
+			return { ok: false, code: "LOCKED" };
+		}
+		this.held.add(key);
+		let released = false;
+		return {
+			ok: true,
+			release: async () => {
+				if (released) return;
+				released = true;
+				this.held.delete(key);
+			},
+		};
+	}
+
+	/** Test introspection only: number of held lock keys. */
+	get heldCount(): number {
+		return this.held.size;
+	}
+}
 
 export class InMemoryApprovalRepository implements ApprovalRepository {
 	private readonly rows = new Map<string, ApprovalRow>();

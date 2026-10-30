@@ -398,6 +398,64 @@ Merge commits: `a2c4e1e` (DB), `546551a` (VAL), `d27f4e2` (GH), `cfe1c2f` (WRK),
 
 Fixes produced by the live path: `ade7d5f` (composition forwarded `resolveSandboxEnv` + `createSandboxBackend`; before it, jobs cloned without a credential and ran tool-less), `5abf9d8` (turn-budget exhaustion with a produced diff is completion), and the acceptance verifier now requests `pullRequests: "read"`. Runner: `scripts/acceptance-live-pr.ts` (`LIVE_PR=1`); diagnostic: `scripts/diagnose-live-clone.ts` (`DIAGNOSE_LIVE=1`, one tiny sandbox).
 
+## Wave 9 — Completion truth, live validation, concurrency (planned 2026-10-30)
+
+Goal: **completion is proven by the task's environment, never by a turn budget or a model's word.** A live run must show a configured validation command *executing and passing* before a push, a failing command blocking the push, and policy decisions persisted. Contracts are committed first (`c6f3b8b`: `acceptanceCheckSchema`, `acceptanceReportSchema`, `acceptance.started/finished` events).
+
+### W9-0 contracts (done, on `main`)
+- `@isolate/shared`: `acceptanceCheckSchema` = `path_exists | content_matches | command_exit_zero` (bounded, path-confined, strict), `acceptanceReportSchema` (bounded, `matched <= total`), events `acceptance.started` / `acceptance.finished`.
+
+### W9-DB — `packages/db/**` (owner: agent W9-DB, branch `task/w9-db`)
+- Migration `0007_acceptance_contract.sql` (**idempotent, not applied by the lane**): `tasks.acceptance_checks jsonb NOT NULL DEFAULT '[]'::jsonb` with a `jsonb_typeof(...) = 'array'` CHECK and an array-length bound (≤32).
+- `TaskRow.acceptance_checks` + create/read mapping; `TaskCreateInput.acceptanceChecks`.
+- `BranchLockRepository`: `acquire({organizationId, repositoryId, branch})` / `release` over `pg_try_advisory_lock(hashtext(org:repo:branch))` on a dedicated connection (session-scoped; the worker holds it for one job and releases in `finally`).
+- Live suite: acceptance_checks round-trip with a DB-level JSON type assertion; the lock is exclusive for the same triple and free for a different one.
+
+### W9-EXEC — `packages/sandbox/**` + `apps/worker/**` (owner: agent W9-EXEC, branch `task/w9-exec`)
+- Validation argv: allow `bun test <path>` (plain `bun test` unchanged) where `<path>` is a bounded relative path, no `..`, no absolute path, no leading `-`; tests for every refusal.
+- `runAcceptanceChecks` (worker): executes the three kinds in the task sandbox through the trusted policy — `path_exists`, `content_matches` (bounded read + regex, never logs content), `command_exit_zero` (validation runner). Emits `acceptance.started/finished`, stores a bounded `report` artifact, returns `AcceptanceReport`.
+- **Completion rule**: when acceptance checks exist, every check must pass AND a configured validation command must pass before `review_ready`; any failure transitions `failed` with the report. When only a validation command exists, it gates. Only when **neither** exists does the diff-only rule apply, and the attempt outcome records `completion: "diff-only"`.
+- `tool_invocations`: persist one row per tool call at the policy boundary (tool name, decision, bounded arg digest, duration, outcome) through an injected sink; denied calls included. Closes a table that has a repository but no runtime writer.
+- Concurrency: `createWorkerLoop` honours `config.maxConcurrency` with a bounded pool (today it is single-in-flight), and the handler takes a per-repository+branch lock before provisioning and releases it in `finally`; a lock miss returns a bounded retry verdict with backoff.
+- Tests: acceptance pass/fail per kind, no push after a failed check, tool-invocation rows on allow/deny, concurrency cap observed, lock miss → retry, no secret/content leakage.
+
+### W9-WEB — `apps/web` server-side (owner: agent W9-WEB, after W9-DB; branch `task/w9-web`)
+- Submission schema accepts `acceptanceChecks` (bounded, ≤32), the Postgres store persists them, the in-memory store mirrors it, `TaskSummary` unchanged. **No UI files.**
+
+### W9-OPS — Coordinator (live proof, one bounded run each)
+- Apply `0007` (user approval) and verify through the Neon MCP.
+- **Live pass (validation PASS)**: `repositories.validation_command = "bun test live_acceptance.test.ts"`, acceptance checks `[path_exists LIVE_ACCEPTANCE.md, path_exists live_acceptance.test.ts, content_matches ...]`; the agent writes both files, validation runs in the sandbox and passes, then push → PR approval → PR.
+- **Live pass (validation FAIL)**: a command that exits non-zero; the task must end `failed`, **no branch pushed**, the report artifact present, and `retryTask` able to rerun it.
+- Record measured tokens, verify 0 sandboxes, update STATUS/CHALLENGES/DECISIONS.
+
+## Wave 10 — DevSecOps incident response + context fabric (planned 2026-10-31)
+
+Goal: the agent is triggered by real operational signals and resolves them end to end with the same execution loop.
+
+- **Triggers**: signed webhooks from PagerDuty/Sentry/Datadog/Grafana and GitHub (failed workflow, failing check suite, security alert) → normalized `IncidentSignal` → task with `source`, `severity`, `service`, `fingerprint` (dedupe), `links`, bounded evidence bundle. Incidents are a new task *source*, not a new execution path.
+- **Context fabric** (read-only connectors, scoped auth, per-tool permissions, audited): GitHub Actions runs and logs, check suites, branch protection/rulesets, CODEOWNERS, CONTRIBUTING, PR templates, recent commits and PRs; observability queries (Sentry issues, Datadog/Grafana metrics + logs, trace ids); deployment history; runbooks from `docs/runbooks/**` and the platform.
+- **Context assembly**: bounded, cited `ContextBundle` (source, path/url, excerpt, trust level) injected with the untrusted-data rule; every item capped and attributable.
+- **Resolution loop**: reproduce → query observability → fix on a branch → validation (wave 9) → human approval → PR linked to the incident → post-incident report artifact + timeline; escalate to `blocked` with evidence when the incident is not code-fixable.
+- **Data**: `incidents`, `incident_signals`, `context_items`, `runbook_refs`, `connector_credentials` (server-only, never in prompts), plus `tasks.incident_id`.
+- **Safety**: incident tasks inherit the same caps; production writes (deploy/rollback/secret change) are separate sensitive tools that always require approval; no connector credential enters model context.
+
+### Multi-agent inside one sandbox (design, wave 10)
+- One sandbox per task remains the isolation unit. An **orchestrator** plans and delegates to N **subagents** sharing the workspace but owning disjoint `fileOwnership` path partitions.
+- Each subagent gets its own tool gate bound to the same `SandboxHandle`, its own turn/token budget, and no credentials beyond the task scope; results return as bounded summaries.
+- Sequential by default (deterministic diffs); parallel only when ownership globs are provably disjoint, with a workspace path lock. Every subagent turn is a `run_event` with `agentId`; the diff and validation gates run once on the combined result.
+
+### Concurrency model (wave 9 + 10)
+- Queue claiming is already `FOR UPDATE SKIP LOCKED`; wave 9 adds a bounded in-process pool honouring `maxConcurrency` and a per-repository+branch advisory lock so two jobs never write one branch.
+- Per-organization quotas and provider rate limits are wave 10; the sandbox provider remains the concurrency ceiling.
+
+## Wave 11 — P1 fidelity, observability, storage, delivery (planned)
+
+1. **Plan execution**: either make `compiled_plans` the orchestration input (the worker executes the compiled graph) or delete the write-only path and document the linear handler as the runtime. Plans saved at submit and never read is the largest fidelity gap.
+2. **Mastra SDLC workflow**: no production caller today while the handler implements the lifecycle imperatively. Wire it (storage-backed resume, wave-7/8 approval order) or retire it, and record the decision.
+3. **Observability**: OpenTelemetry spans for queue→sandbox→turn→tool→validation→PR, RED metrics, per-org/task dashboards, alerts on dead-letter rate and sandbox leaks, and a trusted price table so `cost_usd` stops being null.
+4. **Object storage**: move patches and log bundles out of Neon's 256 KiB inline cap with a lifecycle policy.
+5. **Delivery**: worker/web containers, deploy pipeline, production auth origin + own Google credentials, secret management, backup/restore drills.
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

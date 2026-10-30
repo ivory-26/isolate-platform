@@ -5,6 +5,7 @@ import {
 	approvalActionPushBranch,
 	decisionMessages,
 } from "../features/tasks/contracts";
+import { APPROVAL_FOLLOW_UP_NOT_BEFORE_MS } from "./repository-store.server";
 import { harness, input, otherScope, scope } from "./test-fixtures";
 
 type Harness = ReturnType<typeof harness>;
@@ -278,7 +279,15 @@ describe("decideApproval service action", () => {
 				approvalId: approval.id,
 				action: approvalActionPushBranch,
 			},
+			// Deterministic per approval: a retried decision reuses this row.
+			idempotencyKey: `approval:${approval.id}`,
 		});
+		// Not claimable inside the request window, while the decision commits.
+		expect(h.queue.calls[0].notBefore).toBe(
+			new Date(
+				h.now().getTime() + APPROVAL_FOLLOW_UP_NOT_BEFORE_MS,
+			).toISOString(),
+		);
 		expect(await eventTypes(h, taskId)).toEqual(["approval.decided"]);
 		const audit = h.approvals.listAuditEvents();
 		expect(audit).toHaveLength(1);
@@ -320,7 +329,109 @@ describe("decideApproval service action", () => {
 			taskId,
 			type: "create_pull_request",
 			payload: { taskId, approvalId: approval.id },
+			idempotencyKey: `approval:${approval.id}`,
 		});
+	});
+	test("the follow-up job is enqueued before the decision commits", async () => {
+		const h = harness();
+		const taskId = await awaitingApprovalTask(h);
+		const approval = await h.requestApproval({
+			taskId: asTaskId(taskId),
+			action: approvalActionPushBranch,
+		});
+		// Snapshot the durable state at the instant the job write happens: a
+		// pending row, no audit row and no `approval.decided` event prove the
+		// queue write precedes the decision transaction.
+		const atEnqueue: Array<{
+			status: string;
+			audits: number;
+			events: number;
+		}> = [];
+		const enqueue = h.queue.enqueue.bind(h.queue);
+		h.queue.enqueue = async (value) => {
+			atEnqueue.push({
+				status: (await h.approvals.get(approval.id))?.status ?? "missing",
+				audits: h.approvals.listAuditEvents().length,
+				events: (await eventsFor(h, taskId)).length,
+			});
+			return enqueue(value);
+		};
+		const result = await h.service.decideApproval({
+			taskId,
+			approvalId: approval.id,
+			decision: "approved",
+		});
+		expect(result).toMatchObject({ ok: true });
+		expect(atEnqueue).toEqual([{ status: "pending", audits: 0, events: 0 }]);
+		expect((await h.approvals.get(approval.id))?.status).toBe("approved");
+		expect(h.approvals.listAuditEvents()).toHaveLength(1);
+	});
+	test("a queue failure leaves the approval pending with no event or audit row", async () => {
+		const h = harness();
+		const taskId = await awaitingApprovalTask(h);
+		const approval = await h.requestApproval({
+			taskId: asTaskId(taskId),
+			action: approvalActionPushBranch,
+		});
+		h.queue.fail = true;
+		const failed = await h.service.decideApproval({
+			taskId,
+			approvalId: approval.id,
+			decision: "approved",
+		});
+		expect(failed).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+		expect(JSON.stringify(failed)).not.toContain("fake-secret");
+		expect((await h.approvals.get(approval.id))?.status).toBe("pending");
+		expect(await eventTypes(h, taskId)).toEqual([]);
+		expect(h.approvals.listAuditEvents()).toHaveLength(0);
+		// The user retries once the queue recovers; the same deterministic key
+		// targets the same job row, and the decision lands.
+		h.queue.fail = false;
+		expect(
+			await h.service.decideApproval({
+				taskId,
+				approvalId: approval.id,
+				decision: "approved",
+			}),
+		).toMatchObject({ ok: true });
+		expect(h.queue.calls).toHaveLength(2);
+		expect(h.queue.calls[1].idempotencyKey).toBe(
+			h.queue.calls[0].idempotencyKey,
+		);
+		expect(h.approvals.listAuditEvents()).toHaveLength(1);
+	});
+	test("a decision failure after the enqueue keeps the job but decides nothing", async () => {
+		const h = harness();
+		const taskId = await awaitingApprovalTask(h);
+		const approval = await h.requestApproval({
+			taskId: asTaskId(taskId),
+			action: approvalActionPushBranch,
+			expiresInSeconds: 60,
+		});
+		// The approval expires between the job write and the decision write; the
+		// repository refuses, and the action reports the existing bounded error.
+		const enqueue = h.queue.enqueue.bind(h.queue);
+		h.queue.enqueue = async (value) => {
+			const job = await enqueue(value);
+			h.advanceClock(120_000);
+			return job;
+		};
+		const result = await h.service.decideApproval({
+			taskId,
+			approvalId: approval.id,
+			decision: "approved",
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "CONFLICT",
+				message: decisionMessages.approvalNotPending,
+			},
+		});
+		expect(h.queue.calls).toHaveLength(1);
+		expect((await h.approvals.get(approval.id))?.status).toBe("pending");
+		expect(await eventTypes(h, taskId)).toEqual([]);
+		expect(h.approvals.listAuditEvents()).toHaveLength(0);
 	});
 	test("rejecting fails the task and enqueues nothing", async () => {
 		const h = harness();

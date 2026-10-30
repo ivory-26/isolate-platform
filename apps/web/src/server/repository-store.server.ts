@@ -2,6 +2,7 @@ import "@tanstack/react-start/server-only";
 import {
 	type ApprovalRepository,
 	isLifecycleError,
+	type JobRow,
 	type QueueRepository,
 	type TaskRepository,
 	type TaskRetryFailureCode,
@@ -164,8 +165,18 @@ type ApprovalFollowUp = {
 };
 
 /**
+ * Delay before an approval's follow-up job becomes claimable. The job is
+ * written BEFORE the decision commits (see `decideApprovalWithDependencies`),
+ * so this window keeps a worker from claiming the job while the approval is
+ * still `pending`; the decision + audit + event writes finish in milliseconds.
+ */
+export const APPROVAL_FOLLOW_UP_NOT_BEFORE_MS = 15_000;
+
+/**
  * The approval action decides the follow-up job, never the caller. An unknown
  * action has no server-side effect and is refused before the decision lands.
+ * The enqueue key is derived from the approval alone, so every path (first
+ * attempt, queue-failure retry, replayed decision) targets the same job row.
  */
 export function approvalFollowUp(
 	action: string,
@@ -176,14 +187,14 @@ export function approvalFollowUp(
 		return {
 			type: "resume_task",
 			payload: { taskId, approvalId, action },
-			idempotencyKey: `resume_task:${taskId}:${approvalId}`,
+			idempotencyKey: `approval:${approvalId}`,
 		};
 	}
 	if (action === approvalActionCreatePullRequest) {
 		return {
 			type: "create_pull_request",
 			payload: { taskId, approvalId },
-			idempotencyKey: `create_pull_request:${taskId}:${approvalId}`,
+			idempotencyKey: `approval:${approvalId}`,
 		};
 	}
 	return null;
@@ -270,10 +281,49 @@ export async function retryTaskWithDependencies(
 }
 
 /**
+ * Writes the follow-up job for an approval with its deterministic enqueue
+ * key. Enqueue is idempotent on `(organization_id, enqueue_uuid_key)`, so a
+ * retried decision returns the SAME job row instead of a second one.
+ */
+async function enqueueApprovalFollowUp(
+	deps: StoreActionDependencies,
+	scope: CallerScope,
+	taskId: TaskId,
+	followUp: ApprovalFollowUp,
+	nowMs: number,
+): Promise<JobRow> {
+	const job = await deps.queue.enqueue({
+		organizationId: scope.organizationId,
+		taskId,
+		type: followUp.type,
+		payload: followUp.payload,
+		idempotencyKey: followUp.idempotencyKey,
+		maxAttempts: WORKER_CONFIG_DEFAULTS.maxJobAttempts,
+		notBefore: new Date(nowMs + APPROVAL_FOLLOW_UP_NOT_BEFORE_MS).toISOString(),
+	});
+	if (
+		job.organizationId !== scope.organizationId ||
+		job.taskId !== taskId ||
+		job.type !== followUp.type
+	)
+		throw new ControlPlaneError("FORBIDDEN");
+	return job;
+}
+
+/**
  * Reads the approval tenant-scoped, refuses anything but a pending, unexpired
- * row with a known follow-up action, then decides through the repository
- * (which re-checks pending + expiry and writes the audit row). Approval
- * enqueues exactly one follow-up job; rejection fails the task instead.
+ * row with a known follow-up action, then writes the follow-up job BEFORE the
+ * decision, and finally decides through the repository (which re-checks
+ * pending + expiry and writes the audit row). Approval enqueues exactly one
+ * follow-up job; rejection fails the task instead and enqueues nothing.
+ *
+ * The order is the point: a decision that commits but whose follow-up job is
+ * never written strands an approved task (a replay is CONFLICT), whereas a job
+ * written before a decision that fails leaves a pending, retryable approval.
+ * The job carries a deterministic key, so the retry reuses it. Both handlers
+ * re-read the approval and the payload SHA before acting, so a job whose
+ * decision never landed starts no follow-up work; the `notBefore` delay keeps
+ * a worker from claiming it inside the ordinary request window.
  */
 export async function decideApprovalWithDependencies(
 	deps: StoreActionDependencies,
@@ -295,8 +345,8 @@ export async function decideApprovalWithDependencies(
 		approval.task_id !== taskId
 	)
 		throw new ControlPlaneError("FORBIDDEN");
-	const now = (deps.now ?? (() => new Date()))().getTime();
-	if (approval.status !== "pending" || approval.expires_at.getTime() <= now)
+	const nowMs = (deps.now ?? (() => new Date()))().getTime();
+	if (approval.status !== "pending" || approval.expires_at.getTime() <= nowMs)
 		throw new ControlPlaneError(
 			"CONFLICT",
 			undefined,
@@ -312,6 +362,12 @@ export async function decideApprovalWithDependencies(
 			undefined,
 			decisionMessages.approvalActionUnsupported,
 		);
+	// Job first, decision second. A queue failure here leaves the approval
+	// pending (no event, no audit row) and the user can retry the decision.
+	const job =
+		followUp === null
+			? null
+			: await enqueueApprovalFollowUp(deps, scope, taskId, followUp, nowMs);
 	const decided = await deps.approvals.decide({
 		organizationId: scope.organizationId,
 		taskId,
@@ -322,6 +378,9 @@ export async function decideApprovalWithDependencies(
 	});
 	if (!decided.ok) {
 		if (decided.code === "NOT_FOUND") throw new ControlPlaneError("FORBIDDEN");
+		// The job written above stays under its deterministic key. Neither
+		// handler starts follow-up work unless the approval is approved and its
+		// payload SHA matches, and a retried decision reuses the same row.
 		throw new ControlPlaneError(
 			"CONFLICT",
 			undefined,
@@ -360,21 +419,8 @@ export async function decideApprovalWithDependencies(
 		}
 		return { taskId, approvalId, decision: "rejected", jobId: null };
 	}
-	if (followUp === null) throw new ControlPlaneError("UNAVAILABLE");
-	const job = await deps.queue.enqueue({
-		organizationId: scope.organizationId,
-		taskId,
-		type: followUp.type,
-		payload: followUp.payload,
-		idempotencyKey: followUp.idempotencyKey,
-		maxAttempts: WORKER_CONFIG_DEFAULTS.maxJobAttempts,
-	});
-	if (
-		job.organizationId !== scope.organizationId ||
-		job.taskId !== taskId ||
-		job.type !== followUp.type
-	)
-		throw new ControlPlaneError("FORBIDDEN");
+	// Unreachable: an approved decision has a follow-up or was refused above.
+	if (job === null) throw new ControlPlaneError("UNAVAILABLE");
 	return { taskId, approvalId, decision: "approved", jobId: job.id };
 }
 

@@ -237,6 +237,7 @@ export function harness() {
 		advanceClock: (ms: number) => {
 			nowMs += ms;
 		},
+		now: clock,
 		requestApproval: (input: {
 			taskId: TaskId;
 			action: string;

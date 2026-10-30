@@ -15,6 +15,8 @@ import type { TaskStatus } from "./task-state";
  * - transition legality: `from -> to` must satisfy `TASK_STATE_TRANSITIONS`;
  * - append-only events: no update/delete path is exposed;
  * - bounded artifacts: content is capped by the implementation (never unbounded);
+ * - blob binding: `storageRef` (when present) is `blob:<sha256>`, `sha256`
+ *   covers the full bytes and `byteSize` covers the inline preview;
  * - approval binding: `payloadSha256` is stored verbatim, never recomputed.
  */
 export type LifecycleArtifactKind =
@@ -58,8 +60,29 @@ export type LifecycleArtifactInput = {
 	readonly taskId: TaskId;
 	readonly kind: LifecycleArtifactKind;
 	readonly contentType: string;
+	/**
+	 * Inline preview of the artifact. Always bounded by the implementation
+	 * (256 KiB UTF-8 bytes in Postgres); when `storageRef` is set this is only
+	 * the leading slice of the full bytes.
+	 */
 	readonly content: string;
+	/**
+	 * SHA-256 of the FULL stored bytes. For an inline-only artifact that is the
+	 * digest of `content`; with a blob it is the digest the blob was stored
+	 * under, so `storageRef` must equal `blob:<sha256>`.
+	 */
 	readonly sha256: string;
+	/**
+	 * Wave 11: `blob:<sha256>` when the full bytes live in a `BlobStore`.
+	 * Absent means the artifact is stored inline as `inline:<sha256>`.
+	 */
+	readonly storageRef?: string;
+	/**
+	 * Full byte size of the stored payload. Defaults to the inline content
+	 * length; with a blob it must be at least the preview size and at most
+	 * 2 MiB (the store ceiling).
+	 */
+	readonly byteSize?: number;
 };
 
 export type LifecycleApprovalInput = {

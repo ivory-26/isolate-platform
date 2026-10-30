@@ -10,6 +10,7 @@ import {
 	type InMemoryExecutionLifecycle,
 } from "../testing/execution-truth-fakes";
 import type { InMemoryTaskRepository } from "../testing/fakes";
+import { MAX_BLOB_BYTES } from "./blob-store";
 import {
 	evaluateLifecycleApprovalStatus,
 	isLifecycleError,
@@ -305,6 +306,167 @@ describe("InMemoryExecutionLifecycle artifacts", () => {
 				sha256: SHA,
 			}),
 			"NOT_FOUND",
+		);
+	});
+
+	test("a blob-bound artifact stores blob:<sha>, the full sha and the full byte size behind a bounded preview", async () => {
+		const taskId = await seedTask();
+		const preview = "+hello";
+		const result = await lifecycle.artifact({
+			organizationId: orgA,
+			taskId: asTaskId(taskId),
+			kind: "diff",
+			contentType: "text/x-diff",
+			content: preview,
+			sha256: SHA,
+			storageRef: `blob:${SHA}`,
+			byteSize: 1_000_000,
+		});
+		const listed = await artifacts.listByTask({
+			organizationId: orgA,
+			taskId: asTaskId(taskId),
+		});
+		expect(listed).toHaveLength(1);
+		expect(listed[0]).toMatchObject({
+			id: result.artifactId,
+			sha256: SHA,
+			storage_ref: `blob:${SHA}`,
+			byte_size: 1_000_000,
+			content: preview,
+		});
+	});
+
+	test("a blob-bound artifact without byteSize defaults to the preview length", async () => {
+		const taskId = await seedTask();
+		await lifecycle.artifact({
+			organizationId: orgA,
+			taskId: asTaskId(taskId),
+			kind: "diff",
+			contentType: "text/x-diff",
+			content: "+hello",
+			sha256: SHA,
+			storageRef: `blob:${SHA}`,
+		});
+		const listed = await artifacts.listByTask({
+			organizationId: orgA,
+			taskId: asTaskId(taskId),
+		});
+		expect(listed[0]).toMatchObject({
+			storage_ref: `blob:${SHA}`,
+			byte_size: Buffer.byteLength("+hello", "utf8"),
+		});
+	});
+
+	test("a malformed storage ref fails closed before insert", async () => {
+		const taskId = await seedTask();
+		for (const storageRef of [
+			`blob:${SHA.toUpperCase()}`,
+			`blob:${SHA.slice(1)}`,
+			`inline:${SHA}`,
+			"blob:",
+		]) {
+			await expectLifecycleFailure(
+				lifecycle.artifact({
+					organizationId: orgA,
+					taskId: asTaskId(taskId),
+					kind: "diff",
+					contentType: "text/x-diff",
+					content: "+hello",
+					sha256: SHA,
+					storageRef,
+				}),
+				"INVALID_INPUT",
+			);
+		}
+		expect(
+			await artifacts.listByTask({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+			}),
+		).toEqual([]);
+	});
+
+	test("a storage ref that does not match sha256 fails closed", async () => {
+		const taskId = await seedTask();
+		await expectLifecycleFailure(
+			lifecycle.artifact({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+				kind: "diff",
+				contentType: "text/x-diff",
+				content: "+hello",
+				sha256: SHA,
+				storageRef: `blob:${OTHER_SHA}`,
+			}),
+			"INVALID_INPUT",
+		);
+		expect(
+			await artifacts.listByTask({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+			}),
+		).toEqual([]);
+	});
+
+	test("an oversize byteSize fails closed", async () => {
+		const taskId = await seedTask();
+		await expectLifecycleFailure(
+			lifecycle.artifact({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+				kind: "diff",
+				contentType: "text/x-diff",
+				content: "+hello",
+				sha256: SHA,
+				storageRef: `blob:${SHA}`,
+				byteSize: MAX_BLOB_BYTES + 1,
+			}),
+			"INVALID_INPUT",
+		);
+		expect(
+			await artifacts.listByTask({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+			}),
+		).toEqual([]);
+	});
+
+	test("a preview larger than byteSize fails closed", async () => {
+		const taskId = await seedTask();
+		await expectLifecycleFailure(
+			lifecycle.artifact({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+				kind: "diff",
+				contentType: "text/x-diff",
+				content: "+hello world",
+				sha256: SHA,
+				storageRef: `blob:${SHA}`,
+				byteSize: 4,
+			}),
+			"INVALID_INPUT",
+		);
+		expect(
+			await artifacts.listByTask({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+			}),
+		).toEqual([]);
+	});
+
+	test("an inline artifact cannot claim a byteSize larger than its content", async () => {
+		const taskId = await seedTask();
+		await expectLifecycleFailure(
+			lifecycle.artifact({
+				organizationId: orgA,
+				taskId: asTaskId(taskId),
+				kind: "diff",
+				contentType: "text/x-diff",
+				content: "+hello",
+				sha256: SHA,
+				byteSize: 100,
+			}),
+			"INVALID_INPUT",
 		);
 	});
 });

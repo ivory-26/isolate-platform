@@ -22,6 +22,7 @@ import {
 import {
 	evaluateLifecycleApprovalStatus,
 	LifecycleError,
+	resolveArtifactStorage,
 	validateLifecycleApprovalInput,
 	validateTransitionInput,
 } from "../repositories/execution-lifecycle";
@@ -161,9 +162,9 @@ export class InMemoryArtifactRepository implements ArtifactRepository {
 			task_id: validated.taskId,
 			organization_id: validated.organizationId,
 			kind: validated.kind,
-			storage_ref: `inline:${validated.sha256}`,
+			storage_ref: validated.storageRef ?? `inline:${validated.sha256}`,
 			content_type: validated.contentType,
-			byte_size: content.byteSize,
+			byte_size: validated.byteSize ?? content.byteSize,
 			sha256: validated.sha256,
 			content: validated.content,
 			created_at: this.clock(),
@@ -272,6 +273,9 @@ export class InMemoryExecutionLifecycle implements ExecutionLifecycle {
 		requireNonEmpty(input.organizationId, "organizationId");
 		requireNonEmpty(input.taskId, "taskId");
 		requireNonEmpty(input.contentType, "contentType");
+		// Same pure binding gate as PostgresExecutionLifecycle: malformed refs,
+		// digest mismatches and impossible byte sizes fail closed here too.
+		const storage = resolveArtifactStorage(input);
 		const result = await this.options.artifacts.create({
 			organizationId: input.organizationId,
 			taskId: input.taskId,
@@ -279,6 +283,8 @@ export class InMemoryExecutionLifecycle implements ExecutionLifecycle {
 			contentType: input.contentType,
 			content: input.content,
 			sha256: input.sha256,
+			storageRef: storage.storageRef,
+			byteSize: storage.byteSize,
 		});
 		if (!result.ok) {
 			if (result.code === "CONTENT_TOO_LARGE") {

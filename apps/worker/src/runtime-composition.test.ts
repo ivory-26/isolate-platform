@@ -187,6 +187,8 @@ describe("configured composition", () => {
 		expect(typeof composition.overrides.usageSink?.record).toBe("function");
 		expect(typeof composition.overrides.loadTaskContext).toBe("function");
 		expect(composition.overrides.lifecycle).toBeDefined();
+		// Wave 11: large diffs are stored through the tenant-scoped blob table.
+		expect(composition.overrides.blobStore).toBeDefined();
 		expect(composition.overrides.provider).toBeUndefined();
 		expect(composition.overrides.createRuntime).toBeUndefined();
 		expect(composition.overrides.createWorkspaceGit).toBeUndefined();

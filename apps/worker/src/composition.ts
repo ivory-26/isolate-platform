@@ -138,6 +138,11 @@ export function createOfflineWorkerDeps(
 		maxCostUsdPerTask: overrides.maxCostUsdPerTask ?? config.maxCostUsdPerTask,
 		priceTable: overrides.priceTable ?? null,
 		now: overrides.now,
+		// Wave 11: optional blob store for full large payloads. Absent keeps the
+		// inline-only behaviour (a large diff is truncated and recorded as such).
+		...(overrides.blobStore === undefined
+			? {}
+			: { blobStore: overrides.blobStore }),
 		// Wave 7 seams. When `lifecycle` is absent the handler keeps the wave-6
 		// semantics and the resume handler is not registered.
 		lifecycle: overrides.lifecycle,

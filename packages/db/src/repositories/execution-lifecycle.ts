@@ -19,6 +19,7 @@ import {
 	MAX_INLINE_ARTIFACT_BYTES,
 	PostgresArtifactRepository,
 } from "./artifact-repository";
+import { MAX_BLOB_BYTES } from "./blob-store";
 import {
 	PostgresTaskAttemptRepository,
 	type TaskAttemptRepository,
@@ -133,6 +134,74 @@ export function evaluateLifecycleApprovalStatus(input: {
 	return input.status;
 }
 
+const BLOB_STORAGE_REF = /^blob:[0-9a-f]{64}$/;
+
+export type ResolvedArtifactStorage = {
+	readonly storageRef: string;
+	readonly byteSize: number;
+};
+
+/**
+ * Wave 11 artifact binding gate shared by the Postgres lifecycle and the
+ * in-memory fake.
+ *
+ * - no `storageRef`: the artifact is inline, so `byteSize` (when supplied) must
+ *   equal the content length and the reference becomes `inline:<sha256>`;
+ * - `storageRef`: it must be exactly `blob:<sha256>` for the supplied digest,
+ *   `content` is a preview, and `byteSize` must cover the preview but not
+ *   exceed the 2 MiB store ceiling.
+ *
+ * Every violation fails closed with `INVALID_INPUT` before any write, so an
+ * artifact can never claim a blob that does not match its digest or size.
+ */
+export function resolveArtifactStorage(input: {
+	readonly content: string;
+	readonly sha256: string;
+	readonly storageRef?: string;
+	readonly byteSize?: number;
+}): ResolvedArtifactStorage {
+	if (!isSha256Hex(input.sha256)) {
+		throw new LifecycleError(
+			"INVALID_INPUT",
+			"sha256 must be a 64-char lowercase hex digest",
+		);
+	}
+	if (typeof input.content !== "string") {
+		throw new LifecycleError("INVALID_INPUT", "content must be a string");
+	}
+	const previewBytes = Buffer.byteLength(input.content, "utf8");
+	if (input.storageRef === undefined) {
+		if (input.byteSize !== undefined && input.byteSize !== previewBytes) {
+			throw new LifecycleError(
+				"INVALID_INPUT",
+				"byteSize must equal the inline content size",
+			);
+		}
+		return { storageRef: `inline:${input.sha256}`, byteSize: previewBytes };
+	}
+	if (
+		!BLOB_STORAGE_REF.test(input.storageRef) ||
+		input.storageRef !== `blob:${input.sha256}`
+	) {
+		throw new LifecycleError(
+			"INVALID_INPUT",
+			"storageRef must be blob:<sha256> matching sha256",
+		);
+	}
+	const byteSize = input.byteSize ?? previewBytes;
+	if (
+		!Number.isSafeInteger(byteSize) ||
+		byteSize < previewBytes ||
+		byteSize > MAX_BLOB_BYTES
+	) {
+		throw new LifecycleError(
+			"INVALID_INPUT",
+			`byteSize must be between the inline preview and ${MAX_BLOB_BYTES} bytes`,
+		);
+	}
+	return { storageRef: input.storageRef, byteSize };
+}
+
 export type PostgresExecutionLifecycleOptions = {
 	/** Optional overrides for tests/composition; defaults bind to `sql`. */
 	readonly artifacts?: ArtifactRepository;
@@ -221,12 +290,9 @@ export class PostgresExecutionLifecycle implements ExecutionLifecycle {
 		requireNonEmpty(input.taskId, "taskId");
 		requireNonEmpty(input.kind, "kind");
 		requireNonEmpty(input.contentType, "contentType");
-		if (!isSha256Hex(input.sha256)) {
-			throw new LifecycleError(
-				"INVALID_INPUT",
-				"sha256 must be a 64-char lowercase hex digest",
-			);
-		}
+		// Wave 11: the binding gate validates the digest, the optional
+		// `blob:<sha256>` reference and the full byte size before any write.
+		const storage = resolveArtifactStorage(input);
 		// The repository rejects oversize content BEFORE the INSERT (256 KiB of
 		// UTF-8 bytes); this method maps that typed outcome to a lifecycle error.
 		const result = await this.artifacts.create({
@@ -236,6 +302,8 @@ export class PostgresExecutionLifecycle implements ExecutionLifecycle {
 			contentType: input.contentType,
 			content: input.content,
 			sha256: input.sha256,
+			storageRef: storage.storageRef,
+			byteSize: storage.byteSize,
 		});
 		if (!result.ok) {
 			if (result.code === "CONTENT_TOO_LARGE") {

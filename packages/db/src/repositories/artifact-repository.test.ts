@@ -209,4 +209,27 @@ describe("InMemoryArtifactRepository (ArtifactRepository contract)", () => {
 			}),
 		).toEqual([]);
 	});
+
+	test("persists a caller-supplied blob reference and full byte size", async () => {
+		const { taskId } = await seedTask(tasks, orgA);
+		const preview = "+hello";
+		const result = await artifacts.create({
+			organizationId: orgA,
+			taskId: asTaskId(taskId),
+			kind: "diff",
+			contentType: "text/x-diff",
+			content: preview,
+			sha256: SHA,
+			storageRef: `blob:${SHA}`,
+			byteSize: 1_200_000,
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.artifact).toMatchObject({
+			storage_ref: `blob:${SHA}`,
+			sha256: SHA,
+			byte_size: 1_200_000,
+			content: preview,
+		});
+	});
 });

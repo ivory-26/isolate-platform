@@ -19,12 +19,14 @@ import type {
 } from "@isolate/sandbox";
 import {
 	executeCommand,
+	MAX_PATCH_BYTES,
 	runValidationCommand,
 	SandboxError,
 } from "@isolate/sandbox";
 import type {
 	AcceptanceCheck,
 	AcceptanceReport,
+	BlobStore,
 	CostPriceTable,
 	ExecutionLifecycle,
 	LifecycleTransitionInput,
@@ -121,8 +123,19 @@ const MAX_PROMPT_LIST_ITEM_CHARS = 500;
 const MAX_LOGGED_TOOL_CALLS = 50;
 const MAX_LOGGED_TURN = 10_000;
 
-/** Bounded inline diff artifact (matches the DB `artifacts.content` cap). */
-const MAX_ARTIFACT_BYTES = 65_536;
+/**
+ * Wave 11 diff artifact bounds.
+ *
+ * The full patch is stored in a `BlobStore` when it outgrows the inline
+ * column; `content` then carries only the leading preview. The store ceiling
+ * is 2 MiB. The sandbox workspace adapter currently refuses a patch request
+ * above its own `MAX_PATCH_BYTES` (256 KiB), so the request is clamped: asking
+ * for more would make every lifecycle run fail with POLICY_DENIED. When that
+ * adapter bound is raised, this call already asks for the full store ceiling.
+ */
+const MAX_DIFF_ARTIFACT_BYTES = 2 * 1024 * 1024;
+/** Inline preview cap; matches the `artifacts.content` CHECK in 0005. */
+const MAX_DIFF_PREVIEW_BYTES = 262_144;
 /** Validation log artifacts are bounded by the runner's inline capture cap. */
 const MAX_VALIDATION_LOG_BYTES = 65_536;
 /** Bounded `git rev-parse HEAD` result used to bind the PR approval. */
@@ -235,6 +248,12 @@ export type TaskExecutionDeps = {
 	 * never a guessed one.
 	 */
 	priceTable?: CostPriceTable | null;
+	/**
+	 * Wave 11 blob store for full large payloads (diffs). Absent keeps the
+	 * inline-only behaviour: a patch above the inline cap is truncated and the
+	 * artifact is recorded with `truncated: true`.
+	 */
+	blobStore?: BlobStore;
 	now?: () => number;
 	/**
 	 * Wave 7 execution lifecycle. Absent keeps the wave-6 handler semantics:
@@ -1367,20 +1386,63 @@ function createHandler(
 					const diff = await workspaceGit.diffPatch(
 						workspace,
 						context.baseBranch,
-						{ maxBytes: MAX_ARTIFACT_BYTES },
+						{ maxBytes: Math.min(MAX_DIFF_ARTIFACT_BYTES, MAX_PATCH_BYTES) },
 						ctx.signal,
 					);
-					const sha256 = new Bun.CryptoHasher("sha256")
-						.update(diff.patch)
+					// Wave 11: the full patch (up to the adapter bound) either fits the
+					// inline column or moves to the blob store; only a bounded UTF-8
+					// preview is ever persisted inline. `sha256` always covers the FULL
+					// bytes so the blob reference and the artifact row agree.
+					const fullBytes = Buffer.from(diff.patch, "utf8");
+					const fullByteSize = fullBytes.byteLength;
+					const fullSha256 = new Bun.CryptoHasher("sha256")
+						.update(fullBytes)
 						.digest("hex");
-					const bytes = Buffer.byteLength(diff.patch, "utf8");
+					const blobStore = deps.blobStore;
+					const overInlineCap = fullByteSize > MAX_DIFF_PREVIEW_BYTES;
+					const useBlob = overInlineCap && blobStore !== undefined;
+					// The inline column never receives more than a UTF-8-safe preview,
+					// with or without a store.
+					const preview = overInlineCap
+						? utf8Prefix(diff.patch, MAX_DIFF_PREVIEW_BYTES)
+						: diff.patch;
+					const previewBytes = Buffer.byteLength(preview, "utf8");
+					const sha256 = useBlob
+						? fullSha256
+						: new Bun.CryptoHasher("sha256").update(preview).digest("hex");
+					let blobStorageRef: string | undefined;
+					if (useBlob && blobStore !== undefined) {
+						// A store failure aborts the artifact write: no row may claim a
+						// blob that was never persisted. The outer handler maps it to a
+						// bounded verdict (the message never contains the patch).
+						const stored = await blobStore.put({
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							kind: "diff",
+							contentType: "text/x-diff",
+							bytes: fullBytes,
+							sha256: fullSha256,
+						});
+						blobStorageRef = stored.storageRef;
+					}
+					// Full bytes in the store means nothing was lost; without a store
+					// the preview is all that survives, recorded as truncated.
+					const diffTruncated = useBlob
+						? diff.truncated
+						: diff.truncated || overInlineCap;
 					const artifact = await mode.lifecycle.artifact({
 						organizationId: job.organizationId,
 						taskId: job.taskId,
 						kind: "diff",
 						contentType: "text/x-diff",
-						content: diff.patch,
+						content: preview,
 						sha256,
+						...(blobStorageRef === undefined
+							? {}
+							: {
+									storageRef: blobStorageRef,
+									byteSize: fullByteSize,
+								}),
 					});
 					await mode.lifecycle.event({
 						organizationId: job.organizationId,
@@ -1393,9 +1455,12 @@ function createHandler(
 							filesChanged: stat.filesChanged,
 							insertions: stat.insertions,
 							deletions: stat.deletions,
-							truncated: diff.truncated,
+							truncated: diffTruncated,
 							artifactId: artifact.artifactId,
-							bytes,
+							bytes: useBlob ? fullByteSize : previewBytes,
+							...(blobStorageRef === undefined
+								? {}
+								: { previewBytes, storageRef: blobStorageRef }),
 						},
 					});
 					await mode.lifecycle.event({
@@ -1408,8 +1473,11 @@ function createHandler(
 							artifactId: artifact.artifactId,
 							kind: "diff",
 							sha256,
-							bytes,
-							truncated: diff.truncated,
+							bytes: useBlob ? fullByteSize : previewBytes,
+							truncated: diffTruncated,
+							...(blobStorageRef === undefined
+								? {}
+								: { previewBytes, storageRef: blobStorageRef }),
 						},
 					});
 					await transitionLifecycle(

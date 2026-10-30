@@ -1,4 +1,5 @@
 import type {
+	AcceptanceCheck,
 	ApprovalId,
 	IntegrationId,
 	OrganizationId,
@@ -200,6 +201,12 @@ export type TaskRow = {
 	goal: string;
 	/** What "done" means for this task; persisted at submit time. */
 	acceptance_criteria: string[];
+	/**
+	 * Machine-checkable completion criteria (migration 0007), bounded to 32
+	 * entries by the `acceptanceCheckSchema` boundary and the DB CHECK. Empty
+	 * means the task has no environment-proven checks.
+	 */
+	acceptance_checks: AcceptanceCheck[];
 	/** Paths the agent may modify; everything else is out of bounds. */
 	file_ownership: string[];
 	/** Pull request opened after human approval (migration 0006); NULL until then. */

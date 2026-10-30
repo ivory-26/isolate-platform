@@ -1,4 +1,6 @@
 import {
+	type AcceptanceCheck,
+	acceptanceCheckSchema,
 	canTransition,
 	type OrganizationId,
 	TASK_STATE_TRANSITIONS,
@@ -55,10 +57,13 @@ export function buildTransitionValuesSql(
 export const TASK_TRANSITION_VALUES_SQL = buildTransitionValuesSql();
 
 const TASK_COLUMNS =
-	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, created_by, created_at, updated_at";
+	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, acceptance_checks, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, created_by, created_at, updated_at";
 
 /** Hard retry ceiling mirrored by the 0006 `retry_depth` CHECK (0..3). */
 export const MAX_RETRY_DEPTH = 3;
+
+/** Check-list bound mirrored by the 0007 `tasks_acceptance_checks_array_check`. */
+export const MAX_ACCEPTANCE_CHECKS = 32;
 
 /** Practical git ref-name bound; a derived retry branch is clamped to it. */
 export const MAX_RETRY_BRANCH_LENGTH = 255;
@@ -97,10 +102,10 @@ const STMT = {
 	insert: `INSERT INTO tasks (
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, goal, acceptance_criteria,
-		file_ownership, created_by, created_at, updated_at
+		acceptance_checks, file_ownership, created_by, created_at, updated_at
 	) VALUES (
 		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb,
-		$6, $7::text::jsonb, $8::text::jsonb, $9, now(), now()
+		$6, $7::text::jsonb, $8::text::jsonb, $9::text::jsonb, $10, now(), now()
 	)
 	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	RETURNING ${TASK_COLUMNS}`,
@@ -111,11 +116,13 @@ const STMT = {
 	insertRetry: `INSERT INTO tasks (
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, goal, acceptance_criteria,
-		file_ownership, created_by, retry_of, retry_depth, created_at, updated_at
+		acceptance_checks, file_ownership, created_by, retry_of, retry_depth,
+		created_at, updated_at
 	)
 	SELECT gen_random_uuid(), t.organization_id, t.repository_id, $4, $4,
 		'queued', $3, t.budget_limits, t.goal, t.acceptance_criteria,
-		t.file_ownership, t.created_by, t.id, t.retry_depth + 1, now(), now()
+		t.acceptance_checks, t.file_ownership, t.created_by, t.id,
+		t.retry_depth + 1, now(), now()
 	FROM tasks t
 	WHERE t.id = $1 AND t.organization_id = $2
 	  AND t.status = 'failed' AND t.retry_depth < ${MAX_RETRY_DEPTH}
@@ -193,6 +200,11 @@ export interface TaskRepository {
 		/** Task intent persisted for the worker's context loader. */
 		goal?: string;
 		acceptanceCriteria?: string[];
+		/**
+		 * Machine-checkable completion criteria (wave 9). Validated with
+		 * `acceptanceCheckSchema` and bounded to `MAX_ACCEPTANCE_CHECKS`.
+		 */
+		acceptanceChecks?: AcceptanceCheck[];
 		fileOwnership?: string[];
 		createdBy: string;
 	}): Promise<TaskRow>;
@@ -285,6 +297,7 @@ export class PostgresTaskRepository implements TaskRepository {
 		};
 		goal?: string;
 		acceptanceCriteria?: string[];
+		acceptanceChecks?: AcceptanceCheck[];
 		fileOwnership?: string[];
 		createdBy: string;
 	}): Promise<TaskRow> {
@@ -307,6 +320,11 @@ export class PostgresTaskRepository implements TaskRepository {
 			input.acceptanceCriteria ?? [],
 			"acceptanceCriteria",
 		);
+		// Zod boundary + 32-entry cap: the same helper backs the in-memory fake,
+		// so driver and fake reject identical inputs.
+		const acceptanceChecks = validateAcceptanceChecks(
+			input.acceptanceChecks ?? [],
+		);
 		const fileOwnership = requireStringArray(
 			input.fileOwnership ?? [],
 			"fileOwnership",
@@ -328,6 +346,7 @@ export class PostgresTaskRepository implements TaskRepository {
 			JSON.stringify(budgetLimits),
 			goal,
 			JSON.stringify(acceptanceCriteria),
+			JSON.stringify(acceptanceChecks),
 			JSON.stringify(fileOwnership),
 			input.createdBy,
 		]);
@@ -519,6 +538,11 @@ function mapTaskRow(row: Row): TaskRow {
 		acceptance_criteria: parseJsonbColumn<TaskRow["acceptance_criteria"]>(
 			row.acceptance_criteria,
 		) as TaskRow["acceptance_criteria"],
+		// Re-validated on read: the DB CHECK only proves "array of <= 32", so a
+		// hand-written row with an invalid entry must not cross the row boundary.
+		acceptance_checks: validateAcceptanceChecks(
+			parseJsonbColumn<unknown>(row.acceptance_checks) ?? [],
+		),
 		file_ownership: parseJsonbColumn<TaskRow["file_ownership"]>(
 			row.file_ownership,
 		) as TaskRow["file_ownership"],
@@ -563,4 +587,38 @@ export function requireStringArray(value: unknown, field: string): string[] {
 		}
 	}
 	return [...(value as string[])];
+}
+
+/**
+ * Validates and bounds the machine-checkable acceptance list (wave 9).
+ * Shared by the Postgres driver and the in-memory fake so both reject the
+ * same inputs: non-arrays, more than `MAX_ACCEPTANCE_CHECKS` entries, and
+ * entries that violate `acceptanceCheckSchema` (strict, path-confined).
+ * Error messages name the index and the zod issue, never the value.
+ */
+export function validateAcceptanceChecks(
+	value: unknown,
+	field = "acceptanceChecks",
+): AcceptanceCheck[] {
+	if (!Array.isArray(value)) {
+		throw new Error(`${field} must be an array of acceptance checks`);
+	}
+	if (value.length > MAX_ACCEPTANCE_CHECKS) {
+		throw new Error(
+			`${field} must contain at most ${MAX_ACCEPTANCE_CHECKS} checks`,
+		);
+	}
+	return value.map((entry, index) => {
+		const parsed = acceptanceCheckSchema.safeParse(entry);
+		if (!parsed.success) {
+			const reason = parsed.error.issues
+				.slice(0, 3)
+				.map((issue) => issue.message)
+				.join("; ");
+			throw new Error(
+				`${field}[${index}] is not a valid acceptance check: ${reason}`,
+			);
+		}
+		return parsed.data;
+	});
 }

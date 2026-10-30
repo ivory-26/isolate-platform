@@ -20,6 +20,13 @@ import {
 	evaluateApprovalDecision,
 	evaluateDecisionOutcome,
 } from "../repositories/approval-repository";
+import {
+	type BranchLockAcquireResult,
+	type BranchLockInput,
+	type BranchLockRepository,
+	requireBranchLockKey,
+	resolveBranchLockTtlMs,
+} from "../repositories/branch-lock-repository";
 import { clampPageLimit } from "../repositories/pagination";
 import {
 	ackFailOutcome,
@@ -40,6 +47,7 @@ import {
 	type TaskRetryInput,
 	type TaskRetryResult,
 	type TaskTransitionFailureCode,
+	validateAcceptanceChecks,
 } from "../repositories/task-repository";
 import {
 	aggregateUsageRows,
@@ -93,6 +101,10 @@ export class InMemoryTaskRepository implements TaskRepository {
 			input.acceptanceCriteria ?? [],
 			"acceptanceCriteria",
 		);
+		// Identical boundary to the driver: same zod schema, same 32-entry cap.
+		const acceptanceChecks = validateAcceptanceChecks(
+			input.acceptanceChecks ?? [],
+		);
 		const fileOwnership = requireStringArray(
 			input.fileOwnership ?? [],
 			"fileOwnership",
@@ -124,6 +136,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			},
 			goal,
 			acceptance_criteria: acceptanceCriteria,
+			acceptance_checks: acceptanceChecks,
 			file_ownership: fileOwnership,
 			pull_request_number: null,
 			pull_request_url: null,
@@ -284,6 +297,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			budget_limits: { ...source.budget_limits },
 			goal: source.goal,
 			acceptance_criteria: [...source.acceptance_criteria],
+			acceptance_checks: [...source.acceptance_checks],
 			file_ownership: [...source.file_ownership],
 			pull_request_number: null,
 			pull_request_url: null,
@@ -299,6 +313,60 @@ export class InMemoryTaskRepository implements TaskRepository {
 }
 
 type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
+
+/**
+ * In-memory row-lease lock, mirroring the Postgres `branch_locks` table.
+ *
+ * Shares `requireBranchLockKey` and `resolveBranchLockTtlMs` with the driver,
+ * so key and TTL bounds cannot drift. Like the real row: a live lease makes a
+ * second acquire `LOCKED`; an expired lease (`expiresAt <= now`) can be taken
+ * over; `release` deletes only the caller's lease and is idempotent. One
+ * injected clock drives both expiry checks, so a frozen clock cannot behave
+ * differently between `acquire` and `heldCount`.
+ */
+export class InMemoryBranchLockRepository implements BranchLockRepository {
+	private readonly leases = new Map<
+		string,
+		{ ownerId: string; expiresAt: number }
+	>();
+
+	constructor(private readonly clock: () => Date = () => new Date()) {}
+
+	async acquire(input: BranchLockInput): Promise<BranchLockAcquireResult> {
+		const key = requireBranchLockKey(input);
+		const ttlMs = resolveBranchLockTtlMs(input.ttlMs);
+		const now = this.clock().getTime();
+		const existing = this.leases.get(key);
+		if (existing && existing.expiresAt > now) {
+			return { ok: false, code: "LOCKED" };
+		}
+		const ownerId = crypto.randomUUID();
+		this.leases.set(key, { ownerId, expiresAt: now + ttlMs });
+		let released = false;
+		return {
+			ok: true,
+			release: async () => {
+				if (released) return;
+				released = true;
+				// Owner-guarded: a lease already taken over stays with its new
+				// owner, exactly like `DELETE ... WHERE owner_id = $4`.
+				if (this.leases.get(key)?.ownerId === ownerId) {
+					this.leases.delete(key);
+				}
+			},
+		};
+	}
+
+	/** Test introspection only: number of live (unexpired) leases. */
+	get heldCount(): number {
+		const now = this.clock().getTime();
+		let count = 0;
+		for (const lease of this.leases.values()) {
+			if (lease.expiresAt > now) count += 1;
+		}
+		return count;
+	}
+}
 
 export class InMemoryApprovalRepository implements ApprovalRepository {
 	private readonly rows = new Map<string, ApprovalRow>();

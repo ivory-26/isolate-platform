@@ -207,6 +207,54 @@ describe("createGitHubAppTokenProvider", () => {
 		});
 	});
 
+	test("requests wave-13 context and scoped-write permissions when asked", async () => {
+		const { impl, calls } = recordingFetch(() =>
+			jsonResponse(201, tokenBody(TOKEN_A)),
+		);
+		const provider = providerFor(impl);
+
+		await provider.getInstallationToken({
+			repositoryFullName: REPOSITORY,
+			contents: "read",
+			actions: "read",
+			checks: "read",
+			issues: "write",
+			administration: "read",
+		});
+
+		const body: unknown = JSON.parse(String(calls[0].init.body));
+		expect(body).toEqual({
+			repository: "widgets",
+			permissions: {
+				contents: "read",
+				actions: "read",
+				checks: "read",
+				issues: "write",
+				administration: "read",
+			},
+		});
+	});
+
+	test("caches a read-only scope set separately from a write scope set", async () => {
+		const { impl, calls } = recordingFetch(() =>
+			jsonResponse(201, tokenBody(TOKEN_A)),
+		);
+		const provider = providerFor(impl);
+
+		await provider.getInstallationToken({
+			repositoryFullName: REPOSITORY,
+			contents: "read",
+			actions: "read",
+		});
+		await provider.getInstallationToken({
+			repositoryFullName: REPOSITORY,
+			contents: "read",
+			actions: "write",
+		});
+
+		expect(calls).toHaveLength(2);
+	});
+
 	test("serves a cached token after the first exchange", async () => {
 		const { impl, calls } = recordingFetch(() =>
 			jsonResponse(201, tokenBody(TOKEN_A)),
@@ -469,6 +517,22 @@ describe("request validation", () => {
 				repositoryFullName: REPOSITORY,
 				contents: "read",
 				pullRequests: "admin" as unknown as GitHubRepoPermission,
+			},
+		],
+		[
+			"an unknown actions permission",
+			{
+				repositoryFullName: REPOSITORY,
+				contents: "read",
+				actions: "admin" as unknown as GitHubRepoPermission,
+			},
+		],
+		[
+			"an unknown issues permission",
+			{
+				repositoryFullName: REPOSITORY,
+				contents: "read",
+				issues: "admin" as unknown as GitHubRepoPermission,
 			},
 		],
 	];

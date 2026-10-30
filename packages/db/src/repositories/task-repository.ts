@@ -11,6 +11,7 @@ import {
 import type { PgSql } from "../client";
 import { parseJsonbColumn } from "../client";
 import type { TaskRow, TaskStatusDb } from "../schema";
+import { normalizeIncidentMetadata } from "./incident-repository";
 
 /**
  * Postgres (Neon) implementation of the task lifecycle store.
@@ -57,7 +58,7 @@ export function buildTransitionValuesSql(
 export const TASK_TRANSITION_VALUES_SQL = buildTransitionValuesSql();
 
 const TASK_COLUMNS =
-	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, acceptance_checks, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, created_by, created_at, updated_at";
+	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, acceptance_checks, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, incident_source, incident_fingerprint, created_by, created_at, updated_at";
 
 /** Hard retry ceiling mirrored by the 0006 `retry_depth` CHECK (0..3). */
 export const MAX_RETRY_DEPTH = 3;
@@ -102,10 +103,12 @@ const STMT = {
 	insert: `INSERT INTO tasks (
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, goal, acceptance_criteria,
-		acceptance_checks, file_ownership, created_by, created_at, updated_at
+		acceptance_checks, file_ownership, created_by, incident_source,
+		incident_fingerprint, created_at, updated_at
 	) VALUES (
 		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb,
-		$6, $7::text::jsonb, $8::text::jsonb, $9::text::jsonb, $10, now(), now()
+		$6, $7::text::jsonb, $8::text::jsonb, $9::text::jsonb, $10, $11, $12,
+		now(), now()
 	)
 	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	RETURNING ${TASK_COLUMNS}`,
@@ -117,12 +120,12 @@ const STMT = {
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, goal, acceptance_criteria,
 		acceptance_checks, file_ownership, created_by, retry_of, retry_depth,
-		created_at, updated_at
+		incident_source, incident_fingerprint, created_at, updated_at
 	)
 	SELECT gen_random_uuid(), t.organization_id, t.repository_id, $4, $4,
 		'queued', $3, t.budget_limits, t.goal, t.acceptance_criteria,
 		t.acceptance_checks, t.file_ownership, t.created_by, t.id,
-		t.retry_depth + 1, now(), now()
+		t.retry_depth + 1, t.incident_source, t.incident_fingerprint, now(), now()
 	FROM tasks t
 	WHERE t.id = $1 AND t.organization_id = $2
 	  AND t.status = 'failed' AND t.retry_depth < ${MAX_RETRY_DEPTH}
@@ -181,33 +184,42 @@ export type TaskRetryResult =
 	  }
 	| { ok: false; code: TaskRetryFailureCode };
 
+export type TaskCreateInput = {
+	organizationId: OrganizationId;
+	repositoryId: string;
+	branch: string;
+	idempotencyKey: string;
+	budgetLimits: {
+		maxAgentTurns: number;
+		maxRepairAttempts: number;
+		maxDurationMs: number;
+	};
+	/** Task intent persisted for the worker's context loader. */
+	goal?: string;
+	acceptanceCriteria?: string[];
+	/**
+	 * Machine-checkable completion criteria (wave 9). Validated with
+	 * `acceptanceCheckSchema` and bounded to `MAX_ACCEPTANCE_CHECKS`.
+	 */
+	acceptanceChecks?: AcceptanceCheck[];
+	fileOwnership?: string[];
+	/**
+	 * Incident provenance (wave 13): the source token and source-stable
+	 * fingerprint of the signal that opened this task. Both or neither; an
+	 * incident task still goes through the normal submission path.
+	 */
+	incidentSource?: string;
+	incidentFingerprint?: string;
+	createdBy: string;
+};
+
 /**
  * Contract for the task lifecycle store. Declared in this module (not
  * imported from anywhere) so implementations and test fakes share one
  * in-scope symbol.
  */
 export interface TaskRepository {
-	create(input: {
-		organizationId: OrganizationId;
-		repositoryId: string;
-		branch: string;
-		idempotencyKey: string;
-		budgetLimits: {
-			maxAgentTurns: number;
-			maxRepairAttempts: number;
-			maxDurationMs: number;
-		};
-		/** Task intent persisted for the worker's context loader. */
-		goal?: string;
-		acceptanceCriteria?: string[];
-		/**
-		 * Machine-checkable completion criteria (wave 9). Validated with
-		 * `acceptanceCheckSchema` and bounded to `MAX_ACCEPTANCE_CHECKS`.
-		 */
-		acceptanceChecks?: AcceptanceCheck[];
-		fileOwnership?: string[];
-		createdBy: string;
-	}): Promise<TaskRow>;
+	create(input: TaskCreateInput): Promise<TaskRow>;
 	get(taskId: TaskId): Promise<TaskRow | null>;
 	getByIdempotencyKey(
 		organizationId: OrganizationId,
@@ -285,22 +297,7 @@ export function evaluateRetryEligibility(input: {
 export class PostgresTaskRepository implements TaskRepository {
 	constructor(private readonly sql: PgSql) {}
 
-	async create(input: {
-		organizationId: OrganizationId;
-		repositoryId: string;
-		branch: string;
-		idempotencyKey: string;
-		budgetLimits: {
-			maxAgentTurns: number;
-			maxRepairAttempts: number;
-			maxDurationMs: number;
-		};
-		goal?: string;
-		acceptanceCriteria?: string[];
-		acceptanceChecks?: AcceptanceCheck[];
-		fileOwnership?: string[];
-		createdBy: string;
-	}): Promise<TaskRow> {
+	async create(input: TaskCreateInput): Promise<TaskRow> {
 		requireNonEmpty(input.organizationId, "organizationId");
 		requireNonEmpty(input.repositoryId, "repositoryId");
 		requireNonEmpty(input.branch, "branch");
@@ -329,6 +326,11 @@ export class PostgresTaskRepository implements TaskRepository {
 			input.fileOwnership ?? [],
 			"fileOwnership",
 		);
+		// Source and fingerprint are written as a pair or not at all (0009).
+		const incident = normalizeIncidentMetadata({
+			incidentSource: input.incidentSource,
+			incidentFingerprint: input.incidentFingerprint,
+		});
 
 		// Row JSON keys are snake_case (mirrors the DB jsonb contract and the
 		// budget->>'max_duration_ms' scan); the TS-facing input is camelCase.
@@ -349,6 +351,8 @@ export class PostgresTaskRepository implements TaskRepository {
 			JSON.stringify(acceptanceChecks),
 			JSON.stringify(fileOwnership),
 			input.createdBy,
+			incident.incidentSource,
+			incident.incidentFingerprint,
 		]);
 		const insertedRows = inserted as unknown as Record<string, unknown>[];
 		if (insertedRows.length > 0) {
@@ -552,6 +556,10 @@ function mapTaskRow(row: Row): TaskRow {
 			null) as TaskRow["pull_request_url"],
 		retry_of: (row.retry_of ?? null) as TaskRow["retry_of"],
 		retry_depth: Number(row.retry_depth ?? 0),
+		incident_source: (row.incident_source ??
+			null) as TaskRow["incident_source"],
+		incident_fingerprint: (row.incident_fingerprint ??
+			null) as TaskRow["incident_fingerprint"],
 		created_by: row.created_by as TaskRow["created_by"],
 		created_at: row.created_at as Date,
 		updated_at: row.updated_at as Date,

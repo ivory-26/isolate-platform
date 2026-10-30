@@ -1,6 +1,7 @@
 import type {
 	AcceptanceCheck,
 	ApprovalId,
+	IncidentSeverity,
 	IntegrationId,
 	OrganizationId,
 	RepositoryId,
@@ -216,6 +217,13 @@ export type TaskRow = {
 	retry_of: TaskId | null;
 	/** 0 for a first submission, source.retry_depth + 1 for a retry (max 3). */
 	retry_depth: number;
+	/**
+	 * Provenance of the incident signal that opened this task (migration
+	 * 0009); NULL for a normal submission. Source and fingerprint are written
+	 * as a pair by `TaskRepository.create`.
+	 */
+	incident_source: string | null;
+	incident_fingerprint: string | null;
 	created_by: UserId;
 	created_at: Date;
 	updated_at: Date;
@@ -353,5 +361,25 @@ export type UsageRecordRow = {
 	prompt_tokens: number | null;
 	completion_tokens: number | null;
 	cost_usd: unknown; // numeric(12,6) — read as string via postgres.js
+	created_at: Date;
+};
+
+/**
+ * One normalized inbound incident delivery (migration 0009). Bounded identity
+ * fields only — no payload, summary or log excerpt is persisted, and no
+ * credential may ever be stored here. `(organization_id, source, fingerprint,
+ * 30-minute bucket)` is the dedupe identity, enforced by a unique expression
+ * index; `delivery_id` is audit metadata, never the dedupe key.
+ */
+export type IncidentSignalRow = {
+	id: string;
+	organization_id: OrganizationId;
+	source: string;
+	kind: string;
+	severity: IncidentSeverity;
+	service: string;
+	fingerprint: string;
+	delivery_id: string | null;
+	received_at: Date;
 	created_at: Date;
 };

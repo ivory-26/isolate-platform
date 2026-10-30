@@ -4,6 +4,7 @@ import {
 	isTerminalTaskStatus,
 	type JobId,
 	type OrganizationId,
+	TASK_STATUSES,
 	type TaskId,
 	type TaskStatus,
 	type UsageRecordInput,
@@ -29,6 +30,17 @@ import {
 	requireBranchLockKey,
 	resolveBranchLockTtlMs,
 } from "../repositories/branch-lock-repository";
+import {
+	type CountActiveIncidentTasksInput,
+	type IncidentRepository,
+	type IncidentSignalInput,
+	incidentDedupeBucketStart,
+	type NormalizedIncidentSignal,
+	normalizeIncidentMetadata,
+	normalizeIncidentSignalInput,
+	normalizeIncidentSources,
+	type RecordIncidentSignalResult,
+} from "../repositories/incident-repository";
 import { clampPageLimit } from "../repositories/pagination";
 import {
 	ackFailOutcome,
@@ -111,6 +123,11 @@ export class InMemoryTaskRepository implements TaskRepository {
 			input.fileOwnership ?? [],
 			"fileOwnership",
 		);
+		// Same pair rule as the driver: both incident fields or neither.
+		const incident = normalizeIncidentMetadata({
+			incidentSource: input.incidentSource,
+			incidentFingerprint: input.incidentFingerprint,
+		});
 
 		for (const row of this.rows.values()) {
 			if (
@@ -144,6 +161,8 @@ export class InMemoryTaskRepository implements TaskRepository {
 			pull_request_url: null,
 			retry_of: null,
 			retry_depth: 0,
+			incident_source: incident.incidentSource,
+			incident_fingerprint: incident.incidentFingerprint,
 			created_by: input.createdBy as TaskRow["created_by"],
 			created_at: now,
 			updated_at: now,
@@ -305,6 +324,10 @@ export class InMemoryTaskRepository implements TaskRepository {
 			pull_request_url: null,
 			retry_of: source.id,
 			retry_depth: source.retry_depth + 1,
+			// Retry of an incident task keeps its provenance (driver copies the
+			// columns column-to-column).
+			incident_source: source.incident_source,
+			incident_fingerprint: source.incident_fingerprint,
 			created_by: source.created_by,
 			created_at: now,
 			updated_at: now,
@@ -314,8 +337,75 @@ export class InMemoryTaskRepository implements TaskRepository {
 	}
 }
 
-type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
+type StoredIncidentSignal = NormalizedIncidentSignal & { id: string };
 
+/**
+ * In-memory incident signal store. Sharing `normalizeIncidentSignalInput`,
+ * `incidentDedupeBucketStart` and `normalizeIncidentSources` with the Postgres
+ * driver means the 30-minute bucket, the bounded fields and the tenant key
+ * cannot drift between fake and database.
+ *
+ * The cap count pages the task store by status (the driver issues one SQL
+ * count); both apply the same window, tenant, source and fingerprint rules.
+ */
+export class InMemoryIncidentRepository implements IncidentRepository {
+	private readonly signals: StoredIncidentSignal[] = [];
+
+	constructor(private readonly tasks: Pick<TaskRepository, "listByStatus">) {}
+
+	async recordIfNew(
+		input: IncidentSignalInput,
+	): Promise<RecordIncidentSignalResult> {
+		const signal = normalizeIncidentSignalInput(input);
+		const bucket = incidentDedupeBucketStart(signal.receivedAt);
+		const existing = this.signals.find(
+			(row) =>
+				row.organizationId === signal.organizationId &&
+				row.source === signal.source &&
+				row.fingerprint === signal.fingerprint &&
+				incidentDedupeBucketStart(row.receivedAt) === bucket,
+		);
+		if (existing) {
+			return { ok: true, signalId: existing.id, created: false };
+		}
+		const id = crypto.randomUUID();
+		this.signals.push({ id, ...signal });
+		return { ok: true, signalId: id, created: true };
+	}
+
+	async countActiveIncidentTasks(
+		input: CountActiveIncidentTasksInput,
+	): Promise<number> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		if (!(input.since instanceof Date) || Number.isNaN(input.since.getTime())) {
+			throw new Error("since must be a valid Date");
+		}
+		const sources = normalizeIncidentSources(input.sources);
+		if (sources.length === 0) return 0;
+		const since = input.since.getTime();
+		const seen = new Set<TaskId>();
+		let count = 0;
+		for (const status of TASK_STATUSES) {
+			for (const task of await this.tasks.listByStatus(status, 500)) {
+				if (seen.has(task.id)) continue;
+				seen.add(task.id);
+				if (task.organization_id !== input.organizationId) continue;
+				if (task.incident_fingerprint === null) continue;
+				if (sources.includes(task.incident_source ?? "")) {
+					if (task.created_at.getTime() >= since) count += 1;
+				}
+			}
+		}
+		return count;
+	}
+
+	/** Test introspection only; never part of the IncidentRepository contract. */
+	get signalCount(): number {
+		return this.signals.length;
+	}
+}
+
+type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
 /**
  * In-memory row-lease lock, mirroring the Postgres `branch_locks` table.
  *

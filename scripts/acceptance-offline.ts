@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import type { JobRow, QueueRepository } from "../packages/db/src/index";
 import {
+	InMemoryApprovalRepository,
 	InMemoryQueueRepository,
 	InMemoryTaskRepository,
 } from "../packages/db/src/testing/fakes";
@@ -16,11 +17,25 @@ import type {
 } from "../packages/sandbox/src/providers/types";
 import {
 	asTaskId,
+	type ExecutionLifecycle,
+	type LifecycleArtifactInput,
 	type Logger,
 	PlatformError,
+	type RunEventType,
+	type TaskStatus,
 	type UsageRecordInput,
 	type UsageSink,
 } from "../packages/shared/src/index";
+import type {
+	AuthorizedCommand,
+	CommandResult,
+	CreateTaskWorkspaceGit,
+} from "../packages/sandbox/src/index";
+import {
+	pullRequestApprovalPayloadSha256,
+	type PullRequestRecord,
+} from "../packages/integrations/src/index";
+import { createPullRequestHandler } from "../apps/worker/src/create-pull-request-handler";
 import { loadWorkerConfig } from "../apps/worker/src/config";
 import {
 	createTaskExecutionHandler,
@@ -153,6 +168,8 @@ async function buildControlPlane() {
 	const store = createRepositoryStore({
 		tasks,
 		queue,
+		approvals: new InMemoryApprovalRepository(),
+		lifecycle: recordingLifecycle().lifecycle,
 		repositoryBelongsToOrganization: async (organizationId, repositoryId) =>
 			organizationId === scope.organizationId &&
 			repositoryId === localDemo.repositoryId,
@@ -520,10 +537,299 @@ async function abortScenario() {
 	console.log("PASS abort: lease lost → destroy once → retry/requeue ack");
 }
 
+/* ------------------------------ wave 8 scenarios ---------------------------- */
+
+type LifecycleCall =
+	| { readonly kind: "transition"; readonly from: TaskStatus; readonly to: TaskStatus }
+	| {
+			readonly kind: "event";
+			readonly type: RunEventType;
+			readonly data: Readonly<Record<string, unknown>> | undefined;
+	  }
+	| { readonly kind: "artifact"; readonly artifact: LifecycleArtifactInput };
+
+function recordingLifecycle(options: { approvalSha?: string } = {}) {
+	const calls: LifecycleCall[] = [];
+	const lifecycle: ExecutionLifecycle = {
+		async transition(input) {
+			calls.push({ kind: "transition", from: input.from, to: input.to });
+		},
+		async event(input) {
+			calls.push({ kind: "event", type: input.type, data: input.data });
+		},
+		async artifact(input) {
+			calls.push({ kind: "artifact", artifact: input });
+			return { artifactId: `artifact-${calls.length}` };
+		},
+		async attemptStarted() {
+			return { attemptId: "attempt-1", attemptIndex: 1 };
+		},
+		async attemptFinished() {},
+		async approvalRequested() {
+			return { approvalId: "approval-1" };
+		},
+		async approvalStatus() {
+			return options.approvalSha === undefined
+				? null
+				: { status: "approved", payloadSha256: options.approvalSha };
+		},
+		async isCancelled() {
+			return false;
+		},
+	};
+	return { lifecycle, calls };
+}
+
+function fakeWorkspaceGit(pushes: string[]): CreateTaskWorkspaceGit {
+	return () => ({
+		async assertToolchain() {},
+		async cloneAndCheckout(input) {
+			return { path: input.targetPath, baseBranch: input.baseBranch };
+		},
+		async createBranch() {},
+		async commitAll() {
+			return { commitSha: "b".repeat(40) };
+		},
+		async diffStat() {
+			return {
+				filesChanged: 1,
+				insertions: 3,
+				deletions: 0,
+				files: ["src/app.ts"],
+			};
+		},
+		async diffPatch() {
+			return { patch: "diff --git a/src/app.ts b/src/app.ts", truncated: false };
+		},
+		async pushBranch(_workspace, branch) {
+			pushes.push(branch);
+		},
+	});
+}
+
+async function validationScenario(status: "passed" | "failed") {
+	const queue = new RecordingQueue();
+	const state = emptyState();
+	const base = createDeps("success", state);
+	const commands: AuthorizedCommand[] = [];
+	const pushes: string[] = [];
+	const { lifecycle, calls } = recordingLifecycle();
+	const deps: TaskExecutionDeps = {
+		...base,
+		lifecycle,
+		createWorkspaceGit: fakeWorkspaceGit(pushes),
+		loadValidationPolicy: async () => ({
+			command: "bun test",
+			timeoutMs: 5_000,
+		}),
+		provider: {
+			...base.provider,
+			async execute(_handle, command): Promise<CommandResult> {
+				commands.push(command);
+				return {
+					exitCode: status === "passed" ? 0 : 1,
+					stdout: "suite output",
+					stderr: "",
+					durationMs: 7,
+					timedOut: false,
+					outputLimitExceeded: false,
+				};
+			},
+		},
+	};
+	const handler = createTaskExecutionHandler(deps);
+	const taskId = asTaskId(crypto.randomUUID());
+	await queue.enqueue({
+		organizationId: scope.organizationId,
+		taskId,
+		type: "run_task",
+		payload: { taskId },
+		idempotencyKey: crypto.randomUUID(),
+		maxAttempts: 1,
+	});
+	const claimed = await queue.claimNext({
+		ownerId: "acceptance",
+		leaseSeconds: 30,
+	});
+	assert.ok(claimed, "validation job claimed");
+	const verdict = await handler.handle(claimed, {
+		logger: silentLogger(),
+		signal: new AbortController().signal,
+		heartbeat: async () => true,
+	});
+
+	const transitions = calls
+		.filter((call) => call.kind === "transition")
+		.map((call) => `${call.from}->${call.to}`);
+	const finished = calls
+		.filter(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		)
+		.map((call) => call.data);
+	const artifacts = calls
+		.filter((call) => call.kind === "artifact")
+		.map((call) => call.artifact);
+
+	assert.equal(commands.length, 1, "validation command runs exactly once");
+	assert.deepEqual(
+		[commands[0].executable, ...commands[0].args],
+		["bun", "test"],
+		"argv-only validation command",
+	);
+	assert.equal(pushes.length, 0, "no push in the validation scenario");
+	assert.equal(state.destroyed, 1, "destroy called exactly once");
+
+	if (status === "passed") {
+		assert.equal(verdict.outcome, "complete");
+		assert.ok(
+			transitions.includes("validating->review_ready"),
+			transitions.join(","),
+		);
+		assert.equal(finished.at(-1)?.status, "passed");
+		console.log("PASS validation-passed: command 0 → review_ready → destroy once");
+	} else {
+		assert.equal(verdict.outcome, "dead_letter");
+		assert.equal(verdict.code, "VALIDATION_FAILED");
+		assert.ok(
+			transitions.includes("validating->failed"),
+			transitions.join(","),
+		);
+		assert.equal(finished.at(-1)?.status, "failed");
+		assert.ok(
+			artifacts.some((artifact) => artifact.kind === "log_bundle"),
+			"bounded log artifact stored",
+		);
+		console.log("PASS validation-failed: command 1 → failed → no push → destroy once");
+	}
+}
+
+async function pullRequestScenario() {
+	const target = {
+		repositoryFullName: "ivory-26/agent-bank",
+		headBranch: "task/w8-acceptance",
+		baseBranch: "main",
+		headSha: "a".repeat(40),
+	};
+	const approvalSha = await pullRequestApprovalPayloadSha256(target);
+	const { lifecycle, calls } = recordingLifecycle({ approvalSha });
+	let recorded: { number: number; url: string } | null = null;
+	const handler = createPullRequestHandler({
+		lifecycle,
+		loadTaskState: async () => ({
+			status: "awaiting_approval",
+			pullRequestNumber: null,
+			pullRequestUrl: null,
+		}),
+		loadPullRequestTarget: async () => target,
+		recordPullRequest: async (input) => {
+			recorded = {
+				number: input.pullRequestNumber,
+				url: input.pullRequestUrl,
+			};
+			return { ok: true };
+		},
+		createPullRequest: async () => ({
+			ok: true,
+			pullRequest: {
+				number: 7,
+				url: "https://github.com/ivory-26/agent-bank/pull/7",
+				headBranch: target.headBranch,
+				baseBranch: target.baseBranch,
+				headSha: target.headSha,
+			} satisfies PullRequestRecord,
+			created: true,
+		}),
+	});
+	const queue = new RecordingQueue();
+	const taskId = asTaskId(crypto.randomUUID());
+	await queue.enqueue({
+		organizationId: scope.organizationId,
+		taskId,
+		type: "create_pull_request",
+		payload: { taskId, approvalId: "approval-1" },
+		idempotencyKey: crypto.randomUUID(),
+		maxAttempts: 1,
+	});
+	const claimed = await queue.claimNext({
+		ownerId: "acceptance",
+		leaseSeconds: 30,
+	});
+	assert.ok(claimed, "pull request job claimed");
+	const verdict = await handler.handle(claimed, {
+		logger: silentLogger(),
+		signal: new AbortController().signal,
+		heartbeat: async () => true,
+	});
+
+	const transitions = calls
+		.filter((call) => call.kind === "transition")
+		.map((call) => `${call.from}->${call.to}`);
+	const eventTypes = calls
+		.filter((call) => call.kind === "event")
+		.map((call) => call.type);
+	assert.equal(verdict.outcome, "complete");
+	assert.deepEqual(recorded, {
+		number: 7,
+		url: "https://github.com/ivory-26/agent-bank/pull/7",
+	});
+	assert.ok(
+		transitions.includes("awaiting_approval->pull_request_created"),
+		transitions.join(","),
+	);
+	assert.ok(eventTypes.includes("pr.created"), "pr.created emitted");
+	console.log("PASS pull-request: approved + sha match → PR recorded → pull_request_created");
+}
+
+async function retryScenario() {
+	const { service, queue, tasks } = await buildControlPlane();
+	const first = await service.submit(submission());
+	assert.ok(first.ok, "submission for the retry scenario succeeds");
+	const source = asTaskId(first.value.task.id);
+	const failed = await tasks.transition({
+		taskId: source,
+		to: "failed",
+		expectedStatus: "queued",
+	});
+	assert.ok(failed.ok, "source task moved to failed");
+
+	const retried = await service.retry({
+		failedTaskId: source,
+		idempotencyKey: "acceptance-retry-1",
+	});
+	assert.ok(retried.ok, "retry accepted");
+	assert.notEqual(retried.value.taskId, source, "rerun is a new task");
+	assert.equal(retried.value.created, true);
+
+	const replay = await service.retry({
+		failedTaskId: source,
+		idempotencyKey: "acceptance-retry-1",
+	});
+	assert.ok(replay.ok, "retry replay accepted");
+	assert.equal(replay.value.taskId, retried.value.taskId, "replay is stable");
+	assert.equal(
+		queue.enqueuedIds.size,
+		2,
+		"submit + exactly one retry job; replay enqueues nothing",
+	);
+
+	const row = await tasks.get(asTaskId(retried.value.taskId));
+	assert.equal(row?.retry_of, source, "rerun links back to the failed task");
+	assert.equal(row?.retry_depth, 1);
+	assert.equal(row?.status, "queued");
+	console.log("PASS retry: failed → same-boundary rerun → one job → replay stable");
+}
+
 try {
 	await successScenario();
 	await throwScenario();
 	await abortScenario();
+	await validationScenario("passed");
+	await validationScenario("failed");
+	await pullRequestScenario();
+	await retryScenario();
 	console.log("ACCEPTANCE PASSED (offline, zero provider credentials)");
 	process.exit(0);
 } catch (error) {

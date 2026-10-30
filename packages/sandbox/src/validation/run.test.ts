@@ -1,8 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import {
-	type ValidationReport,
-	validationReportSchema,
-} from "@isolate/shared";
+import { type ValidationReport, validationReportSchema } from "@isolate/shared";
 import { SandboxError } from "../errors";
 import type { AuthorizedCommand } from "../policy/command-policy";
 import type {

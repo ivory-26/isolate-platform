@@ -142,6 +142,14 @@ export function createOfflineWorkerDeps(
 		lifecycle: overrides.lifecycle,
 		createWorkspaceGit: overrides.createWorkspaceGit,
 		pushEnabled: overrides.pushEnabled ?? false,
+		// Bound by the real composition only; without these a job would clone
+		// without a credential and run the agent tool-less.
+		...(overrides.createSandboxBackend === undefined
+			? {}
+			: { createSandboxBackend: overrides.createSandboxBackend }),
+		...(overrides.resolveSandboxEnv === undefined
+			? {}
+			: { resolveSandboxEnv: overrides.resolveSandboxEnv }),
 		...(overrides.loadValidationPolicy === undefined
 			? {}
 			: { loadValidationPolicy: overrides.loadValidationPolicy }),

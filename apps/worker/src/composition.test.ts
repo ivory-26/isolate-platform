@@ -30,6 +30,7 @@ import {
 } from "./composition";
 import { workerConfigSchema } from "./config";
 import type { HandlerContext } from "./contracts";
+import type { TaskExecutionDeps } from "./task-execution-handler";
 
 type LogRecord = { severity: string; message: string; fields: LogFields };
 
@@ -92,6 +93,41 @@ describe("worker composition — offline defaults", () => {
 				taskId: "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f",
 			}),
 		).toBe(true);
+	});
+
+	test("forwards the sandbox backend and credential resolver from the real composition", () => {
+		const createSandboxBackend = (() => ({
+			readFile: async () => ({ content: "", truncated: false }),
+			listFiles: async () => [],
+			search: async () => [],
+			exec: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			}),
+			git: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			}),
+		})) as NonNullable<TaskExecutionDeps["createSandboxBackend"]>;
+		const resolveSandboxEnv = async () => ({
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: "Authorization: Basic fixture",
+		});
+		const { taskExecution } = createOfflineWorkerDeps(
+			CONFIG,
+			makeFakeLogger([]),
+			{ createSandboxBackend, resolveSandboxEnv },
+		);
+		// A dropped seam here clones without a credential and runs tool-less.
+		expect(taskExecution.createSandboxBackend).toBe(createSandboxBackend);
+		expect(taskExecution.resolveSandboxEnv).toBe(resolveSandboxEnv);
 	});
 
 	test("unconfigured runtime factory fails closed with MISSING_CONFIG", () => {

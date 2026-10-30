@@ -334,3 +334,10 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: the provider contract has no streaming stdin; adding one safely means concurrent read/write.
 - Correction: `stdinText` is limited to the trusted file-write path, whose consumer reads stdin to EOF first. Documented here and in the provider contract.
 - Prevention: do not use `stdinText` for arbitrary commands. If a future tool needs concurrent stdin/stdout, extend the adapter with a streaming contract and a bounded writer.
+
+## 2026-10-30 — W7: an unquoted multiline PEM in `.env` is silently truncated
+
+- Symptom: `GITHUB_APP_PRIVATE_KEY` was pasted across multiple lines; the worker saw a one-line value containing only `-----BEGIN PRIVATE KEY-----`, with no `END` marker and no escaped newlines.
+- Root cause: Bun's dotenv parser (like most dotenv parsers) treats an unquoted value as ending at the first newline. Quoted multiline values are preserved; unquoted ones are not. The missing tail is unrecoverable from the environment.
+- Correction: the provider now normalizes quoted multiline, literal `\n`, CRLF, single-line and quote-wrapped PEMs, and the worker accepts `GITHUB_APP_PRIVATE_KEY_PATH` for a server-side file read. A truncated inline value with no path fails closed with an explicit message.
+- Prevention: for long secrets, prefer a file path over a pasted multiline value, or quote the value in `.env`. Verify completeness by checking for the `END` marker at boot, never by printing the key.

@@ -291,6 +291,8 @@ Coordinator integration added after the merges: `resume_task` in `JobType` + `jo
 
 **Live acceptance (2026-10-30, one bounded sequential pass)**: Meta plan turn 6.1 s / 103 prompt + 429 completion tokens; one Modal sandbox 0.125 CPU / 512 MiB / 60 s, `echo isolate-ok` exit 0, destroyed; zero running sandboxes verified; temporary usage org/rows cleaned; `cost_usd` null (no price table). No Baseten call and no GitHub call were made. After migration, the full suite with live Neon passed **1208/1208** (includes the new `0005` lifecycle roundtrip).
 
+**Seed + GitHub read validation (2026-10-30)**: seeded `ivory-26/agent-bank` (main) under org `15fc5715-…` / user `278560b6-…` → repository `4cc5b972-…`, workflow definition `114c905e-…` version 1. GitHub App JWT → installation token succeeded; repo metadata 200 (`private`, `main`), contents 200, installation scope exactly 1 repository; App reports `push: false` (read-only). No push/PR attempted. Key parsing now accepts multiline/escaped/CRLF/single-line PEMs and `GITHUB_APP_PRIVATE_KEY_PATH`; `*.pem` is gitignored.
+
 Not done: no live GitHub App token has been minted (credentials pending); the acceptance script still exercises the wave-6 lifecycle path (the wave-7 path is covered by 152 worker tests); PR creation and all UI remain wave 8.
 
 ### Wave 7 risks

@@ -1,8 +1,19 @@
 # Status
 
-Last updated: 2026-10-30 (wave 6 on `main`; Meta contributor inference validated for dev/pre-production; Google auth working locally)
+Last updated: 2026-10-30 (wave 7 planned; cross-package execution contracts committed on `main`; wave 6 shipped)
 
-## Current: wave 6 — Google sign-in, task intent persisted, real adapters bound
+## Current: wave 7 — Execution truth (planned, contracts committed)
+
+Wave 7 closes the five gaps that still stop an agent from completing a coded change: seed data, repository clone, write tools, task-lifecycle writes, and a git+bun sandbox image. The outcome is a task that can be claimed, provisioned, cloned, edited, committed, recorded and stopped at a human approval gate before push/PR — **proven offline with fakes**, with no Baseten/Modal/GitHub credential in use.
+
+- **Contracts first** (`main` `7392fb9`): `SandboxSpec.env` (create-time, never model-visible), `TaskWorkspaceGit`, `ExecutionLifecycle`, `workspace.cloned`/`artifact.created` run events, optional sandbox write-surface methods, and `GitHubTokenProvider` with a fail-closed placeholder. Typecheck 8/8, biome clean, **954 pass / 0 fail / 4 skip** offline.
+- **Lanes** (one worktree + `task/w7-*` branch each): W7-DB (migration `0005`, repositories, lifecycle sink), W7-SBX (clone/commit/diff/push, env credential, egress allowlist, image preflight), W7-TOOLS (write tools, risk table, ownership guard), W7-GH (installation-token broker), W7-WRK (handler v2: lifecycle, clone, approval pause/resume, cancellation). Full specs and DoD: [`TASKS.md`](TASKS.md#wave-7--execution-truth-seed--clone--edit--commit--lifecycle--approval-gate-planned-2026-10-30).
+- **Validation loop**: agent self-gates → coordinator re-runs scoped gates ×2 → red lanes returned with exact output (max 2 iterations) → merge only green → full `bun run validate` + web build/sweep + `acceptance:offline`.
+- **Worktrees**: merged wave-5/6 worktrees were pruned (`task/w5-auth`, `task/w6-finish` deleted after merge verification); wave-7 worktrees are `../worktrees-platform/w7-*`.
+- **Explicitly not in wave 7**: UI redesign, functional run/approval pages, test-execution gates, live GitHub App, deployment origin, object storage. Frontend design starts **after** this wave merges (wave 8), when lifecycle/approval/artifact APIs are stable.
+- **Open before merge**: lane reports + coordinator gates; migration `0005` is written but **not applied** to Neon (needs explicit user approval).
+
+## Previous: wave 6 — Google sign-in, task intent persisted, real adapters bound
 
 - **Google sign-in** is wired end to end through the first-party proxy. The server asks Neon Auth for a provider URL (`disableRedirect: true`) with a same-origin `/auth/callback`; the browser visits Google; Neon returns the session verifier and the challenge cookie; `/auth/callback` runs `processAuthMiddleware`, relays the exchange cookies and redirects. The provider URL is validated as public https, and the callback is built from the request origin, never from client input.
 - **Neon config**: the shared `google` provider is enabled on `br-steep-poetry-ar5iwdkb`; `http://localhost:3000` is now a trusted domain. A production origin and (for production) own Google client credentials remain deployment steps.

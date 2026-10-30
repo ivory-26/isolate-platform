@@ -203,6 +203,80 @@ Started 2026-10-29, based on `task/w5-auth`. Goal: finish the end-to-end auth st
 - Keyed acceptance (one run): models 20 listed / target present → one completion HTTP 200, 148 prompt + 16 completion tokens, no tools → one Modal sandbox 0.125 CPU / 512 MiB / 60 s, `echo` exit 0, terminated → usage rows recorded, printed and cleaned. No trusted price configured, so cost stays null.
 - Status: **done** — live pass complete; branch fast-forwarded into `main` (`8cd5260`). Google consent remains a user browser check.
 
+## Wave 7 — Execution truth: seed → clone → edit → commit → lifecycle → approval gate (planned 2026-10-30)
+
+Goal: close the five execution gaps recorded after wave 6, so a task submitted in Postgres mode can be claimed, provisioned, cloned, edited, committed, recorded and stopped at a human approval gate before push/PR. Everything is proven **offline** against fakes; no Baseten/Modal/GitHub credential is requested and no live call is made. UI redesign, test-execution gates and a live GitHub App are wave 8.
+
+Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w7-*`, one `task/w7-*` branch per lane. Common rules: agents own ONLY the files listed; root files (`package.json`, root `bun.lock`, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package (`bunx biome check <owned>`, `bun scripts/typecheck-all.ts`, `bun test --no-env-file <owned-tests>`); commit on the task branch before reporting; never push; never read/print `.env*`.
+
+**Cross-package contracts are committed first** on `main` (`7392fb9`): `SandboxSpec.env`, `TaskWorkspaceGit`, `ExecutionLifecycle`, `workspace.cloned`/`artifact.created` events, optional sandbox write-surface methods, `GitHubTokenProvider` + fail-closed placeholder. Lanes code against these; nobody redefines them.
+
+### Validation loop (applies to every lane)
+
+1. Agent self-validates and commits; report includes the commit SHA and raw command output.
+2. Coordinator re-runs the scoped gates **twice** from a clean shell in the lane worktree.
+3. Any red gate is returned to the agent with the exact failing output; at most **two** repair iterations.
+4. A lane merges only when both runs are green; a lane that cannot pass is parked with its branch and findings, never merged red.
+5. After merge, the coordinator runs the full `bun run validate` plus web build/client sweep/`acceptance:offline`.
+
+### W7-DB — `packages/db/**` (owner: agent W7-DB, branch `task/w7-db`)
+- Migration `0005_execution_truth.sql` (**idempotent; NOT applied by the lane**): `artifacts.content text` with a 256 KiB byte CHECK; unique `repositories (organization_id, external_full_name)`; unique `task_attempts (task_id, attempt_index)`; partial unique `approvals (task_id, action) WHERE status = 'pending'`; index `tasks (organization_id, created_at DESC)`.
+- New `RepositoryRepository` (create/list/get under one organization; duplicate full name is `CONFLICT`), `ArtifactRepository` (bounded inline insert + listByTask), and `PostgresExecutionLifecycle` implementing `ExecutionLifecycle` over the existing task/run/attempt/approval repositories.
+- In-memory fakes for all three sharing the same decision helpers; live tests skip without `DATABASE_URL`.
+- Acceptance criteria: transitions go through `TASK_STATE_TRANSITIONS`; a stale `from` is `CONFLICT`; events are insert-only; artifact content over the cap is rejected before insert; every read carries `organization_id`; approval payload SHA is stored verbatim.
+- DoD: scoped gates green ×2; migration not applied; commit + report with evidence.
+
+### W7-SBX — `packages/sandbox/**` (owner: agent W7-SBX, branch `task/w7-sbx`)
+- Implement `TaskWorkspaceGit` (`src/git/workspace.ts`) and export `createTaskWorkspaceGit`: toolchain preflight (`git`, `bun`, `grep`), shallow single-branch clone of a clean https URL into an empty workspace, task branch from the base, `commitAll`, bounded `diffStat`/`diffPatch`, `pushBranch`.
+- Credential model: create-time `SandboxSpec.env` only, consumed through `GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0` (extraheader); the URL never contains userinfo and the token never appears in argv, stdout, logs, errors or test fixtures. Validate names/values (≤16 keys, name `^[A-Z][A-Z0-9_]{0,63}$`, value ≤4096, no control characters) and forward them in the Modal create params (verify the installed `modal` d.ts first).
+- Egress: clone/push commands request `github.com` + `codeload.github.com`; every other command remains `deny`. `ModalSandboxProvider` already maps an allowlist to `blockNetwork:false` + `outboundDomainAllowlist` — prove it with the fake client.
+- Image: switch the default to a git+bun image (`oven/bun:1`) and make `assertToolchain` fail closed with `SANDBOX_IMAGE_UNSUPPORTED` when a binary is missing. Record the image fact in DECISIONS if the d.ts/docs disagree.
+- Acceptance criteria: no shell, no host process, argv-only, timeouts/caps on every call, credential redaction tests, clean-URL assertion, push refused when egress is deny.
+- DoD: scoped gates green ×2 offline; zero live calls; commit + report.
+
+### W7-TOOLS — `packages/mastra/**` (owner: agent W7-TOOLS, branch `task/w7-tools`)
+- Replace the read-only-only reference policy with an explicit risk table: `read_only` and `scoped_write` proceed (audited), `sensitive` returns `APPROVAL_REQUIRED`, `destructive` is denied without an approval. Keep the existing contract shape so wave-4/6 callers stay valid.
+- New agent tools: `repo.write_file` (scoped_write), `git.commit_local` (scoped_write), `git.diff_summary` (read_only). `git.push_branch` and `github.create_pull_request` stay sensitive and are executed by the worker only after an approval, not by the model directly.
+- File ownership: a bounded glob matcher (`*`, `**`, `?`, literal paths) over the task's `fileOwnership`; writes outside it and commits touching unowned paths are rejected before the backend runs. Empty ownership list means "no writes".
+- Caps: content ≤256 KiB, commit paths ≤200, message ≤200 chars, ownership list ≤200 patterns; errors never echo content or paths beyond a bounded path.
+- Acceptance criteria: write/commit/diff tests against a fake backend; traversal, unowned path, oversize content, approval-band routing, and audit-decision tests; read-only backend (missing optional methods) refuses write tools.
+- DoD: scoped gates green ×2; commit + report.
+
+### W7-GH — `packages/integrations/**` (owner: agent W7-GH, branch `task/w7-gh`)
+- Implement `createGitHubAppTokenProvider`: RS256 App JWT (WebCrypto, PKCS#8 PEM), `POST /app/installations/{id}/access_tokens` scoped to one repository with `contents`/`pull_requests` only, cache until `expires_at − 300 s`, injectable `fetch`/clock, bounded errors.
+- Bind the token to PR creation: one call gets a repo-scoped token and passes it to the existing approval-bound PR creator; the payload SHA and approval gate are unchanged.
+- Acceptance criteria: generated RSA key + fake fetch tests; no token in errors/logs/URLs; cache hit/expiry tests; 401/403/404/429 mappings; missing config fails closed; no network in tests.
+- DoD: scoped gates green ×2 offline; commit + report.
+
+### W7-WRK — `apps/worker/**` (owner: agent W7-WRK, branch `task/w7-wrk`)
+- Execution handler v2: `planning` → provision → `assertToolchain` → clone → `executing` → bounded agent turns with write tools → `validating` (diff present, ownership honored) → `review_ready`; `failed`/`cancelled` map to bounded verdicts. Record one attempt, run events (`workspace.cloned`, `agent.turn_*`, `validation.*`, `artifact.created`) and a bounded diff artifact.
+- Approval pause: when the agent reaches a sensitive action, persist an approval bound to the exact payload SHA, move the task to `awaiting_approval`, suspend the run and ack the job **without retry**. A `resume_task` job type resumes only after an approved record with the same payload SHA; a rejected/expired approval moves the task to `failed` with evidence.
+- Cancellation: check `isCancelled` before every turn and before push; cancellation still tears down exactly once.
+- Composition: inject `ExecutionLifecycle`, `CreateTaskWorkspaceGit` and `GitHubTokenProvider`; bind the DB lifecycle only when `DATABASE_URL` exists, Modal + clone only when opted in, GitHub only when `GITHUB_APP_*` is present. No provider SDK import, no secret in logs.
+- Acceptance criteria: fakes for provider/workspace/lifecycle/token; exactly-once teardown on success/throw/abort/cancel; event ordering; approval pause/resume/reject; redelivery idempotency; no payload/secret leakage.
+- DoD: scoped gates green ×2 offline; commit + report.
+
+### W7-OPS — Coordinator integration (after all lanes report)
+- Cherry-pick/merge green lanes into `main` with `--no-ff`; verify ownership (`git diff --stat main...<branch> -- packages/` empty for non-owner lanes); remove each lane worktree and delete its branch after merge.
+- Add `scripts/seed-workspace.ts` + `bun run seed` (demo organization, repository, workflow definition/version) and extend `scripts/acceptance-offline.ts` with the new path: submit → claim → clone (fake) → write/commit (fake) → lifecycle rows → diff artifact → approval pause → resume → teardown.
+- Full `bun run validate` ×2, web build + client sweep + smoke, `acceptance:offline`; prepare `0005` for Neon and apply it **only with explicit user approval** (Neon MCP); update STATUS/DECISIONS/CHALLENGES/ARCHITECTURE/SKILL-REGISTRY.
+- Status: planned.
+
+### Dependency graph / parallelism
+`C0 contracts (main 7392fb9) → {W7-DB, W7-SBX, W7-TOOLS, W7-GH in parallel} → W7-WRK (codes to contracts + fakes; composition wired by W7-OPS) → W7-OPS`.
+W7-WRK must NOT import a database class that only exists on another lane: it depends on `ExecutionLifecycle` / `CreateTaskWorkspaceGit` / `GitHubTokenProvider` and receives them as injected dependencies.
+
+### Wave 7 non-goals (explicit)
+- No UI redesign and no new functional pages; approval decisions are exercised through the service/repository layer offline. The product surface and design system are wave 8.
+- No test-execution validation gate (formatter/lint/typecheck/test); the wave-7 validation gate is "non-empty diff + ownership honored". Running repository toolchains as a gate needs a per-repo command contract and is wave 8.
+- No live GitHub App, no deployment origin, no object storage, no workflow editor.
+
+### Wave 7 risks
+- Clone credentials are the highest-risk surface: the lane must prove the token is absent from argv, URLs, output, logs and fixtures.
+- `oven/bun:1` git availability is asserted by the preflight, not assumed; a missing binary fails closed at runtime.
+- Approval pause/resume touches queue semantics; the job must not be retried into a second sandbox while paused.
+- The migration adds a partial unique approval index; duplicate pending approvals become a constraint violation, so the worker must treat an existing pending approval as idempotent success.
+
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.
 

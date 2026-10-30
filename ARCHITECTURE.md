@@ -81,6 +81,8 @@ Run a separate TypeScript process. It claims jobs, applies idempotency, starts a
 
 Composition (wave 6): `apps/worker/src/runtime-composition.ts` binds the Postgres queue (`PostgresQueueRepository`), the `UsageSink` over `usage_records`, and the DB-backed `loadTaskContext`. Provider selection is explicit and fail-closed: `SANDBOX_PROVIDER=modal` requires both Modal tokens and builds the lazy Modal client; `INFERENCE_PROVIDER=baseten` requires the Baseten key and builds the Mastra runtime factory. With no database the loop stays on the unavailable queue; with no provider flags the offline `NullProvider`/unconfigured runtime remain the defaults.
 
+Execution lifecycle (wave 7): the handler writes durable state through an injected `ExecutionLifecycle` (`@isolate/shared`). One job records one `task_attempts` row, transitions `queued → planning → executing → validating → review_ready` (or `awaiting_approval`), and appends `run_events` for clone, agent turns, validation and artifact creation. The lifecycle implementation in `@isolate/db` keeps every read/write tenant-scoped and reuses the task state machine; the worker never issues raw SQL. A sensitive action persists an approval bound to the payload SHA, moves the task to `awaiting_approval`, suspends the run and acks the job; a separate `resume_task` job continues only for an approved record with the same SHA. `isCancelled` is checked before every turn and before push, and teardown remains exactly-once.
+
 ### Mastra agents and workflows
 - **Agents** reason within a defined role and receive only the tools they need.
 - **Workflows** define the SDLC state machine, branching, retries, persisted state, and approval boundaries.
@@ -106,6 +108,8 @@ A Git worktree is a workspace convenience, not a security boundary. For independ
 Execution provider (wave 4): `packages/sandbox` defines a deny-by-default `SandboxProvider` (`create/execute/destroy`) with `NullProvider` as the default. `ModalSandboxProvider` (`modal@0.11.x`) provisions one disposable Modal sandbox per task with explicit CPU/memory/lifetime/idle limits, network denied unless an allowlist is required, argv-only execution, bounded output, and idempotent teardown in every exit path. Command policy (timeout, arg shape, output cap, egress intent) stays in trusted platform code and is applied before the provider is called; the provider never falls back to a local process. Live Modal tests are opt-in and intentionally tiny.
 
 Boot safety (wave 6): `createModalSandboxClient` resolves the Modal app lazily on the first `create` (memoized), so constructing the provider at worker boot performs no network I/O. The worker's default workspace policy allows `cat`, `ls`, `grep`, a small set of read-only `git` shapes and `bun test`/`bun run test|typecheck|lint`; any other argv is `POLICY_DENIED` before the provider runs.
+
+Task workspace (wave 7): `TaskWorkspaceGit` (`packages/sandbox/src/git/workspace.ts`) is the only path from a sandbox to repository content. It preflights the image (`git`, `bun`, `grep`), shallow-clones one branch of a credential-free https URL into an empty workspace, creates the task branch from the base, commits, and produces a bounded `--stat`/patch. The Git credential is create-time `SandboxSpec.env` consumed through `GIT_CONFIG_*` `http.extraheader`; it never appears in argv, URLs, `git remote -v`, logs, errors or fixtures. Clone and push command shapes request an egress allowlist of `github.com` + `codeload.github.com`; every other command stays `deny`. A missing toolchain binary fails closed as `SANDBOX_IMAGE_UNSUPPORTED` before any network use. The default Modal image is `oven/bun:1` (git + Bun); the preflight, not the image name, is the guarantee.
 
 ## 4. Suggested folder conventions
 
@@ -186,6 +190,10 @@ Task execution context (wave 6, `0004_task_context.sql`):
 - `tasks.goal` (text), `tasks.acceptance_criteria` (jsonb array) and `tasks.file_ownership` (jsonb array) are the authored "what to do / what done means / what may change" inputs. Existing rows default to `''`/`[]`.
 - `PostgresTaskContextRepository` joins `tasks` to `repositories` under one `organization_id` and returns a neutral row; the worker maps it to `TaskContext` and fails closed on missing, terminal or foreign tasks. The compiled plan remains the immutable "how", not the task intent.
 
+Execution artifacts (wave 7, `0005_execution_truth.sql`):
+- `artifacts.content` (nullable text, ≤256 KiB byte CHECK) stores a bounded inline diff for review; `storage_ref` is `inline:<sha256>` until object storage exists. Oversized patches are truncated with an explicit flag, and the sha covers the stored bytes.
+- `0005` also adds `repositories (organization_id, external_full_name)` uniqueness, `task_attempts (task_id, attempt_index)` uniqueness, a partial unique index on pending `approvals (task_id, action)`, and an organization-scoped task list index. All are additive and idempotent.
+
 ## 6. Workflow definition and compilation
 
 The visual editor stores a versioned JSON graph:
@@ -219,6 +227,8 @@ A skill is reusable instruction/procedure content; it is not itself a security b
 5. An authorized user approves or rejects through a server handler.
 6. The worker resumes from durable state and revalidates the action before execution.
 
+Wave 7 queue mechanics: the pausing job is acked as complete, the task sits in `awaiting_approval` with no lease and no sandbox, and the approval decision enqueues a `resume_task` job. Resume is admitted only when the approval is `approved`, unexpired, and its stored `payload_sha256` equals the SHA of the action the worker is about to take; a mismatch is `CONFLICT`, a rejection/expiry moves the task to `failed`. The UI that records a decision is wave 8; the service and repository path is wave 7.
+
 Require explicit approval for merges, production deploys, destructive operations, secret changes, database migrations, and permission escalation. An approval must be bound to the exact action payload and expire or become invalid if that payload changes.
 
 ## 9. Reliability and bounded validation loop
@@ -235,6 +245,8 @@ The validation loop:
 6. Require a human decision when the agent cannot safely proceed.
 
 Never define “complete the goal definitely” as an infinite loop. Completion means all required gates pass, an authorized human approves privileged actions, or the system explicitly stops with a documented blocker.
+
+Wave 7 gate boundary: the worker transitions `executing → validating → review_ready` when the diff is non-empty and every changed path is inside `file_ownership`. Running formatter/lint/typecheck/tests as a gate needs a per-repository command contract (commands, cwd, timeouts, repairable failures) and is wave 8. `review_ready` therefore means "an in-bounds change exists", not "CI would pass"; merge/push stays approval-gated.
 
 Offline acceptance (`bun run acceptance:offline`, source `scripts/acceptance-offline.ts`) runs the lifecycle — submit → idempotent replay → claim → policy-gated tools → usage rows → sandbox destroy on success/throw/abort → ack — against package fakes with zero provider credentials. It refuses to start if any `BASETEN_*`/`MODAL_*` variable is present. Live provider calls are a separate, explicitly authorized, single-run phase; CI never receives keys.
 
@@ -253,6 +265,8 @@ For every task:
 - resolve conflicting migrations, shared types, package scripts, and lockfile changes centrally.
 
 Use `project/TASKS.md`, `project/STATUS.md`, `project/DECISIONS.md`, and `project/CHALLENGES.md` as the coordination source of truth.
+
+Wave 7 lane discipline: five worktrees (`../worktrees-platform/w7-*`), one `task/w7-*` branch each, contracts committed on `main` first. Every lane is validated by the coordinator twice before merge; a red lane gets at most two repair iterations and is parked rather than merged. After merge, the coordinator removes the worktree and deletes the branch. `git worktree remove` is forced only when `git diff --ignore-space-at-eol` proves the dirty copy is CRLF-only; otherwise the tree is investigated. Merged wave-5/6 trees were pruned on 2026-10-30.
 
 ## 11. Security and observability boundaries
 

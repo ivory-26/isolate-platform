@@ -195,3 +195,52 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Consequences: the invariant is enforced by `toIdentity` (UUID parse) and `users.email UNIQUE`. `memberships.user_id`, `tasks.created_by` and `workflow_versions.created_by` keep real FKs to `public.users`.
 - Alternatives rejected: mirroring auth tables into `public` (two identity stores); writing to `neon_auth` (forbidden); a mapping table (the id is already the same value).
 
+
+## 2026-10-30 — W7: wave 7 is execution truth, not a UI wave
+
+- Decision: wave 7 closes the execution path (seed → clone → edit → commit → lifecycle → approval gate) and deliberately excludes UI redesign, functional run/approval pages, and test-execution gates. Those are wave 8.
+- Rationale: the platform can route, authorize and bill a task but cannot yet produce a coded change. Building a product surface before the lifecycle/approval/artifact contracts settle would force a rewrite of every page when those contracts change.
+- Consequences: approval decisions are exercised offline through the service/repository layer; a human cannot click "approve" until wave 8. The worker still persists the approval and pauses correctly, so wave 8 is surface work, not a new backend.
+- Alternatives rejected: doing design and execution in one wave (two moving contract surfaces, neither stable); skipping lifecycle and going straight to UI (a dashboard over a task that never leaves `queued`).
+
+## 2026-10-30 — W7: the Git credential travels as create-time sandbox env, never argv or URL
+
+- Decision: the clone credential is passed in `SandboxSpec.env` and consumed by Git through `GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0` (`http.extraheader`). The repository URL stays credential-free. `TaskWorkspaceGit` never accepts a token parameter.
+- Rationale: argv, process listings, `git remote -v`, error text and event payloads are all observable surfaces. A token in a clone URL leaks into `.git/config` and logs; a token in argv leaks into process metadata. Create-time env is the smallest surface that still works with the Modal adapter (it already forwards `env` at sandbox creation).
+- Consequences: the token is present for the sandbox lifetime, so it must be short-lived (installation token, ≤60 min), repo-scoped and least-privilege. `assertToolchain` runs before clone so an unsupported image fails before any network use.
+- Alternatives rejected: token-in-URL (persists in `.git/config`); `-c http.extraHeader=...` in argv (process metadata); a host-side clone copied into the sandbox (breaks the execution-plane boundary).
+
+## 2026-10-30 — W7: approval pause uses `awaiting_approval` + a `resume_task` job
+
+- Decision: a sensitive action persists an approval bound to the exact payload SHA, moves the task to `awaiting_approval`, suspends the workflow run, and acks the current job as complete (not retry). A `resume_task` job re-enters the handler only for an approved record with the same SHA; rejection/expiry moves the task to `failed`.
+- Rationale: retrying the job would provision a second sandbox and spend credits while a human thinks. Acking is the only queue state that stops redelivery. Re-checking the SHA on resume preserves the "approval is bound to the exact action" invariant.
+- Consequences: a paused task holds no lease and no sandbox; the resume job is a separate, auditable execution. A duplicate pending approval is treated as idempotent success (partial unique index).
+- Alternatives rejected: keeping the job in-flight (lease expiry loops + duplicate spend); approving by mutating the task row without a resume job (the worker never wakes).
+
+## 2026-10-30 — W7: diffs are bounded inline artifacts, not object storage
+
+- Decision: `artifacts` gains a nullable `content text` column with a 256 KiB byte CHECK. Wave 7 stores the bounded patch inline with `storage_ref = inline:<sha256>`; object storage stays out of scope.
+- Rationale: the platform needs a reviewable diff artifact now; introducing object storage would add credentials, lifecycle policy and a second failure mode before there is a UI that reads it. A 256 KiB bound is enough for review metadata and keeps Neon rows small.
+- Consequences: oversized diffs are truncated with an explicit `truncated` flag and the artifact sha covers the stored bytes. Wave 8 must add object storage if full patches are required.
+- Alternatives rejected: storing diffs only in `run_events` (unbounded JSON, no artifact lifecycle); adding S3/R2 now (extra credentials and deployment work).
+
+## 2026-10-30 — W7: the validation gate is "diff present + ownership honored"
+
+- Decision: wave 7 transitions `executing → validating → review_ready` on a non-empty diff whose paths stay inside `fileOwnership`. Running the repository's formatter/lint/typecheck/tests as a gate is wave 8.
+- Rationale: a per-repository command contract (which commands, which working directory, which timeouts, which failures are repairable) is its own design surface. Pretending `bun test` is universal would produce false gates on non-Bun repositories. The lifecycle and event vocabulary already support the full gate, so wave 8 adds semantics, not plumbing.
+- Consequences: `review_ready` means "the agent produced an in-bounds change", not "the change passes CI". The PR remains approval-gated.
+- Alternatives rejected: hard-coding `bun test` (wrong for most repositories); blocking wave 7 on a command-contract design (delays the execution path).
+
+## 2026-10-30 — W7: frontend design starts after wave 7 merges, as wave 8
+
+- Decision: begin the visual/product design work when the wave-7 backend contracts are on `main` — specifically once task lifecycle transitions, run events, attempts, bounded diff artifacts, approvals and repository onboarding reads exist as stable server contracts. That is wave 8, performed in parallel with live GitHub/deployment wiring.
+- Rationale: design needs real states (queued → planning → executing → validating → awaiting_approval → review_ready → failed/cancelled), real event payloads and a real approval object. Designing before these exist produces mock states that do not survive contact with the backend.
+- Consequences: wave 8 starts with a token/design-system pass and a run-detail page, not a greenfield app. The current UI is a functional control surface and should not be polished incrementally before the data model is visible.
+- Alternatives rejected: designing now against placeholder data (rework); a full redesign before wave 7 (freezes the contract work behind visual decisions).
+
+## 2026-10-30 — Worktree pruning policy
+
+- Decision: after a lane merges, remove its worktree and delete its branch. `git worktree remove` is forced only when `git diff --ignore-space-at-eol` proves the working copy differs solely by CRLF noise; otherwise the worktree is left in place and investigated.
+- Rationale: merged worktrees accumulate `node_modules`, stale `.env` files and EOL noise; leaving them invites edits against a dead branch. The EOL guard prevents force-removal from hiding real uncommitted work.
+- Consequences: `git worktree list` shows only active lanes plus `main`; wave-5/6 trees were pruned on 2026-10-30 after both branches were confirmed merged.
+- Alternatives rejected: keeping every worktree forever (disk and confusion); deleting on merge without the EOL check (could discard real work).

@@ -24,6 +24,8 @@ export const RUN_EVENT_TYPES = [
 	"workflow.step_finished",
 	"workflow.step_failed",
 	"validation.started",
+	"acceptance.started",
+	"acceptance.finished",
 	"validation.finished",
 	"repair.started",
 	"repair.finished",

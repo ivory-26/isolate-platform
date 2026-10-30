@@ -1,6 +1,7 @@
 export * from "./logging/console-logger";
 export * from "./logging/logger";
 export * from "./logging/redact";
+export * from "./types/acceptance";
 export * from "./types/errors";
 export * from "./types/events";
 export * from "./types/ids";

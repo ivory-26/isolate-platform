@@ -168,7 +168,7 @@ try {
 	const composition = createOfflineWorkerDeps(config, logger, {
 		...composed.overrides,
 		caps: {
-			maxOutputTokensPerTurn: Math.min(config.maxOutputTokensPerTurn, 2048),
+			maxOutputTokensPerTurn: Math.min(config.maxOutputTokensPerTurn, 4096),
 			maxTaskTokens: maxTokensPerTask,
 			maxSteps: Math.min(config.maxAgentSteps, 4),
 		},

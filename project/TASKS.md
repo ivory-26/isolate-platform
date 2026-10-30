@@ -485,10 +485,36 @@ Contracts `20b2a02` (`BlobStore`, `CostPriceTable` + exact cost helpers, `RunSum
 
 **Notes**: W11-OBS changed two root scripts (`scripts/acceptance-offline.ts`, `scripts/acceptance-github.ts`) by exactly one field rename (`sandboxPriceTable` → `priceTable`) so they still run after the contract change; the coordinator accepted the exception and verified both scripts.
 
-## Wave 12 — Product surface (web UI) and deployment decision (planned; the user has design input)
+## Wave 12 — Hardening + DevSecOps context (planned 2026-10-30; UI deferred by user)
 
-- **Does not start without the user's design direction.** It includes the design-system/token pass, run detail, approvals, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).
-- Entry criteria: waves 9–11 merged and documented; a short design brief from the user; the deployment questions answered (target host, budget, domain, data residency).
+User decision (2026-10-30): finish backend hardening and evaluate the DevSecOps connectors **before** any web UI, and stay local (no hosting yet). This wave therefore hardens the review loop and produces the connector design of record; the product surface moves to wave 13.
+
+### H12-1 — Approval decision recoverability (`apps/web`, owner: agent H12-1, branch `task/h12-approval`)
+- Problem (documented in CHALLENGES): `decideApproval` commits the decision + audit row, then enqueues the follow-up job. A queue failure at that instant leaves an approved task with no job, and replay is `CONFLICT`.
+- Change: enqueue **before** deciding, with a deterministic idempotency key (`approval:<approvalId>`), so a failed decision leaves a pending approval (the user can retry) and a job without an approval is harmless (the push/PR handlers verify approval status + SHA and no-op).
+- Tests: enqueue-before-decide ordering, enqueue failure leaves the approval pending and no audit row, replay enqueues once, a job without an approval is a no-op, rejection still fails the task with no job.
+
+### H12-2 — Lease renewal + literal acceptance matching (`packages/db` + `apps/worker`, owner: agent H12-2, branch `task/h12-lease`)
+- **Lock renewal**: `BranchLockRepository.renew({…, ownerId, ttlMs})`; `BranchLockLease.renew()` in the handler, called on the per-job heartbeat schedule (not per command) so a job longer than the 15-minute lease cannot be taken over. A failed renew aborts the turn with a bounded retry (lease lost), never a second writer. Tests for renew/takeover/lost-lease.
+- **ReDoS removal**: `content_matches` no longer compiles a regex. The check becomes a bounded **literal substring** match over the 64 KiB read (documented in the shared schema and ARCHITECTURE); remove the regex path and update tests. Acceptance checks are authored by operators, but a catastrophic pattern could hang a worker.
+- DoD: gates ×2, no behaviour change for path/command checks.
+
+### H12-3 — DevSecOps connector research (docs, owner: agent H12-3, branch `task/h12-connectors`)
+- Survey and document, with sources and limits: GitHub (Actions runs/logs, check suites, branch protection / rulesets, CODEOWNERS, CONTRIBUTING, PR templates), PagerDuty, Sentry, Datadog, Grafana, Slack (notify-only), and a generic webhook fallback.
+- For each: auth model, minimal scopes, webhook signature verification, rate limits, the exact read endpoints needed for an incident `ContextBundle`, and what must never enter model context (tokens, PII, full logs).
+- Deliverable: `docs/devsecops-connectors.md` with a recommendation matrix and a phased integration order (GitHub context first, then one incident source, then metrics).
+- No code, no credentials, no live API calls.
+
+### H12-4 — Connector foundation (planned, after H12-3 review)
+- `IncidentSignal` + `ContextBundle` contracts in `@isolate/shared`; a signed webhook receiver in `apps/web` (verify → normalize → dedupe by fingerprint → create a task through the normal submission path); a read-only GitHub context reader (Actions/checks/rulesets/conventions) with scoped token use and per-item citation; `integration_permissions` enforced at the connector boundary. Production actions stay behind approval; connector credentials never enter prompts.
+
+### H12-OPS — Coordinator
+- Merge green lanes, gates ×2, full offline suite, web build/sweep; **live retry proof**: take the wave-9 failed task and run `retryTask` end to end (one sandbox, small caps) to prove the rerun path live; update STATUS/CHALLENGES/DECISIONS.
+
+## Wave 13 — Product surface (web UI) and deployment decision (planned; blocked on user input)
+
+- **Does not start without the user's design direction.** Design-system/token pass, run detail, approvals page, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).
+- The user chose to stay local for now (2026-10-30), so deployment remains a written decision to be confirmed at that stage.
 
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.

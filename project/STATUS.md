@@ -1,18 +1,18 @@
 # Status
 
-Last updated: 2026-10-30 (wave 11 merged: workflow retired, cost/metrics/summary, blob store live; large-diff wiring in progress)
+Last updated: 2026-10-30 (wave 11 complete: workflow retired, cost/metrics/summary, blob store live-proven; wave 12 hardening + DevSecOps research starting)
 
-## Current: wave 11 — P1: runtime clarity, observability, blob storage (merged, `0008` applied, wiring in progress)
+## Current: wave 11 — P1: runtime clarity, observability, blob storage (merged, `0008` applied, live-proven)
 
 - **Mastra SDLC workflow retired** (`2101dca`, merge `e9df7e1`): `createSdlcWorkflow`, its test and the unused `defaultSdlcPlan` are deleted; `ARCHITECTURE.md` now names `apps/worker/src/task-execution-handler.ts` as the runtime of record. A Mastra workflow only returns with a plan-execution design.
 - **Observability and cost** (`1299ff7`, merge `4a16950`): `COST_PRICE_TABLE` is parsed once at boot (`pricing.ts`, absent → null, present-invalid → fail closed); model rows use `modelCallCostUsd`, sandbox rows `sandboxCostUsd` from measured seconds; `buildRunSummary` + `summarizeTask` roll up tokens, sandbox seconds, attempts, artifacts, validation and PR; fixed-name metrics (`worker.job.*`, `worker.turn.latency_ms`, `worker.sandbox.seconds`, `worker.validation.outcome`, `worker.pr.outcome`) emit through the logger with a whitelist that drops payloads.
 - **Price decision**: Modal Sandbox rates are the documented non-preemptible tier ($0.00003942/core-s, $0.00000667/GiB-s); Muse Spark Open is $1.25/M input and $4.25/M output. Encoded in `.env.example` only — the **Meta contributor model has no published price**, so its runs keep `cost_usd = null` rather than a guess.
 - **Blob store** (`d919f77`, merge `b4c700e`; migration `0008` applied and verified): `blobs` table (2 MiB cap, `(organization_id, sha256)` dedupe, tenant-scoped reads) + `PostgresBlobStore` + `InMemoryBlobStore`. Live suite passed: round-trip, dedupe, foreign-org null, oversize rejected before write, `octet_length(bytes) = byte_size`.
-- **Large-diff wiring** (`task/w11-store2`, in progress): artifacts can carry a `blob:<sha256>` reference plus a bounded inline preview, so a patch larger than 256 KiB is stored whole and previewed, not silently lost.
+- **Large-diff wiring** (`7b8e905`, merge pending record): artifacts can carry a `blob:<sha256>` reference plus a bounded inline preview. The sandbox patch ceiling was raised to the policy output limit (`61f70a5`), which made the path reachable. **Live proof**: a deterministic run wrote two 200 KB files, produced a **400,306-byte** patch, stored it as `blob:fa7316…` with a 262,144-byte preview, and read the bytes back with a matching sha; task `review_ready`, zero sandboxes left, no push.
 - **Gates on `main`**: biome 0 errors · typecheck 8/8 · **1544 pass / 0 fail** offline · `acceptance:offline` PASS (7 scenarios).
 
 ### Wave 11 open items
-1. Blob wiring lane must merge and be re-gated (done when `task/w11-store2` reports).
+1. ~~Blob wiring~~ done: `7b8e905` merged, cap raised in `61f70a5`, live 400 KB proof passed.
 2. Cost remains null for Meta contributor runs until that price is published; Baseten runs would attribute.
 3. Object storage is DB-bytea for now; an S3/R2 seam is documented but not implemented (deployment decision).
 4. Acceptance PRs `#1`, `#2` and their branches remain as evidence.

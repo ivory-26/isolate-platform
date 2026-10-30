@@ -244,13 +244,13 @@ Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w7-*`, one `task/w7-*` b
 
 ### W7-GH — `packages/integrations/**` (owner: agent W7-GH, branch `task/w7-gh`)
 - Implement `createGitHubAppTokenProvider`: RS256 App JWT (WebCrypto, PKCS#8 PEM), `POST /app/installations/{id}/access_tokens` scoped to one repository with `contents`/`pull_requests` only, cache until `expires_at − 300 s`, injectable `fetch`/clock, bounded errors.
-- Bind the token to PR creation: one call gets a repo-scoped token and passes it to the existing approval-bound PR creator; the payload SHA and approval gate are unchanged.
+- Bind the token broker to the sandbox push path: when push is enabled, the worker gets a repo-scoped token before the clone. Live PR creation stays wave 8; the broker and its fake-fetch tests are the wave-7 deliverable.
 - Acceptance criteria: generated RSA key + fake fetch tests; no token in errors/logs/URLs; cache hit/expiry tests; 401/403/404/429 mappings; missing config fails closed; no network in tests.
 - DoD: scoped gates green ×2 offline; commit + report.
 
 ### W7-WRK — `apps/worker/**` (owner: agent W7-WRK, branch `task/w7-wrk`)
 - Execution handler v2: `planning` → provision → `assertToolchain` → clone → `executing` → bounded agent turns with write tools → `validating` (diff present, ownership honored) → `review_ready`; `failed`/`cancelled` map to bounded verdicts. Record one attempt, run events (`workspace.cloned`, `agent.turn_*`, `validation.*`, `artifact.created`) and a bounded diff artifact.
-- Approval pause: when the agent reaches a sensitive action, persist an approval bound to the exact payload SHA, move the task to `awaiting_approval`, suspend the run and ack the job **without retry**. A `resume_task` job type resumes only after an approved record with the same payload SHA; a rejected/expired approval moves the task to `failed` with evidence.
+- Approval gate: because a sandbox is destroyed at job end, approval is requested **before** execution when push is enabled (planning → `awaiting_approval`), bound to `{repoUrl, branch}`. The job is acked without retry. A `resume_task` job proceeds only when `approvalStatus` is `approved`, unexpired, and the stored SHA equals the SHA of the action; rejection/expiry moves the task to `failed`. After execution and validation the worker pushes the isolated branch (no force) and ends at `review_ready`; PR creation is wave 8.
 - Cancellation: check `isCancelled` before every turn and before push; cancellation still tears down exactly once.
 - Composition: inject `ExecutionLifecycle`, `CreateTaskWorkspaceGit` and `GitHubTokenProvider`; bind the DB lifecycle only when `DATABASE_URL` exists, Modal + clone only when opted in, GitHub only when `GITHUB_APP_*` is present. No provider SDK import, no secret in logs.
 - Acceptance criteria: fakes for provider/workspace/lifecycle/token; exactly-once teardown on success/throw/abort/cancel; event ordering; approval pause/resume/reject; redelivery idempotency; no payload/secret leakage.

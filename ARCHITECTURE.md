@@ -227,7 +227,7 @@ A skill is reusable instruction/procedure content; it is not itself a security b
 5. An authorized user approves or rejects through a server handler.
 6. The worker resumes from durable state and revalidates the action before execution.
 
-Wave 7 queue mechanics: the pausing job is acked as complete, the task sits in `awaiting_approval` with no lease and no sandbox, and the approval decision enqueues a `resume_task` job. Resume is admitted only when the approval is `approved`, unexpired, and its stored `payload_sha256` equals the SHA of the action the worker is about to take; a mismatch is `CONFLICT`, a rejection/expiry moves the task to `failed`. The UI that records a decision is wave 8; the service and repository path is wave 7.
+Wave 7 queue mechanics: when push is enabled the approval is requested during `planning`, before a sandbox exists, and is bound to the exact `{repoUrl, branch}` payload SHA. The pausing job is acked as complete, the task sits in `awaiting_approval` with no lease and no sandbox, and the approval decision enqueues a `resume_task` job. Resume is admitted only when the approval is `approved`, unexpired, and its stored `payload_sha256` equals the SHA of the action the worker is about to take; a mismatch is `CONFLICT`, a rejection/expiry moves the task to `failed`. The worker re-checks that the branch it pushes is the approved branch. The UI that records a decision is wave 8; the service and repository path is wave 7.
 
 Require explicit approval for merges, production deploys, destructive operations, secret changes, database migrations, and permission escalation. An approval must be bound to the exact action payload and expire or become invalid if that payload changes.
 

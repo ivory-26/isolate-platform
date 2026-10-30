@@ -212,10 +212,10 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 
 ## 2026-10-30 — W7: approval pause uses `awaiting_approval` + a `resume_task` job
 
-- Decision: a sensitive action persists an approval bound to the exact payload SHA, moves the task to `awaiting_approval`, suspends the workflow run, and acks the current job as complete (not retry). A `resume_task` job re-enters the handler only for an approved record with the same SHA; rejection/expiry moves the task to `failed`.
-- Rationale: retrying the job would provision a second sandbox and spend credits while a human thinks. Acking is the only queue state that stops redelivery. Re-checking the SHA on resume preserves the "approval is bound to the exact action" invariant.
-- Consequences: a paused task holds no lease and no sandbox; the resume job is a separate, auditable execution. A duplicate pending approval is treated as idempotent success (partial unique index).
-- Alternatives rejected: keeping the job in-flight (lease expiry loops + duplicate spend); approving by mutating the task row without a resume job (the worker never wakes).
+- Decision: when push is enabled, the approval is requested **before** execution during `planning`, bound to the exact `{repoUrl, branch}` payload SHA. A pending approval moves the task to `awaiting_approval` and acks the job as complete (not retry). A `resume_task` job re-enters the handler only for an approved, unexpired record with the same SHA; rejection/expiry moves the task to `failed`.
+- Rationale: sandboxes are destroyed at job end, so a commit made in a paused sandbox would be lost. Retrying the job would provision a second sandbox and spend credits while a human thinks. Acking is the only queue state that stops redelivery. Re-checking the SHA on resume preserves the "approval is bound to the exact action" invariant.
+- Consequences: the approved payload is the repository and branch, not the future commit SHA; the worker re-checks the branch it pushes matches the approved branch. A paused task holds no lease and no sandbox. A duplicate pending approval is treated as idempotent success (partial unique index).
+- Alternatives rejected: pausing after execution and keeping the sandbox alive (hours of idle spend) or bundling the commit into an artifact and restoring it on resume (a second storage/lifecycle surface); approving by mutating the task row without a resume job (the worker never wakes).
 
 ## 2026-10-30 — W7: diffs are bounded inline artifacts, not object storage
 

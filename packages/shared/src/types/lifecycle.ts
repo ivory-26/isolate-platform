@@ -23,6 +23,18 @@ export type LifecycleArtifactKind =
 	| "report"
 	| "screenshot";
 
+export type LifecycleApprovalStatus =
+	| "pending"
+	| "approved"
+	| "rejected"
+	| "expired";
+
+export type LifecycleApprovalState = {
+	readonly status: LifecycleApprovalStatus;
+	/** Stored verbatim; the worker compares it with the action it is about to take. */
+	readonly payloadSha256: string;
+};
+
 export type LifecycleTransitionInput = {
 	readonly organizationId: OrganizationId;
 	readonly taskId: TaskId;
@@ -83,6 +95,12 @@ export interface ExecutionLifecycle {
 	approvalRequested(
 		input: LifecycleApprovalInput,
 	): Promise<{ readonly approvalId: string }>;
+	/** Tenant-scoped read of one approval; `null` means absent or foreign. */
+	approvalStatus(input: {
+		readonly organizationId: OrganizationId;
+		readonly taskId: TaskId;
+		readonly approvalId: string;
+	}): Promise<LifecycleApprovalState | null>;
 	/** True when the task has moved to `cancelled`; the worker must stop before the next turn. */
 	isCancelled(input: {
 		readonly organizationId: OrganizationId;

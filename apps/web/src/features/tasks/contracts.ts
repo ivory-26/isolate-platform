@@ -1,8 +1,19 @@
-import { taskStatusSchema, workerConfigSchema } from "@isolate/shared";
+import {
+	acceptanceCheckSchema,
+	taskStatusSchema,
+	workerConfigSchema,
+} from "@isolate/shared";
 import { z } from "zod";
 
 /** PostgreSQL integer bound used by the compiler/persistence contracts. */
 export const workflowVersionSchema = z.number().int().min(1).max(2147483647);
+/**
+ * Machine-checkable criteria bound. Mirrors `MAX_ACCEPTANCE_CHECKS` in
+ * `@isolate/db` (which also enforces the 0007 jsonb CHECK). The value is
+ * restated here because this module is reachable from the client bundle and
+ * must not import the database package; both sides enforce the same cap.
+ */
+export const MAX_SUBMITTED_ACCEPTANCE_CHECKS = 32;
 export const submitTaskSchema = z.strictObject({
 	repositoryId: z.uuid(),
 	branch: z
@@ -19,6 +30,15 @@ export const submitTaskSchema = z.strictObject({
 	acceptanceCriteria: z
 		.array(z.string().trim().min(1).max(500))
 		.max(20)
+		.default([]),
+	/**
+	 * Machine-checkable completion criteria (wave 9). Each entry is a strict,
+	 * path-confined check validated by the shared schema; the list is bounded
+	 * and never accepted as free-form shell text.
+	 */
+	acceptanceChecks: z
+		.array(acceptanceCheckSchema)
+		.max(MAX_SUBMITTED_ACCEPTANCE_CHECKS)
 		.default([]),
 	/** Paths the agent may modify; everything else stays out of bounds. */
 	fileOwnership: z.array(z.string().trim().min(1).max(300)).max(50).default([]),

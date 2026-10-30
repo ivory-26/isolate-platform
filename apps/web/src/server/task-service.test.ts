@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { asOrganizationId, asWorkflowDefinitionId } from "@isolate/shared";
+import {
+	asOrganizationId,
+	asTaskId,
+	asWorkflowDefinitionId,
+} from "@isolate/shared";
 import { ControlPlaneError, createTaskService } from "./task-service.server";
 import { harness, input, otherScope, scope } from "./test-fixtures";
 
@@ -83,12 +87,30 @@ describe("offline task control plane", () => {
 			{ branch: "task/different" },
 			{ budget: { maxAgentTurns: 13 } },
 			{ repositoryId: crypto.randomUUID() },
+			{ acceptanceChecks: [{ kind: "path_exists", path: "OTHER.md" }] },
 		])
 			expect(await h.service.submit({ ...request, ...patch })).toMatchObject({
 				ok: false,
 				error: { code: "CONFLICT" },
 			});
 		expect(h.queue.calls).toHaveLength(1);
+	});
+	test("machine-checkable acceptance criteria reach the repository and the row", async () => {
+		const h = harness();
+		const acceptanceChecks = [
+			{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
+			{ kind: "content_matches", path: "README.md", pattern: "# Isolate" },
+			{ kind: "command_exit_zero", command: "bun run validate" },
+		] as const;
+		const result = await h.service.submit(
+			input({ acceptanceChecks: [...acceptanceChecks] }),
+		);
+		if (!result.ok) throw new Error("Expected a receipt");
+		expect(h.tasks.calls[0].acceptanceChecks).toEqual([...acceptanceChecks]);
+		const row = await h.tasks.get(asTaskId(result.value.task.id));
+		expect(row?.acceptance_checks).toEqual([...acceptanceChecks]);
+		// The summary contract is unchanged: no checks leak to the client.
+		expect(result.value.task).not.toHaveProperty("acceptanceChecks");
 	});
 	test("ownership checked before persistence", async () => {
 		const h = harness();

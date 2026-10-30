@@ -34,6 +34,7 @@ function sqlFixture(
 	}[] = [];
 	let committed = false;
 	let rolledBack = false;
+	let insertedTask: Record<string, unknown> | null = null;
 	const request = input();
 	const graph = options.malformedGraph
 		? null
@@ -140,7 +141,19 @@ function sqlFixture(
 					created_at: when,
 				},
 			];
-		if (statement.startsWith("INSERT INTO tasks")) return [task];
+		if (statement.startsWith("INSERT INTO tasks")) {
+			// Mirrors ON CONFLICT DO NOTHING: the first insert wins, later calls
+			// return the stored row (so idempotent replay equality is exercised).
+			insertedTask ??= {
+				...task,
+				goal: parameters[5],
+				acceptance_criteria: JSON.parse(String(parameters[6])),
+				acceptance_checks: JSON.parse(String(parameters[7])),
+				file_ownership: JSON.parse(String(parameters[8])),
+				created_by: parameters[9],
+			};
+			return [insertedTask];
+		}
 		if (statement.startsWith("INSERT INTO jobs")) {
 			if (options.queueFailure) throw new Error("private driver failure");
 			return [job];
@@ -224,7 +237,13 @@ describe("offline PostgreSQL adapter", () => {
 		]);
 		expect(h.calls[5].parameters[0]).toBe(scope.organizationId);
 		expect(h.calls[5].parameters[5]).toBe(h.request.goal);
-		expect(h.calls[5].parameters[8]).toBe(scope.userId);
+		// Parameter order mirrors the insert: goal, criteria, checks, ownership,
+		// then the acting user.
+		expect(JSON.parse(String(h.calls[5].parameters[7]))).toEqual([]);
+		expect(JSON.parse(String(h.calls[5].parameters[8]))).toEqual(
+			h.request.fileOwnership,
+		);
+		expect(h.calls[5].parameters[9]).toBe(scope.userId);
 		expect(h.calls[6].parameters.slice(0, 3)).toEqual([
 			scope.organizationId,
 			taskId,
@@ -348,5 +367,46 @@ describe("offline PostgreSQL adapter", () => {
 		});
 		expect(parsed.workflowDefinitionId).toBe(input().workflowDefinitionId);
 		expect(parsed.workflowVersion).toBe(1);
+		expect(parsed.acceptanceChecks).toEqual([]);
+	});
+	test("submission persists machine-checkable acceptance criteria on the task insert", async () => {
+		const h = sqlFixture();
+		const acceptanceChecks = [
+			{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
+			{ kind: "content_matches", path: "README.md", pattern: "# Isolate" },
+			{
+				kind: "command_exit_zero",
+				command: "bun test live_acceptance.test.ts",
+			},
+		] as const;
+		const result = await h.service.submit(
+			input({ acceptanceChecks: [...acceptanceChecks] }),
+		);
+		if (!result.ok) throw new Error("Expected receipt");
+		const insert = h.calls.find((call) =>
+			call.statement.startsWith("INSERT INTO tasks"),
+		);
+		if (insert === undefined) throw new Error("Expected a task insert");
+		// Bound jsonb parameter: acceptance checks come before file ownership.
+		expect(JSON.parse(String(insert.parameters[7]))).toEqual([
+			...acceptanceChecks,
+		]);
+		// The summary stays unchanged and never echoes stored criteria.
+		expect(result.value.task).not.toHaveProperty("acceptanceChecks");
+		expect(JSON.stringify(result)).not.toContain("LIVE_ACCEPTANCE.md");
+	});
+	test("idempotent replay with different acceptance checks conflicts before enqueue", async () => {
+		const h = sqlFixture();
+		const request = input({
+			acceptanceChecks: [{ kind: "path_exists", path: "README.md" }],
+		});
+		expect((await h.service.submit(request)).ok).toBe(true);
+		expect((await h.service.submit(request)).ok).toBe(true);
+		expect(
+			await h.service.submit({
+				...request,
+				acceptanceChecks: [{ kind: "path_exists", path: "CHANGED.md" }],
+			}),
+		).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
 	});
 });

@@ -8,6 +8,7 @@ import {
 	type TaskRow,
 } from "@isolate/db";
 import {
+	type AcceptanceCheck,
 	type ApprovalId,
 	asApprovalId,
 	asTaskId,
@@ -45,6 +46,35 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
 	return (
 		left.length === right.length &&
 		left.every((value, index) => value === right[index])
+	);
+}
+
+/**
+ * Idempotent replays must also match the machine-checkable criteria. Compared
+ * field-by-field on the discriminated kind (never by JSON key order), so a
+ * hand-written row and a schema-parsed request agree.
+ */
+function sameChecks(
+	left: readonly AcceptanceCheck[],
+	right: readonly AcceptanceCheck[],
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((check, index) => {
+			const other = right[index];
+			if (other === undefined || check.kind !== other.kind) return false;
+			if (check.kind === "path_exists")
+				return other.kind === "path_exists" && check.path === other.path;
+			if (check.kind === "content_matches")
+				return (
+					other.kind === "content_matches" &&
+					check.path === other.path &&
+					check.pattern === other.pattern
+				);
+			return (
+				other.kind === "command_exit_zero" && check.command === other.command
+			);
+		})
 	);
 }
 
@@ -387,6 +417,7 @@ export function createRepositoryStore(
 			};
 			const goal = input.goal ?? "";
 			const acceptanceCriteria = input.acceptanceCriteria ?? [];
+			const acceptanceChecks = input.acceptanceChecks ?? [];
 			const fileOwnership = input.fileOwnership ?? [];
 			const task = await deps.tasks.create({
 				organizationId: scope.organizationId,
@@ -396,6 +427,7 @@ export function createRepositoryStore(
 				budgetLimits,
 				goal,
 				acceptanceCriteria,
+				acceptanceChecks,
 				fileOwnership,
 				createdBy: scope.userId,
 			});
@@ -412,6 +444,7 @@ export function createRepositoryStore(
 				task.budget_limits.max_duration_ms !== budgetLimits.maxDurationMs ||
 				task.goal !== goal ||
 				!sameList(task.acceptance_criteria, acceptanceCriteria) ||
+				!sameChecks(task.acceptance_checks, acceptanceChecks) ||
 				!sameList(task.file_ownership, fileOwnership)
 			)
 				throw new ControlPlaneError("CONFLICT");

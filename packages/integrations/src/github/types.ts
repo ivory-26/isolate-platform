@@ -1,4 +1,5 @@
-import type { OrganizationId } from "@isolate/shared";
+import type { OrganizationId, PullRequestRecord } from "@isolate/shared";
+import type { GitHubTokenProvider } from "./auth";
 
 /**
  * GitHub connector contracts (architecture §3/§7). Credentials are resolved
@@ -90,3 +91,37 @@ export type PrCreationOutcome =
 	| { kind: "SUCCEEDED" }
 	| { kind: "FAILED"; code: PullRequestFailureCode }
 	| { kind: "BLOCKED"; code: PullRequestFailureCode };
+
+/** Minimal token seam; the real broker is `createGitHubAppTokenProvider`. */
+export type PullRequestTokenProvider = Pick<
+	GitHubTokenProvider,
+	"getInstallationToken"
+>;
+
+/**
+ * Dependencies of `createPullRequestForTask` (wave 8). Exactly one token is
+ * minted per call, scoped to the target repository with `contents` and
+ * `pull_requests` write; it never leaves this layer except in the
+ * Authorization header.
+ */
+export type PullRequestCreationDependencies = {
+	tokenProvider: PullRequestTokenProvider;
+	audit: PrCreationAuditSink;
+	/** Caller identity recorded verbatim on every audit entry. */
+	actor: PrCreationActorContext;
+	/** Injectable for tests; defaults to global `fetch`. */
+	fetchImpl?: typeof fetch;
+	/** Clock used to reject an already-expired minted token. */
+	now?: () => number;
+	/** Per-request deadline; bounded by default, never unbounded. */
+	timeoutMs?: number;
+};
+
+/**
+ * Approval-bound result: `pullRequest` is exactly the shared
+ * `PullRequestRecord` shape, `created` is false when an already-open PR for the
+ * head branch was returned instead of a new one.
+ */
+export type PullRequestCreationResult =
+	| { ok: true; pullRequest: PullRequestRecord; created: boolean }
+	| PullRequestFailure;

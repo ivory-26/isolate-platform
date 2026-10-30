@@ -44,8 +44,44 @@ export type AuthorizedCommand = Readonly<Required<CommandRequest>> & {
 	readonly [authorization]: true;
 };
 
-export const MAX_TIMEOUT_MS = 300_000;
+/**
+ * Hard ceiling for a policy's own timeout. Per-command policies still cap the
+ * request at `maxTimeoutMs`; only the wave-8 validation gate raises that policy
+ * value because a repository test suite may legitimately run for 15 minutes
+ * (the DB check allows 1000–900000 ms).
+ */
+export const MAX_TIMEOUT_MS = 900_000;
 export const MAX_OUTPUT_BYTES = 1_048_576;
+
+/** One bounded, identifier-shaped package script name. */
+export const VALIDATION_SCRIPT_NAME = /^[a-z0-9][a-z0-9:_-]{0,63}$/;
+
+/**
+ * Wave-8 validation allowlist: repository test entry points only, as exact
+ * argv shapes. Read-only Git is deliberately absent — validation is not a
+ * general command channel.
+ */
+export const VALIDATION_COMMAND_ALLOWLIST: readonly CommandRule[] = [
+	{ executable: "bun", args: [{ kind: "literal", value: "test" }] },
+	{
+		executable: "bun",
+		args: [
+			{ kind: "literal", value: "run" },
+			{ kind: "pattern", pattern: VALIDATION_SCRIPT_NAME, maxLength: 64 },
+		],
+	},
+	{ executable: "npm", args: [{ kind: "literal", value: "test" }] },
+	{
+		executable: "npm",
+		args: [
+			{ kind: "literal", value: "run" },
+			{ kind: "pattern", pattern: VALIDATION_SCRIPT_NAME, maxLength: 64 },
+		],
+	},
+	{ executable: "pytest", args: [] },
+	{ executable: "cargo", args: [{ kind: "literal", value: "test" }] },
+	{ executable: "go", args: [{ kind: "literal", value: "test" }] },
+];
 
 function boundedInteger(
 	value: number,

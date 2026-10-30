@@ -13,6 +13,11 @@ import { requireNonEmpty } from "./task-repository";
  * rejected before the INSERT, so the database CHECK is a backstop, not the
  * primary gate.
  *
+ * Wave 11: a caller that stored the full payload in a `BlobStore` passes
+ * `storageRef = blob:<sha256>` and the full `byteSize`; `content` is then a
+ * bounded preview. The execution lifecycle validates that binding before this
+ * repository is called, so the row and the blob always share one digest.
+ *
  * The insert selects from `tasks` under the same organization, so a foreign or
  * missing task is NOT_FOUND and can never receive an artifact.
  */
@@ -26,6 +31,13 @@ export type CreateArtifactInput = {
 	readonly contentType: string;
 	readonly content: string;
 	readonly sha256: string;
+	/**
+	 * Wave 11 binding to a blob: `blob:<sha256>` while `content` is a bounded
+	 * preview. Absent keeps the wave-7 inline reference `inline:<sha256>`.
+	 */
+	readonly storageRef?: string;
+	/** Full stored byte size; defaults to the inline content length. */
+	readonly byteSize?: number;
 };
 
 export type CreateArtifactFailCode = "NOT_FOUND" | "CONTENT_TOO_LARGE";
@@ -98,6 +110,8 @@ export function validateCreateArtifactInput(input: CreateArtifactInput): {
 	contentType: string;
 	content: string;
 	sha256: string;
+	storageRef: string | undefined;
+	byteSize: number | undefined;
 } {
 	requireNonEmpty(input.organizationId, "organizationId");
 	requireNonEmpty(input.taskId, "taskId");
@@ -111,6 +125,18 @@ export function validateCreateArtifactInput(input: CreateArtifactInput): {
 	if (typeof input.content !== "string") {
 		throw new Error("content must be a string");
 	}
+	if (
+		input.storageRef !== undefined &&
+		(typeof input.storageRef !== "string" || input.storageRef.length === 0)
+	) {
+		throw new Error("storageRef must be a non-empty string");
+	}
+	if (
+		input.byteSize !== undefined &&
+		(!Number.isSafeInteger(input.byteSize) || input.byteSize < 0)
+	) {
+		throw new Error("byteSize must be a non-negative integer");
+	}
 	return {
 		organizationId: input.organizationId,
 		taskId: input.taskId,
@@ -118,6 +144,8 @@ export function validateCreateArtifactInput(input: CreateArtifactInput): {
 		contentType: input.contentType,
 		content: input.content,
 		sha256: input.sha256,
+		storageRef: input.storageRef,
+		byteSize: input.byteSize,
 	};
 }
 
@@ -136,9 +164,13 @@ export class PostgresArtifactRepository implements ArtifactRepository {
 			validated.organizationId,
 			validated.taskId,
 			validated.kind,
-			`inline:${validated.sha256}`,
+			// Wave 11: a blob-bound artifact keeps its `blob:<sha256>` reference;
+			// inline-only rows keep the wave-7 default.
+			validated.storageRef ?? `inline:${validated.sha256}`,
 			validated.contentType,
-			content.byteSize,
+			// Full payload size (>= the inline preview) when the caller supplied
+			// one; otherwise the inline content is the whole payload.
+			validated.byteSize ?? content.byteSize,
 			validated.sha256,
 			validated.content,
 		])) as unknown as Record<string, unknown>[];

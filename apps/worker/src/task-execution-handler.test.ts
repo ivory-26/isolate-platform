@@ -22,9 +22,14 @@ import type {
 	TaskWorkspaceCommitInput,
 	TaskWorkspaceGit,
 } from "@isolate/sandbox";
-import { SandboxError } from "@isolate/sandbox";
+import { MAX_PATCH_BYTES, SandboxError } from "@isolate/sandbox";
 import type {
 	AcceptanceCheck,
+	BlobRef,
+	BlobStore,
+	BlobStoreGetInput,
+	BlobStorePutInput,
+	BlobStoreValue,
 	ExecutionLifecycle,
 	JobId,
 	LifecycleApprovalState,
@@ -166,6 +171,29 @@ class FakeUsageSink implements UsageSink {
 	}
 }
 
+class FakeBlobStore implements BlobStore {
+	puts: Array<BlobStorePutInput & { bytes: Uint8Array }> = [];
+	getCalls: BlobStoreGetInput[] = [];
+	failWith: unknown = null;
+
+	async put(input: BlobStorePutInput): Promise<BlobRef> {
+		// Copy the bytes so a later mutation of the source buffer cannot change
+		// what the assertion sees (and never keep the caller's reference).
+		this.puts.push({ ...input, bytes: new Uint8Array(input.bytes) });
+		if (this.failWith !== null) throw this.failWith;
+		return {
+			storageRef: `blob:${input.sha256}`,
+			byteSize: input.bytes.byteLength,
+			sha256: input.sha256,
+		};
+	}
+
+	async get(input: BlobStoreGetInput): Promise<BlobStoreValue | null> {
+		this.getCalls.push(input);
+		return null;
+	}
+}
+
 type LifecycleCall =
 	| { kind: "attemptStarted" }
 	| {
@@ -178,7 +206,14 @@ type LifecycleCall =
 			type: RunEventType;
 			data: Readonly<Record<string, unknown>> | undefined;
 	  }
-	| { kind: "artifact"; kind_: string; content: string; sha256: string }
+	| {
+			kind: "artifact";
+			kind_: string;
+			content: string;
+			sha256: string;
+			storageRef?: string;
+			byteSize?: number;
+	  }
 	| {
 			kind: "approvalRequested";
 			action: string;
@@ -222,6 +257,10 @@ class FakeLifecycle implements ExecutionLifecycle {
 			kind_: input.kind,
 			content: input.content,
 			sha256: input.sha256,
+			...(input.storageRef === undefined
+				? {}
+				: { storageRef: input.storageRef }),
+			...(input.byteSize === undefined ? {} : { byteSize: input.byteSize }),
 		});
 		return { artifactId: "artifact_1" };
 	}
@@ -278,6 +317,7 @@ class FakeWorkspaceGit implements TaskWorkspaceGit {
 	commits: TaskWorkspaceCommitInput[] = [];
 	diffStatCalls: string[] = [];
 	diffPatchCalls: string[] = [];
+	diffPatchOptions: Array<{ maxBytes?: number } | undefined> = [];
 	diffStatResult: TaskDiffStat = {
 		filesChanged: 1,
 		insertions: 3,
@@ -324,8 +364,10 @@ class FakeWorkspaceGit implements TaskWorkspaceGit {
 	async diffPatch(
 		_workspace: TaskWorkspace,
 		baseBranch: string,
+		options?: { maxBytes?: number },
 	): Promise<{ patch: string; truncated: boolean }> {
 		this.diffPatchCalls.push(baseBranch);
+		this.diffPatchOptions.push(options);
 		return { patch: this.patch, truncated: this.truncated };
 	}
 
@@ -443,6 +485,8 @@ type HarnessOptions = {
 	recordToolInvocation?: TaskExecutionDeps["recordToolInvocation"];
 	/** Wave 9: per-repository+branch lock seam. */
 	acquireBranchLock?: TaskExecutionDeps["acquireBranchLock"];
+	/** Wave 11: blob store for full large payloads; `undefined` = inline only. */
+	blobStore?: FakeBlobStore;
 	/** Trusted policy used for the PR head-SHA read (`git rev-parse HEAD`). */
 	sandboxPolicy?: CommandPolicy;
 	executeHandler?: (command: unknown) => CommandResult;
@@ -520,6 +564,9 @@ function makeHarness(options: HarnessOptions = {}) {
 		...(options.acquireBranchLock === undefined
 			? {}
 			: { acquireBranchLock: options.acquireBranchLock }),
+		...(options.blobStore === undefined
+			? {}
+			: { blobStore: options.blobStore }),
 		...(options.sandboxBackend === undefined
 			? {}
 			: {
@@ -1563,6 +1610,179 @@ describe("task execution handler — wave 7 execution flow", () => {
 			}
 		}
 		expect(JSON.stringify(harness.logs)).not.toContain("SECRET");
+	});
+});
+
+describe("task execution handler — wave 11 diff blobs", () => {
+	const INLINE_CAP = 262_144;
+
+	function sha256Of(value: string | Uint8Array): string {
+		return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+	}
+
+	function diffArtifactOf(lifecycle: FakeLifecycle) {
+		const artifact = lifecycle.calls.find((call) => call.kind === "artifact");
+		if (artifact === undefined || artifact.kind !== "artifact") {
+			throw new Error("diff artifact was not recorded");
+		}
+		return artifact;
+	}
+
+	function artifactCreatedEvent(lifecycle: FakeLifecycle) {
+		const event = lifecycle.calls.find(
+			(call) => call.kind === "event" && call.type === "artifact.created",
+		);
+		if (event === undefined || event.kind !== "event") {
+			throw new Error("artifact.created event was not recorded");
+		}
+		return event;
+	}
+
+	test("the inline path keeps storageRef omitted and asks for the largest patch the adapter allows", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const blobStore = new FakeBlobStore();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			blobStore,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		// The store ceiling is 2 MiB; the workspace adapter refuses more than its
+		// own bound (256 KiB), so the request is clamped to the adapter maximum.
+		expect(workspace.diffPatchOptions).toEqual([{ maxBytes: MAX_PATCH_BYTES }]);
+		expect(blobStore.puts).toHaveLength(0);
+		const artifact = diffArtifactOf(lifecycle);
+		expect(artifact).toMatchObject({
+			kind_: "diff",
+			content: workspace.patch,
+			sha256: sha256Of(workspace.patch),
+		});
+		expect(artifact.storageRef).toBeUndefined();
+		expect(artifact.byteSize).toBeUndefined();
+		expect(artifactCreatedEvent(lifecycle).data).toMatchObject({
+			kind: "diff",
+			truncated: false,
+		});
+	});
+
+	test("a patch above the inline cap is stored once and the artifact carries the blob ref, full sha and full size", async () => {
+		const patch = `${"a".repeat(INLINE_CAP - 1)}é${"b".repeat(64)}`;
+		const fullBytes = Buffer.from(patch, "utf8");
+		expect(fullBytes.byteLength).toBeGreaterThan(INLINE_CAP);
+		const workspace = new FakeWorkspaceGit();
+		workspace.patch = patch;
+		const blobStore = new FakeBlobStore();
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			blobStore,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		const fullSha = sha256Of(fullBytes);
+		expect(blobStore.puts).toHaveLength(1);
+		const put = blobStore.puts[0];
+		expect(put).toMatchObject({
+			organizationId: ORG_ID,
+			taskId: TASK_ID,
+			kind: "diff",
+			contentType: "text/x-diff",
+			sha256: fullSha,
+		});
+		expect(put?.bytes.byteLength).toBe(fullBytes.byteLength);
+
+		const artifact = diffArtifactOf(lifecycle);
+		// The preview is a REAL UTF-8-safe truncation: the 2-byte "é" that
+		// straddles the cap is dropped, not split into a replacement character.
+		expect(artifact.content).toBe("a".repeat(INLINE_CAP - 1));
+		expect(Buffer.byteLength(artifact.content, "utf8")).toBe(INLINE_CAP - 1);
+		expect(artifact.content).not.toContain("\uFFFD");
+		expect(artifact.sha256).toBe(fullSha);
+		expect(artifact.storageRef).toBe(`blob:${fullSha}`);
+		expect(artifact.byteSize).toBe(fullBytes.byteLength);
+		expect(artifactCreatedEvent(lifecycle).data).toMatchObject({
+			kind: "diff",
+			sha256: fullSha,
+			bytes: fullBytes.byteLength,
+			previewBytes: INLINE_CAP - 1,
+			storageRef: `blob:${fullSha}`,
+			// The full patch is stored, so nothing is lost even though the inline
+			// preview is bounded.
+			truncated: false,
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+	});
+
+	test("without a blob store a large patch is truncated to the inline cap and recorded as truncated", async () => {
+		const patch = "z".repeat(INLINE_CAP + 100);
+		const workspace = new FakeWorkspaceGit();
+		workspace.patch = patch;
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		const preview = "z".repeat(INLINE_CAP);
+		const artifact = diffArtifactOf(lifecycle);
+		expect(artifact.content).toBe(preview);
+		expect(artifact.storageRef).toBeUndefined();
+		expect(artifact.byteSize).toBeUndefined();
+		// The sha covers the stored (truncated) bytes, as in wave 7.
+		expect(artifact.sha256).toBe(sha256Of(preview));
+		expect(artifactCreatedEvent(lifecycle).data).toMatchObject({
+			kind: "diff",
+			bytes: INLINE_CAP,
+			truncated: true,
+		});
+	});
+
+	test("a blob-store failure aborts the artifact write with a bounded verdict", async () => {
+		const workspace = new FakeWorkspaceGit();
+		workspace.patch = "q".repeat(INLINE_CAP + 32);
+		const blobStore = new FakeBlobStore();
+		blobStore.failWith = new Error("blob backend unavailable");
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			blobStore,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "retry", code: "INTERNAL" });
+		// No artifact row may claim bytes that were never stored.
+		expect(artifactsOf(lifecycle)).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).not.toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		// Bounded verdict and logs: neither carries the store message or patch.
+		const serialized = JSON.stringify({
+			verdict,
+			logs: harness.logs,
+		});
+		expect(serialized).not.toContain("blob backend unavailable");
+		expect(serialized).not.toContain("qqqq");
 	});
 });
 

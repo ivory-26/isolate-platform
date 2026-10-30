@@ -15,6 +15,7 @@ import type {
 } from "@isolate/sandbox";
 import { NullProvider } from "@isolate/sandbox";
 import type {
+	BlobStore,
 	ExecutionLifecycle,
 	LogFields,
 	Logger,
@@ -315,6 +316,28 @@ describe("worker composition — adapter overrides", () => {
 				approvalId: "approval_1",
 			}),
 		).toBe(true);
+	});
+
+	test("a blob-store seam is forwarded; the offline default stays absent", () => {
+		const offline = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]));
+		expect(offline.taskExecution.blobStore).toBeUndefined();
+
+		const blobStore: BlobStore = {
+			async put(input) {
+				return {
+					storageRef: `blob:${input.sha256}`,
+					byteSize: input.bytes.byteLength,
+					sha256: input.sha256,
+				};
+			},
+			async get() {
+				return null;
+			},
+		};
+		const composition = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]), {
+			blobStore,
+		});
+		expect(composition.taskExecution.blobStore).toBe(blobStore);
 	});
 
 	test("a PR seam registers create_pull_request next to run_task and resume_task", () => {

@@ -6,6 +6,7 @@ import {
 	type PgSql,
 	PostgresArtifactRepository,
 	PostgresAuditRepository,
+	PostgresBlobStore,
 	PostgresBranchLockRepository,
 	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
@@ -509,9 +510,12 @@ export async function createConfiguredWorkerComposition(
 		loadTaskContext,
 		// Wave 11: trusted, config-loaded prices. `null` records unknown cost.
 		priceTable,
-		// Wave 7: one durable lifecycle per worker. It is inert until a task
+		// Wave 11: one durable lifecycle per worker. It is inert until a task
 		// actually moves through the new handler path.
 		lifecycle: new PostgresExecutionLifecycle(sql),
+		// Wave 11: full large payloads (diffs) go to the tenant-scoped blob table;
+		// artifacts keep a bounded inline preview and a `blob:<sha256>` reference.
+		blobStore: new PostgresBlobStore(sql),
 		pushEnabled: false,
 		// Wave 8 review surface: the validation read is tenant-scoped and always
 		// safe to bind; the PR reads are bound with the PR stage below.

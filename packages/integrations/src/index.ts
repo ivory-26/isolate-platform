@@ -4,6 +4,7 @@
  */
 
 export * from "./github/auth";
+export * from "./github/pull-requests";
 export * from "./github/redact";
 export * from "./github/rest-client";
 export * from "./github/schemas";

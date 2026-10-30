@@ -33,10 +33,10 @@ import type {
  *    everything funnels through `redactSecrets` before it becomes a Result
  */
 
-const GITHUB_API_BASE = "https://api.github.com";
-const GITHUB_API_VERSION = "2022-11-28";
-const REQUEST_USER_AGENT = "isolate-platform";
-const DEFAULT_TIMEOUT_MS = 10_000;
+export const GITHUB_API_BASE = "https://api.github.com";
+export const GITHUB_API_VERSION = "2022-11-28";
+export const REQUEST_USER_AGENT = "isolate-platform";
+export const DEFAULT_TIMEOUT_MS = 10_000;
 
 export type PrCreatorDependencies = {
 	credentials: GitHubCredentials;
@@ -98,7 +98,11 @@ export async function sha256Hex(text: string): Promise<string> {
 		.join("");
 }
 
-function extractUpstreamMessage(bodyText: string): string | undefined {
+/**
+ * Extracts only the provider's `message` field. Everything else in an upstream
+ * body is untrusted and never leaves this module.
+ */
+export function extractUpstreamMessage(bodyText: string): string | undefined {
 	try {
 		const parsed: unknown = JSON.parse(bodyText);
 		if (
@@ -114,7 +118,8 @@ function extractUpstreamMessage(bodyText: string): string | undefined {
 	return undefined;
 }
 
-function describeFetchThrowable(throwable: unknown): string {
+/** Bounded, redaction-ready summary of a thrown fetch error. */
+export function describeFetchThrowable(throwable: unknown): string {
 	if (throwable instanceof Error) {
 		if (throwable.name === "TimeoutError" || throwable.name === "AbortError") {
 			return "request timed out";
@@ -126,7 +131,11 @@ function describeFetchThrowable(throwable: unknown): string {
 	return "request failed";
 }
 
-function mapStatusToFailureCode(status: number): PullRequestFailureCode {
+/**
+ * Deny-default status mapping shared by every PR-surface call: unmapped 4xx is
+ * a policy denial, unmapped 5xx an integration outage.
+ */
+export function mapStatusToFailureCode(status: number): PullRequestFailureCode {
 	switch (status) {
 		case 401:
 			// Credentials rejected: scoped installation token may have expired.
@@ -147,7 +156,8 @@ function mapStatusToFailureCode(status: number): PullRequestFailureCode {
 	}
 }
 
-function auditSinkQuietly(
+/** Fail-quiet audit write: a broken sink never changes the connector result. */
+export function auditSinkQuietly(
 	audit: PrCreationAuditSink,
 	actor: PrCreationActorContext,
 	target: string,

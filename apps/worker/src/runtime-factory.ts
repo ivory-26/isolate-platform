@@ -1,11 +1,15 @@
 import {
 	basetenModelConfig,
 	type CodingAgentRuntimeFactory,
+	type CodingAgentRuntimeFactoryOptions,
 	createMastraAgentRuntime,
 	defineCodingAgent,
 	metaModelConfig,
 	type OpenAICompatibleModelConfig,
+	type SandboxToolBackend,
+	type ToolDecisionRecord,
 	type UsagePriceTable,
+	type WiredToolCollection,
 	wireSandboxTools,
 } from "@isolate/mastra";
 
@@ -38,6 +42,32 @@ export type BasetenRuntimeFactoryOptions = {
 	priceTable?: UsagePriceTable;
 };
 
+/**
+ * Wave 9: builds the per-task tool collection the runtime hands to Mastra.
+ * Extracted so the audit threading is directly testable: every gated call
+ * (executed or denied) reaches `onToolDecision`, which the handler maps onto
+ * the injected `recordToolInvocation` sink.
+ */
+export function createTaskTools(input: {
+	backend: SandboxToolBackend;
+	toolContext: NonNullable<CodingAgentRuntimeFactoryOptions["toolContext"]>;
+	onToolDecision?: (record: ToolDecisionRecord) => Promise<void> | void;
+}): WiredToolCollection {
+	return wireSandboxTools(
+		input.backend,
+		input.onToolDecision === undefined
+			? {}
+			: { onDecision: input.onToolDecision },
+	).forTask({
+		organizationId: input.toolContext.organizationId,
+		taskId: input.toolContext.taskId,
+		scopes: [...(input.toolContext.scopes ?? [])],
+		// Wave 7: the tool gate rejects writes outside the authored ownership
+		// list; an empty list means "no writes".
+		fileOwnership: [...(input.toolContext.fileOwnership ?? [])],
+	});
+}
+
 function createOpenAIRuntimeFactory(
 	model: OpenAICompatibleModelConfig,
 	options: BasetenRuntimeFactoryOptions,
@@ -53,15 +83,12 @@ function createOpenAIRuntimeFactory(
 		const tools =
 			factoryOptions.sandboxBackend !== undefined &&
 			factoryOptions.toolContext !== undefined
-				? wireSandboxTools(factoryOptions.sandboxBackend).forTask({
-						organizationId: factoryOptions.toolContext.organizationId,
-						taskId: factoryOptions.toolContext.taskId,
-						scopes: [...(factoryOptions.toolContext.scopes ?? [])],
-						// Wave 7: the tool gate rejects writes outside the authored
-						// ownership list; an empty list means "no writes".
-						fileOwnership: [
-							...(factoryOptions.toolContext.fileOwnership ?? []),
-						],
+				? createTaskTools({
+						backend: factoryOptions.sandboxBackend,
+						toolContext: factoryOptions.toolContext,
+						...(factoryOptions.onToolDecision === undefined
+							? {}
+							: { onToolDecision: factoryOptions.onToolDecision }),
 					})
 				: undefined;
 		const agent = defineCodingAgent(model, {

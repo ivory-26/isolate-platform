@@ -112,6 +112,15 @@ describe("validation runner execution", () => {
 
 	test.each([
 		["bun test", ["bun", "test"]],
+		[
+			"bun test live_acceptance.test.ts",
+			["bun", "test", "live_acceptance.test.ts"],
+		],
+		[
+			"bun test tests/unit/foo.test.ts",
+			["bun", "test", "tests/unit/foo.test.ts"],
+		],
+		["bun test .", ["bun", "test", "."]],
 		["bun run test", ["bun", "run", "test"]],
 		["bun run test:unit", ["bun", "run", "test:unit"]],
 		["bun run lint-workspace", ["bun", "run", "lint-workspace"]],
@@ -330,6 +339,15 @@ describe("validation runner refusals stay before the provider", () => {
 		["./bun test", "relative executable"],
 		["git diff --stat", "read-only git"],
 		["bun test --watch", "extra flag"],
+		["bun test -x", "flag-shaped path"],
+		["bun test ../evil.test.ts", "parent traversal"],
+		["bun test a/../../b.test.ts", "nested parent traversal"],
+		["bun test /etc/passwd", "absolute path"],
+		["bun test a b", "two path arguments"],
+		['bun test "a b.test.ts"', "space in path"],
+		[`bun test ${"a".repeat(201)}`, "oversized path"],
+		["bun test ..", "dot-dot path"],
+		["bun test a\\b", "backslash path"],
 		["bun run ../evil", "path script"],
 		["bun run UPPER", "uppercase script"],
 		["npm install", "unknown npm verb"],

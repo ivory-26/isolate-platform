@@ -130,6 +130,24 @@ describe("worker composition — offline defaults", () => {
 		expect(taskExecution.resolveSandboxEnv).toBe(resolveSandboxEnv);
 	});
 
+	test("forwards the wave 9 acceptance, audit and branch-lock seams", () => {
+		const loadAcceptanceChecks = async () => [
+			{ kind: "path_exists" as const, path: "LIVE.md" },
+		];
+		const recordToolInvocation = async () => {};
+		const acquireBranchLock = async () => null;
+		const { taskExecution } = createOfflineWorkerDeps(
+			CONFIG,
+			makeFakeLogger([]),
+			{ loadAcceptanceChecks, recordToolInvocation, acquireBranchLock },
+		);
+		// Dropping any of these degrades completion to diff-only, loses the tool
+		// audit or allows two writers on one branch.
+		expect(taskExecution.loadAcceptanceChecks).toBe(loadAcceptanceChecks);
+		expect(taskExecution.recordToolInvocation).toBe(recordToolInvocation);
+		expect(taskExecution.acquireBranchLock).toBe(acquireBranchLock);
+	});
+
 	test("unconfigured runtime factory fails closed with MISSING_CONFIG", () => {
 		const { taskExecution } = createOfflineWorkerDeps(
 			CONFIG,

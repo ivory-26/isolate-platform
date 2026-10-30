@@ -67,8 +67,14 @@ export type ToolCallContext = {
 };
 
 /**
- * Audit record for one resolved policy decision. Ids + reason only — safe for
- * append-only audit stores.
+ * Audit record for one resolved policy decision. Ids + reason + a digest only —
+ * safe for append-only audit stores.
+ *
+ * Wave 9 adds the bounded, payload-free accounting the worker persists into
+ * `tool_invocations`: a SHA-256 digest of the canonical argument JSON (never
+ * the arguments themselves) and the observed call duration in milliseconds.
+ * Denied calls carry the same fields, so a denied attempt is as auditable as
+ * an executed one.
  */
 export type ToolDecisionRecord = {
 	tool: ToolName;
@@ -76,6 +82,10 @@ export type ToolDecisionRecord = {
 	organizationId: string;
 	outcome: "executed" | "denied";
 	reason: ToolDenialReason | null;
+	/** Hex SHA-256 of the argument JSON; `null` when no digest was computed. */
+	argumentsSha256?: string;
+	/** Wall-clock duration of the gated call, clamped to 0–900000 ms. */
+	durationMs?: number;
 };
 
 /**
@@ -136,6 +146,30 @@ function describeTool(name: ToolName): string {
 	return `Platform tool ${name}. Execution is gated by the trusted policy resolver; denied or approval-required calls return a structured denial instead of executing.`;
 }
 
+/** Bound for the recorded duration: matches the lifecycle artifact clock cap. */
+const MAX_RECORDED_DURATION_MS = 900_000;
+
+/**
+ * Payload-free argument fingerprint. Arguments may embed repository content or
+ * a user-supplied value; only the digest leaves this function, never the JSON.
+ */
+export function toolArgumentsDigest(args: Record<string, unknown>): string {
+	let canonical: string;
+	try {
+		canonical = JSON.stringify(args) ?? "";
+	} catch {
+		// Cyclic/non-serialisable model input still gets a stable, bounded digest.
+		canonical = "";
+	}
+	return new Bun.CryptoHasher("sha256").update(canonical).digest("hex");
+}
+
+function elapsedMs(startedAt: number): number {
+	const elapsed = Date.now() - startedAt;
+	if (!Number.isFinite(elapsed) || elapsed <= 0) return 0;
+	return Math.min(MAX_RECORDED_DURATION_MS, Math.round(elapsed));
+}
+
 function mapDenial(error: unknown): ToolDenialReason {
 	if (isPlatformError(error)) {
 		return DENIAL_REASONS.has(error.code)
@@ -181,10 +215,36 @@ export function wirePlatformTools(
 					 * never silently allowed and never parked on model judgement.
 					 */
 					execute: async (inputData) => {
+						const startedAt = Date.now();
 						const args =
 							typeof inputData === "object" && inputData !== null
 								? (inputData as Record<string, unknown>)
 								: {};
+						const argumentsSha256 = toolArgumentsDigest(args);
+						/**
+						 * One audit record per tool call, including denials. A failing
+						 * sink must never change the gate's answer or reach model
+						 * context: the call still executes or is denied as decided.
+						 */
+						const audit = async (
+							outcome: ToolDecisionRecord["outcome"],
+							reason: ToolDenialReason | null,
+						): Promise<void> => {
+							if (options.onDecision === undefined) return;
+							try {
+								await options.onDecision({
+									tool: name,
+									taskId: context.taskId,
+									organizationId: context.organizationId,
+									outcome,
+									reason,
+									argumentsSha256,
+									durationMs: elapsedMs(startedAt),
+								});
+							} catch {
+								// Bounded: the sink's failure is its own; no payload echo.
+							}
+						};
 						const policyInput: ToolPolicyInput = {
 							tool: name,
 							organizationId: context.organizationId,
@@ -214,26 +274,14 @@ export function wirePlatformTools(
 								state: "denied",
 								reason: resolved.reason,
 							};
-							await options.onDecision?.({
-								tool: name,
-								taskId: context.taskId,
-								organizationId: context.organizationId,
-								outcome: "denied",
-								reason: resolved.reason,
-							});
+							await audit("denied", resolved.reason);
 							return denial;
 						}
 
 						const implementation = options.implementations[name];
 						if (!implementation) {
 							// Allowlisted but unimplemented stays deny-by-default.
-							await options.onDecision?.({
-								tool: name,
-								taskId: context.taskId,
-								organizationId: context.organizationId,
-								outcome: "denied",
-								reason: "POLICY_DENIED" as const,
-							});
+							await audit("denied", "POLICY_DENIED");
 							return {
 								state: "denied",
 								reason: "POLICY_DENIED" as const,
@@ -245,13 +293,7 @@ export function wirePlatformTools(
 							// Audit reflects what actually ran: an implementation that
 							// rejects on a second gate (task ownership) is a denial, not an
 							// execution, even though the policy allowed the call.
-							await options.onDecision?.({
-								tool: name,
-								taskId: context.taskId,
-								organizationId: context.organizationId,
-								outcome: "executed",
-								reason: null,
-							});
+							await audit("executed", null);
 							return {
 								state: "executed" as const,
 								audited: true,
@@ -260,21 +302,9 @@ export function wirePlatformTools(
 						} catch (error) {
 							const code = errorCodeOf(error);
 							if (code === "POLICY_DENIED" || code === "APPROVAL_REQUIRED") {
-								await options.onDecision?.({
-									tool: name,
-									taskId: context.taskId,
-									organizationId: context.organizationId,
-									outcome: "denied",
-									reason: code,
-								});
+								await audit("denied", code);
 							} else {
-								await options.onDecision?.({
-									tool: name,
-									taskId: context.taskId,
-									organizationId: context.organizationId,
-									outcome: "executed",
-									reason: null,
-								});
+								await audit("executed", null);
 							}
 							return {
 								state: "failed" as const,

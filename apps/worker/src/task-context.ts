@@ -72,6 +72,10 @@ export function toTaskContext(
 	if (fullName === null) {
 		throw new PlatformError("VALIDATION_FAILED", "invalid repository name");
 	}
+	// Wave 9: the branch lock keys on a stable repository id. The column is
+	// owned by the DB lane; until it is exposed the handler falls back to the
+	// repository URL (identical for every job on one repository).
+	const repositoryId = (row as { repositoryId?: unknown }).repositoryId;
 	return {
 		taskId: row.taskId,
 		organizationId: row.organizationId,
@@ -81,6 +85,9 @@ export function toTaskContext(
 		isolatedBranch: row.branch,
 		fileOwnership: [...row.fileOwnership],
 		acceptanceCriteria: [...row.acceptanceCriteria],
+		...(typeof repositoryId === "string" && repositoryId.length > 0
+			? { repositoryId }
+			: {}),
 		limits: {
 			max_agent_turns: row.budgetLimits.max_agent_turns,
 			max_repair_attempts: row.budgetLimits.max_repair_attempts,

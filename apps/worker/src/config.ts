@@ -1,4 +1,7 @@
-import { workerConfigSchema as sharedWorkerConfigSchema } from "@isolate/shared";
+import {
+	workerConfigSchema as sharedWorkerConfigSchema,
+	WORKER_CONFIG_DEFAULTS,
+} from "@isolate/shared";
 import { z } from "zod";
 
 /**
@@ -12,6 +15,16 @@ export const workerConfigSchema = z.object({
 		.min(1)
 		.default(() => `worker_${process.pid}_${Date.now().toString(36)}`),
 	pollIntervalMs: z.coerce.number().int().min(50).default(1000),
+	/**
+	 * Wave 9: bounded in-process job pool. The shared contract allows 1–64;
+	 * the worker caps at 16 because the sandbox provider is the real ceiling.
+	 */
+	maxConcurrency: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(16)
+		.default(WORKER_CONFIG_DEFAULTS.maxConcurrency),
 	leaseSeconds: z.coerce.number().int().min(5).max(3600).default(60),
 	maxAttemptsDefault: z.coerce.number().int().min(1).max(50).default(5),
 	// Bounded drift guard for expired leases and approval expiry timers.
@@ -57,6 +70,9 @@ export function loadWorkerConfig(
 		...(env.WORKER_POLL_INTERVAL_MS === undefined
 			? {}
 			: { pollIntervalMs: env.WORKER_POLL_INTERVAL_MS }),
+		...(env.WORKER_MAX_CONCURRENCY === undefined
+			? {}
+			: { maxConcurrency: env.WORKER_MAX_CONCURRENCY }),
 		...(env.WORKER_LEASE_SECONDS === undefined
 			? {}
 			: { leaseSeconds: env.WORKER_LEASE_SECONDS }),

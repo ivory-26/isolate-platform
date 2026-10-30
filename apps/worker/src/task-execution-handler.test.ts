@@ -5,7 +5,9 @@ import type {
 	AgentTurnCaps,
 	AgentUsage,
 	CodingAgentRuntimeFactory,
+	SandboxToolBackend,
 	TaskContext,
+	ToolDecisionRecord,
 } from "@isolate/mastra";
 import type {
 	CommandPolicy,
@@ -22,6 +24,7 @@ import type {
 } from "@isolate/sandbox";
 import { SandboxError } from "@isolate/sandbox";
 import type {
+	AcceptanceCheck,
 	ExecutionLifecycle,
 	JobId,
 	LifecycleApprovalState,
@@ -432,6 +435,14 @@ type HarnessOptions = {
 	handlerType?: "run_task" | "resume_task";
 	/** Wave 8: `undefined` leaves the seam unbound (skipped), `null` explicit. */
 	validationPolicy?: { command: string; timeoutMs: number } | null;
+	/** Wave 9: `undefined` leaves the seam unbound (no checks declared). */
+	acceptanceChecks?: readonly AcceptanceCheck[] | null;
+	/** Wave 9: read surface the acceptance verifier uses. */
+	sandboxBackend?: SandboxToolBackend;
+	/** Wave 9: tool-invocation sink. */
+	recordToolInvocation?: TaskExecutionDeps["recordToolInvocation"];
+	/** Wave 9: per-repository+branch lock seam. */
+	acquireBranchLock?: TaskExecutionDeps["acquireBranchLock"];
 	/** Trusted policy used for the PR head-SHA read (`git rev-parse HEAD`). */
 	sandboxPolicy?: CommandPolicy;
 	executeHandler?: (command: unknown) => CommandResult;
@@ -497,6 +508,23 @@ function makeHarness(options: HarnessOptions = {}) {
 			? {}
 			: {
 					loadValidationPolicy: async () => options.validationPolicy ?? null,
+				}),
+		...(options.acceptanceChecks === undefined
+			? {}
+			: {
+					loadAcceptanceChecks: async () => options.acceptanceChecks ?? null,
+				}),
+		...(options.recordToolInvocation === undefined
+			? {}
+			: { recordToolInvocation: options.recordToolInvocation }),
+		...(options.acquireBranchLock === undefined
+			? {}
+			: { acquireBranchLock: options.acquireBranchLock }),
+		...(options.sandboxBackend === undefined
+			? {}
+			: {
+					createSandboxBackend: () =>
+						options.sandboxBackend as SandboxToolBackend,
 				}),
 		...(options.workspaceGitFactory === undefined
 			? workspaceGit === undefined
@@ -1374,6 +1402,8 @@ describe("task execution handler — wave 7 execution flow", () => {
 			filesChanged: 1,
 			insertions: 3,
 			deletions: 2,
+			// Wave 9: no checks and no command — explicitly the diff-only fallback.
+			completion: "diff-only",
 		});
 
 		// Clone/push need GitHub egress; tool calls still authorize deny.
@@ -2088,5 +2118,480 @@ describe("task execution handler — wave 8 pull request approval", () => {
 			status: "review_ready",
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+});
+
+/* ------------------------ wave 9: acceptance completion -------------------- */
+
+function acceptanceBackend(files: Record<string, string>): SandboxToolBackend {
+	return {
+		async readFile(path) {
+			const content = files[path];
+			if (content === undefined) {
+				throw new PlatformError("NOT_FOUND", "file could not be read");
+			}
+			return { content, truncated: false };
+		},
+		async listFiles() {
+			return [];
+		},
+		async search() {
+			return [];
+		},
+		async exec() {
+			return {
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			};
+		},
+		async git() {
+			return {
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				durationMs: 0,
+				truncated: false,
+			};
+		},
+	};
+}
+
+const PASSING_CHECKS: readonly AcceptanceCheck[] = [
+	{ kind: "path_exists", path: "LIVE_ACCEPTANCE.md" },
+	{
+		kind: "content_matches",
+		path: "LIVE_ACCEPTANCE.md",
+		pattern: "done",
+	},
+];
+
+function acceptanceFinished(lifecycle: FakeLifecycle) {
+	for (let index = lifecycle.calls.length - 1; index >= 0; index--) {
+		const call = lifecycle.calls[index];
+		if (call?.kind === "event" && call.type === "acceptance.finished") {
+			return call.data;
+		}
+	}
+	return undefined;
+}
+
+describe("task execution handler — wave 9 acceptance completion", () => {
+	test("passing checks plus a passing command complete with an acceptance report", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			sandboxBackend: acceptanceBackend({
+				"LIVE_ACCEPTANCE.md": "all done\n",
+			}),
+			acceptanceChecks: PASSING_CHECKS,
+			validationPolicy: { command: "bun test live.test.ts", timeoutMs: 30_000 },
+			executeHandler: () => commandResult(),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		// Acceptance events wrap the checks; the command gate still ran.
+		const acceptanceStarted =
+			eventTypes(lifecycle).indexOf("acceptance.started");
+		const acceptanceDone = eventTypes(lifecycle).indexOf("acceptance.finished");
+		expect(acceptanceStarted).toBeGreaterThanOrEqual(0);
+		expect(acceptanceDone).toBeGreaterThan(acceptanceStarted);
+		const report = acceptanceFinished(lifecycle) as {
+			passed: boolean;
+			matched: number;
+			total: number;
+		};
+		expect(report).toMatchObject({ passed: true, matched: 2, total: 2 });
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+			completion: "acceptance",
+			acceptance: { passed: true, matched: 2, total: 2 },
+			validation: { status: "passed" },
+		});
+		const kinds = artifactsOf(lifecycle).map((artifact) => artifact.kind_);
+		expect(kinds).toEqual(["report", "log_bundle", "diff"]);
+		const reportArtifact = artifactsOf(lifecycle)[0];
+		expect(reportArtifact?.content).toContain('"passed":true');
+		expect(reportArtifact?.content).not.toContain("all done");
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a failing check fails the task, stores the report and never pushes", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			sandboxBackend: acceptanceBackend({}),
+			acceptanceChecks: PASSING_CHECKS,
+			validationPolicy: VALIDATION_POLICY,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "acceptance failed",
+		});
+		expect(workspace.pushes).toHaveLength(0);
+		expect(transitionPairs(lifecycle)).toContainEqual(["validating", "failed"]);
+		expect(transitionPairs(lifecycle)).not.toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(acceptanceFinished(lifecycle)).toMatchObject({
+			passed: false,
+			matched: 0,
+			total: 2,
+		});
+		expect(artifactsOf(lifecycle).map((artifact) => artifact.kind_)).toEqual([
+			"report",
+		]);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "failed",
+			reason: "acceptance failed",
+			acceptance: { passed: false },
+		});
+		// The validation command never ran: the checks failed first.
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("checks alone gate completion when no validation command is configured", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			sandboxBackend: acceptanceBackend({
+				"LIVE_ACCEPTANCE.md": "done",
+			}),
+			acceptanceChecks: PASSING_CHECKS,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(eventTypes(lifecycle)).toContain("validation.finished");
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+			completion: "acceptance",
+		});
+	});
+
+	test("a malformed persisted check fails closed with a bounded report", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.approval = { status: "approved", payloadSha256: APPROVAL_SHA };
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			pushEnabled: true,
+			handlerType: "resume_task",
+			job: makeResumeJob(),
+			// Not a member of the discriminated union: refused before any read.
+			acceptanceChecks: [
+				{
+					kind: "command_exit_zero",
+					command: "",
+				} as unknown as AcceptanceCheck,
+			],
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "invalid acceptance checks",
+		});
+		expect(acceptanceFinished(lifecycle)).toMatchObject({
+			passed: false,
+			matched: 0,
+			total: 1,
+			checks: [],
+		});
+		expect(workspace.pushes).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("without checks or a command the attempt records diff-only completion", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "" }],
+		});
+		await harness.handler.handle(harness.job, harness.ctx);
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+			completion: "diff-only",
+		});
+	});
+});
+
+/* -------------------------- wave 9: tool audit ----------------------------- */
+
+describe("task execution handler — wave 9 tool invocation audit", () => {
+	test("executed and denied decisions reach the injected sink without payloads", async () => {
+		const lifecycle = new FakeLifecycle();
+		const rows: Array<Record<string, unknown>> = [];
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			recordToolInvocation: (input) => {
+				rows.push({ ...input });
+			},
+			// A runtime that drives the audit hook the factory forwards.
+			runtime: {
+				factory: (options) => ({
+					id: "audit-runtime",
+					name: "Audit Runtime",
+					async runTurn() {
+						const hook = (
+							options as {
+								onToolDecision?: (record: ToolDecisionRecord) => Promise<void>;
+							}
+						).onToolDecision;
+						await hook?.({
+							tool: "repo.read_file",
+							taskId: TASK_UUID,
+							organizationId: ORG_ID,
+							outcome: "executed",
+							reason: null,
+							argumentsSha256: "a".repeat(64),
+							durationMs: 12,
+						});
+						await hook?.({
+							tool: "git.push_branch",
+							taskId: TASK_UUID,
+							organizationId: ORG_ID,
+							outcome: "denied",
+							reason: "APPROVAL_REQUIRED",
+							argumentsSha256: "b".repeat(64),
+							durationMs: 3,
+						});
+						return "";
+					},
+				}),
+				runTurns: [1],
+				prompts: [],
+			},
+			script: [{ output: "" }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(rows).toEqual([
+			{
+				organizationId: ORG_ID,
+				taskId: TASK_ID,
+				workflowRunId: null,
+				toolName: "repo.read_file",
+				outcome: "executed",
+				denialReason: null,
+				argumentsSha256: "a".repeat(64),
+				durationMs: 12,
+			},
+			{
+				organizationId: ORG_ID,
+				taskId: TASK_ID,
+				workflowRunId: null,
+				toolName: "git.push_branch",
+				outcome: "denied",
+				denialReason: "APPROVAL_REQUIRED",
+				argumentsSha256: "b".repeat(64),
+				durationMs: 3,
+			},
+		]);
+		expect(JSON.stringify(lifecycle.calls)).not.toContain("a".repeat(64));
+	});
+
+	test("a failing audit sink is logged bounded and never changes the verdict", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			recordToolInvocation: () => {
+				throw new PlatformError("DB_UNAVAILABLE", "audit store down");
+			},
+			runtime: {
+				factory: (options) => ({
+					id: "audit-runtime",
+					name: "Audit Runtime",
+					async runTurn() {
+						const hook = (
+							options as {
+								onToolDecision?: (record: ToolDecisionRecord) => Promise<void>;
+							}
+						).onToolDecision;
+						await hook?.({
+							tool: "repo.read_file",
+							taskId: TASK_UUID,
+							organizationId: ORG_ID,
+							outcome: "executed",
+							reason: null,
+						});
+						return "";
+					},
+				}),
+				runTurns: [1],
+				prompts: [],
+			},
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(
+			harness.logs.some(
+				(log) => log.message === "tool invocation not recorded",
+			),
+		).toBe(true);
+		expect(JSON.stringify(harness.logs)).not.toContain("audit store down");
+	});
+});
+
+/* --------------------------- wave 9: branch lock --------------------------- */
+
+function fakeLock() {
+	const leases: Array<{ releases: number }> = [];
+	const releases: string[] = [];
+	return {
+		acquireBranchLock: async () => {
+			if (leases.length > 0) return null;
+			const lease = { releases: 0 };
+			leases.push(lease);
+			return {
+				release: () => {
+					lease.releases += 1;
+					releases.push("release");
+				},
+			};
+		},
+		leases,
+		releases,
+	};
+}
+
+describe("task execution handler — wave 9 branch lock", () => {
+	test("acquires before provisioning and releases once after the run", async () => {
+		const lifecycle = new FakeLifecycle();
+		const lock = fakeLock();
+		const calls: Array<Record<string, string>> = [];
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: (input) => {
+				calls.push({ ...input });
+				return lock.acquireBranchLock();
+			},
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(calls).toEqual([
+			{
+				organizationId: ORG_ID,
+				repositoryId: DEFAULT_CONTEXT.repoUrl,
+				branch: DEFAULT_CONTEXT.isolatedBranch,
+			},
+		]);
+		expect(lock.releases).toEqual(["release"]);
+		expect(harness.provider.createCalls).toHaveLength(1);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a lock miss returns a bounded retry and provisions nothing", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: async () => null,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "retry",
+			code: "DEPENDENCY_CONFLICT",
+			backoffMs: expect.any(Number),
+		});
+		expect(harness.provider.createCalls).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(0);
+		expect(lifecycle.calls).toHaveLength(0);
+	});
+
+	test("releases exactly once on a failure path and still tears down once", async () => {
+		const lifecycle = new FakeLifecycle();
+		const lock = fakeLock();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 0,
+			insertions: 0,
+			deletions: 0,
+			files: [],
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			acquireBranchLock: lock.acquireBranchLock,
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "VALIDATION_FAILED",
+			note: "empty diff",
+		});
+		expect(lock.releases).toEqual(["release"]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a throwing release is logged bounded and never replaces the verdict", async () => {
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: async () => ({
+				release: () => {
+					throw new PlatformError("DB_UNAVAILABLE", "lock store down");
+				},
+			}),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(
+			harness.logs.some((log) => log.message === "branch lock release failed"),
+		).toBe(true);
+		expect(JSON.stringify(harness.logs)).not.toContain("lock store down");
 	});
 });

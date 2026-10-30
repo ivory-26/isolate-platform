@@ -20,17 +20,21 @@ import { clampErrorCode, sanitizeMessage, toAckError } from "./sanitize";
  *           "retry"/"dead_letter" → ackFail (requeue decision is the queue's)
  *
  * Bounds:
- * - one claim per poll tick, `pollIntervalMs` idle between ticks
- * - one in-flight job at a time (strict, so lease/ack ownership is unambiguous)
+ * - bounded in-process pool: at most `config.maxConcurrency` jobs run at once
+ *   (wave 9; clamped to 1–16), one claim per available slot, `pollIntervalMs`
+ *   idle between empty ticks
  * - heartbeat ticker at most every half lease window, never overlapping
  * - reaper runs at `reaperIntervalMs` with an overlap guard
  * - a handler that ignores its AbortSignal is cut at `jobTimeoutMs` and
  *   ack-failed with BUDGET_EXCEEDED (execution time is never unbounded)
- * - stop() resolves within STOP_DRAIN_TIMEOUT_MS even if a handler hangs
+ * - stop() aborts every in-flight job and drains them; it resolves within
+ *   STOP_DRAIN_TIMEOUT_MS even if a handler hangs
  */
 
 /** Max wait for stop() resolution when a handler refuses to settle. */
 const STOP_DRAIN_TIMEOUT_MS = 10_000;
+/** Hard ceiling for the in-process pool, independent of config validation. */
+const MAX_IN_PROCESS_CONCURRENCY = 16;
 
 export type WorkerEvent =
 	| { kind: "claimed"; jobId: string }
@@ -110,6 +114,17 @@ export function createWorkerLoop(
 	const { config, logger, handlers, queue } = deps;
 	const jobTimeoutMs = deps.jobTimeoutMs ?? config.jobTimeoutMs;
 	const onEvent: EventSink = deps.onEvent ?? (() => {});
+	const maxConcurrency = Math.max(
+		1,
+		Math.min(
+			MAX_IN_PROCESS_CONCURRENCY,
+			Number.isFinite(config.maxConcurrency)
+				? Math.floor(config.maxConcurrency)
+				: 1,
+		),
+	);
+	/** Jobs currently executing; the pool size is capped at `maxConcurrency`. */
+	const inFlight = new Set<Promise<void>>();
 
 	const handlersByType = new Map<WorkerJobType, JobHandler>();
 	for (const handler of handlers) {
@@ -297,7 +312,13 @@ export function createWorkerLoop(
 				jobLogger,
 			);
 			const requeued = result?.ok === true ? result.requeued : false;
-			jobLogger.warn("job failed", { code, requeued });
+			// A handler-requested backoff (e.g. a busy branch lock) is advisory:
+			// the queue owns the real schedule, the loop records the bound.
+			const backoffMs =
+				verdict.outcome === "retry" && verdict.backoffMs !== undefined
+					? Math.max(0, Math.min(300_000, Math.floor(verdict.backoffMs)))
+					: null;
+			jobLogger.warn("job failed", { code, requeued, backoffMs });
 			onEvent({ kind: "failed", jobId: job.id, code, requeued });
 		} finally {
 			stopController.signal.removeEventListener("abort", abortJob);
@@ -330,12 +351,19 @@ export function createWorkerLoop(
 		logger.info("worker loop started", {
 			workerId: config.workerId,
 			pollIntervalMs: config.pollIntervalMs,
+			maxConcurrency,
 			leaseSeconds: config.leaseSeconds,
 			jobTypes: [...handlersByType.keys()].join(","),
 		});
 
 		try {
 			while (!stopController.signal.aborted) {
+				// Pool full: wait for the first slot to free. Each in-flight job is
+				// bounded by its own hard timeout, so this wait cannot hang the loop.
+				if (inFlight.size >= maxConcurrency) {
+					await Promise.race([...inFlight]);
+					continue;
+				}
 				let job: JobRow | null;
 				try {
 					job = await queue.claimNext({
@@ -350,14 +378,29 @@ export function createWorkerLoop(
 				}
 				if (job) {
 					onEvent({ kind: "claimed", jobId: job.id });
-					// Inline await keeps single in-flight concurrency; stop() only
-					// resolves after the current job settles or its drain deadline.
-					await processJob(job);
+					// Spawn into the pool and keep claiming until capacity is used.
+					// Each job keeps its own lease, heartbeat and hard budget; the
+					// slot frees when the job settles (never earlier).
+					let task: Promise<void>;
+					task = processJob(job)
+						.catch((error: unknown) => {
+							logger.warn("job processing failed unexpectedly", {
+								code: errorCodeOf(error),
+							});
+						})
+						.finally(() => {
+							inFlight.delete(task);
+						});
+					inFlight.add(task);
+					continue;
 				}
 				await sleepAbortable(config.pollIntervalMs, stopController.signal);
 			}
 		} finally {
 			clearInterval(reaper);
+			// Drain: every in-flight job was aborted by stop(); handlers settle on
+			// their signal or are cut by their own hard budget, so this is bounded.
+			await Promise.allSettled([...inFlight]);
 		}
 	}
 

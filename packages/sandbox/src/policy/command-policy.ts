@@ -56,13 +56,35 @@ export const MAX_OUTPUT_BYTES = 1_048_576;
 /** One bounded, identifier-shaped package script name. */
 export const VALIDATION_SCRIPT_NAME = /^[a-z0-9][a-z0-9:_-]{0,63}$/;
 
+/** Max characters in one allowlisted test path argument (wave 9). */
+export const VALIDATION_TEST_PATH_MAX_LENGTH = 200;
+
+/**
+ * Wave-9 test-entry path: `bun test <path>`. Bounded characters only, relative,
+ * no parent traversal, never absolute and never flag-shaped. The `pattern` rule
+ * additionally refuses shell metacharacters, backslashes and `$`.
+ */
+export const VALIDATION_TEST_PATH = /^(?!.*\.\.)(?!\/)[A-Za-z0-9._/-]{1,200}$/;
+
 /**
  * Wave-8 validation allowlist: repository test entry points only, as exact
  * argv shapes. Read-only Git is deliberately absent — validation is not a
- * general command channel.
+ * general command channel. Wave 9 adds exactly one optional path argument to
+ * `bun test`, so a single acceptance test file can be named.
  */
 export const VALIDATION_COMMAND_ALLOWLIST: readonly CommandRule[] = [
 	{ executable: "bun", args: [{ kind: "literal", value: "test" }] },
+	{
+		executable: "bun",
+		args: [
+			{ kind: "literal", value: "test" },
+			{
+				kind: "pattern",
+				pattern: VALIDATION_TEST_PATH,
+				maxLength: VALIDATION_TEST_PATH_MAX_LENGTH,
+			},
+		],
+	},
 	{
 		executable: "bun",
 		args: [

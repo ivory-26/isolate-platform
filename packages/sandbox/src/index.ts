@@ -2,6 +2,7 @@
 export * from "./errors";
 export * from "./execute";
 export * from "./git";
+export * from "./git/workspace-types";
 export * from "./policy/command-policy";
 export * from "./policy/paths";
 export * from "./providers/modal";

@@ -13,6 +13,8 @@ export const RUN_EVENT_TYPES = [
 	"task.enqueued",
 	"task.claimed",
 	"task.state_changed",
+	"workspace.cloned",
+	"artifact.created",
 	"agent.turn_started",
 	"agent.turn_finished",
 	"tool.invoked",

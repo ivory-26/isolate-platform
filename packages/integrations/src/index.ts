@@ -3,6 +3,7 @@
  * contracts are exported here; credentials always stay server-side.
  */
 
+export * from "./github/auth";
 export * from "./github/redact";
 export * from "./github/rest-client";
 export * from "./github/schemas";

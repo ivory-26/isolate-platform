@@ -8,6 +8,12 @@ export interface SandboxSpec {
 	readonly egress: EgressPolicy;
 	/** Optional provider idle-reap window; defaults to 300_000 ms in the Modal adapter. */
 	readonly idleTimeoutMs?: number;
+	/**
+	 * Create-time environment for trusted in-sandbox tooling (for example the
+	 * short-lived Git credential). Never model-visible, never event/log data.
+	 * Adapters must reject unlisted names and oversized values.
+	 */
+	readonly env?: Readonly<Record<string, string>>;
 }
 
 /** Opaque provider-issued identity; paths refer ONLY to the isolated execution plane. */

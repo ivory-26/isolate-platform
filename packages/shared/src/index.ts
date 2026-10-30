@@ -4,6 +4,7 @@ export * from "./logging/redact";
 export * from "./types/errors";
 export * from "./types/events";
 export * from "./types/ids";
+export * from "./types/lifecycle";
 export * from "./types/result";
 export * from "./types/schemas";
 export * from "./types/task-state";

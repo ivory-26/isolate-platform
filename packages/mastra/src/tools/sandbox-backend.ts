@@ -11,7 +11,8 @@
  * - confine every path to the sandbox workspace (reject traversal/absolute host paths),
  * - enforce a timeout and a combined output cap on every call,
  * - return bounded text only (no environment values, no provider payloads),
- * - reject `git` subcommands that write (the tool layer exposes read ops only).
+ * - route write operations through the optional write surface only; the plain
+ *   `git` method stays read-only.
  */
 export type SandboxExecResult = {
 	readonly exitCode: number;
@@ -61,4 +62,39 @@ export interface SandboxToolBackend {
 		args: readonly string[],
 		options?: { readonly timeoutMs?: number },
 	): Promise<SandboxExecResult>;
+
+	/**
+	 * Write surface (wave 7). Optional so a read-only backend stays valid; the
+	 * tool layer refuses write tools when an implementation omits them.
+	 * Implementations must confine `path` to the workspace, enforce a byte cap,
+	 * and never return file content beyond what was written.
+	 */
+	writeFile?(
+		path: string,
+		content: string,
+		options?: { readonly maxBytes?: number },
+	): Promise<{ readonly bytesWritten: number; readonly sha256: string }>;
+
+	/** Stages every change and commits; returns the commit sha. */
+	commitAll?(
+		message: string,
+		options?: {
+			readonly paths?: readonly string[];
+			readonly authorName?: string;
+			readonly authorEmail?: string;
+		},
+	): Promise<{ readonly commitSha: string }>;
+
+	/** Bounded `--stat` view; file list is capped by the implementation. */
+	diffSummary?(): Promise<{
+		readonly filesChanged: number;
+		readonly insertions: number;
+		readonly deletions: number;
+		readonly files: readonly string[];
+	}>;
+
+	/** Bounded patch text for the task artifact; never streamed to the model. */
+	diffPatch?(options?: {
+		readonly maxBytes?: number;
+	}): Promise<{ readonly patch: string; readonly truncated: boolean }>;
 }

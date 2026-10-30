@@ -12,6 +12,8 @@ interface SdkCalls {
 	constructorParams: Array<{ tokenId: string; tokenSecret: string }>;
 	fromRegistry: string[];
 	fromName: Array<{ name: string; params?: { createIfMissing?: boolean } }>;
+	imageSetup: string[][];
+	imageBuilds: Array<unknown>;
 	create: Array<{ app: unknown; image: unknown; params: ModalCreateParams }>;
 }
 
@@ -31,6 +33,8 @@ function fakeSdk(options: FakeSdkOptions = {}) {
 		constructorParams: [],
 		fromRegistry: [],
 		fromName: [],
+		imageSetup: [],
+		imageBuilds: [],
 		create: [],
 	};
 	const sandbox: ModalSdkSandbox = options.sandbox ?? {
@@ -52,7 +56,18 @@ function fakeSdk(options: FakeSdkOptions = {}) {
 		readonly images = {
 			fromRegistry: (tag: string) => {
 				calls.fromRegistry.push(tag);
-				return { tag };
+				const image = {
+					tag,
+					dockerfileCommands: (commands: string[]) => {
+						calls.imageSetup.push([...commands]);
+						return image;
+					},
+					build: async (app: unknown) => {
+						calls.imageBuilds.push(app);
+						return { tag, built: true };
+					},
+				};
+				return image;
 			},
 		};
 		readonly sandboxes = {
@@ -205,6 +220,23 @@ describe("createModalSandboxClient configuration", () => {
 });
 
 describe("createModalSandboxClient operations", () => {
+	test("builds the base image with setup commands once", async () => {
+		const { sandbox } = fakeSandbox();
+		const { module, calls } = fakeSdk({ sandbox });
+		const client = await createModalSandboxClient(
+			{ ...env, imageSetupCommands: ["RUN apt-get install -y git"] },
+			async () => module,
+		);
+		await client.create(createParams);
+		await client.create(createParams);
+		expect(calls.imageSetup).toEqual([["RUN apt-get install -y git"]]);
+		expect(calls.imageBuilds).toHaveLength(1);
+		expect(calls.create[0].image).toMatchObject({
+			tag: DEFAULT_MODAL_IMAGE,
+			built: true,
+		});
+	});
+
 	test("forwards create params, omits an absent allowlist, and maps exec", async () => {
 		const { sandbox, calls: sdkCalls } = fakeSandbox();
 		const { module, calls } = fakeSdk({ sandbox });
@@ -225,7 +257,7 @@ describe("createModalSandboxClient operations", () => {
 		});
 		expect(Object.hasOwn(params, "outboundDomainAllowlist")).toBe(false);
 		expect(calls.create[0].app).toEqual({ name: "isolate-test" });
-		expect(calls.create[0].image).toEqual({ tag: DEFAULT_MODAL_IMAGE });
+		expect(calls.create[0].image).toMatchObject({ tag: DEFAULT_MODAL_IMAGE });
 
 		const result = await client.exec("sb-1", ["git", "--version"], {
 			timeoutMs: 5_000,

@@ -16,6 +16,7 @@ import type { SandboxToolBackend } from "@isolate/mastra";
 import {
 	createModalSandboxClient,
 	createTaskWorkspaceGit,
+	DEFAULT_MODAL_IMAGE_SETUP,
 	ModalSandboxProvider,
 	NullProvider,
 	type SandboxProvider,
@@ -110,11 +111,22 @@ export async function selectSandboxProvider(
 		);
 	}
 	const createClient = deps.createModalClient ?? createModalSandboxClient;
+	const image = env.MODAL_IMAGE?.trim();
+	// `oven/bun:1` ships Bun but not git/grep. Build the default image with the
+	// missing tools; a custom image is assumed to provide its own toolchain.
+	// `MODAL_IMAGE_SETUP=off` disables the layer.
+	const imageSetup =
+		env.MODAL_IMAGE_SETUP?.trim() === "off"
+			? undefined
+			: image === undefined || image === "oven/bun:1"
+				? DEFAULT_MODAL_IMAGE_SETUP
+				: undefined;
 	const client = await createClient({
 		tokenId,
 		tokenSecret,
 		appName: env.MODAL_APP_NAME?.trim() || DEFAULT_MODAL_APP_NAME,
-		...(env.MODAL_IMAGE?.trim() ? { image: env.MODAL_IMAGE.trim() } : {}),
+		...(image ? { image } : {}),
+		...(imageSetup ? { imageSetupCommands: imageSetup } : {}),
 	});
 	return { provider: new ModalSandboxProvider({ client }), real: true };
 }

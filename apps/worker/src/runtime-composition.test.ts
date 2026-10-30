@@ -52,7 +52,10 @@ describe("sandbox provider selection", () => {
 	});
 
 	test("builds the Modal provider from an injected client", async () => {
-		const seen: Array<{ appName: string }> = [];
+		const seen: Array<{
+			appName: string;
+			imageSetupCommands?: readonly string[];
+		}> = [];
 		const selected = await selectSandboxProvider(
 			{
 				SANDBOX_PROVIDER: "modal",
@@ -62,7 +65,10 @@ describe("sandbox provider selection", () => {
 			},
 			{
 				createModalClient: async (env) => {
-					seen.push({ appName: env.appName });
+					seen.push({
+						appName: env.appName,
+						imageSetupCommands: env.imageSetupCommands,
+					});
 					return {
 						async create() {
 							return { id: "sb-1" };
@@ -77,7 +83,36 @@ describe("sandbox provider selection", () => {
 		);
 		expect(selected.real).toBe(true);
 		expect(selected.provider.name).toBe("modal");
-		expect(seen).toEqual([{ appName: "isolate-test" }]);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.appName).toBe("isolate-test");
+		expect(seen[0]?.imageSetupCommands?.join(" ")).toContain("git");
+	});
+
+	test("MODAL_IMAGE_SETUP=off disables the setup layer", async () => {
+		const seen: Array<readonly string[] | undefined> = [];
+		await selectSandboxProvider(
+			{
+				SANDBOX_PROVIDER: "modal",
+				MODAL_TOKEN_ID: "id",
+				MODAL_TOKEN_SECRET: "secret",
+				MODAL_IMAGE_SETUP: "off",
+			},
+			{
+				createModalClient: async (env) => {
+					seen.push(env.imageSetupCommands);
+					return {
+						async create() {
+							return { id: "sb-1" };
+						},
+						async exec() {
+							return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+						},
+						async terminate() {},
+					};
+				},
+			},
+		);
+		expect(seen).toEqual([undefined]);
 	});
 });
 

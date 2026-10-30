@@ -6,20 +6,32 @@ import type {
 } from "./modal";
 
 /**
- * Git + Bun image. The image name is a convenience, not a guarantee: the
- * worker calls `assertToolchain` (git, bun, grep) before any network use and a
- * missing binary fails closed as `SANDBOX_IMAGE_UNSUPPORTED`.
+ * Git + Bun image. `oven/bun:1` is Bun on a Debian base and does not ship git,
+ * so the default setup layer installs the two missing tools. The image name is
+ * a convenience, not a guarantee: the worker still calls `assertToolchain`
+ * before any network use and a missing binary fails closed.
  */
 export const DEFAULT_MODAL_IMAGE = "oven/bun:1";
+export const DEFAULT_MODAL_IMAGE_SETUP: readonly string[] = Object.freeze([
+	"RUN apt-get update && apt-get install -y --no-install-recommends git grep && rm -rf /var/lib/apt/lists/*",
+]);
 const MAX_ID_LENGTH = 512;
 const MAX_IMAGE_LENGTH = 255;
 const MAX_NAME_LENGTH = 255;
+const MAX_SETUP_COMMANDS = 8;
+const MAX_SETUP_COMMAND_LENGTH = 2_048;
 
 export interface ModalClientEnv {
 	readonly tokenId: string;
 	readonly tokenSecret: string;
 	readonly appName: string;
 	readonly image?: string;
+	/**
+	 * Dockerfile-like commands applied to the base image before the sandbox is
+	 * created. Omit for an image that already has the toolchain. Builds are
+	 * cached by Modal; only the first create in a fresh environment pays.
+	 */
+	readonly imageSetupCommands?: readonly string[];
 }
 
 /** Minimal structural view of the SDK objects the adapter actually uses. */
@@ -46,6 +58,11 @@ export interface ModalSdkSandbox {
 	terminate(): Promise<void>;
 }
 
+export interface ModalSdkImage {
+	dockerfileCommands?(commands: string[]): ModalSdkImage;
+	build?(app: unknown): Promise<unknown>;
+}
+
 export interface ModalSdkClient {
 	readonly apps: {
 		fromName(
@@ -53,7 +70,7 @@ export interface ModalSdkClient {
 			params?: { createIfMissing?: boolean },
 		): Promise<unknown>;
 	};
-	readonly images: { fromRegistry(tag: string): unknown };
+	readonly images: { fromRegistry(tag: string): ModalSdkImage };
 	readonly sandboxes: {
 		create(
 			app: unknown,
@@ -128,6 +145,32 @@ function alreadyGone(error: unknown): boolean {
 	);
 }
 
+function imageSetup(value: unknown): readonly string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > MAX_SETUP_COMMANDS) {
+		throw new SandboxError(
+			"PROVIDER_UNAVAILABLE",
+			"Modal image setup commands are invalid",
+		);
+	}
+	const commands: string[] = [];
+	for (const command of value) {
+		if (
+			typeof command !== "string" ||
+			command.trim().length === 0 ||
+			command.length > MAX_SETUP_COMMAND_LENGTH ||
+			/[\r\n\0]/.test(command)
+		) {
+			throw new SandboxError(
+				"PROVIDER_UNAVAILABLE",
+				"Modal image setup commands are invalid",
+			);
+		}
+		commands.push(command.trim());
+	}
+	return Object.freeze(commands);
+}
+
 /**
  * Server-only factory for the real Modal SDK. Never call this in offline tests,
  * CI, or the web app: it requires MODAL_TOKEN_ID/MODAL_TOKEN_SECRET and talks
@@ -141,6 +184,7 @@ export async function createModalSandboxClient(
 	const tokenSecret = required(env.tokenSecret, MAX_NAME_LENGTH);
 	const appName = required(env.appName, MAX_NAME_LENGTH);
 	const imageTag = imageReference(env.image);
+	const setupCommands = imageSetup(env.imageSetupCommands);
 
 	const { ModalClient } = await loadSdk();
 	let client: ModalSdkClient;
@@ -153,14 +197,43 @@ export async function createModalSandboxClient(
 		);
 	}
 
-	let image: unknown;
+	let image: ModalSdkImage;
+	let needsBuild = false;
 	try {
 		image = client.images.fromRegistry(imageTag);
+		if (setupCommands.length > 0) {
+			if (typeof image.dockerfileCommands !== "function") {
+				throw new Error("image does not support setup commands");
+			}
+			image = image.dockerfileCommands([...setupCommands]);
+			needsBuild = true;
+		}
 	} catch {
 		throw new SandboxError(
 			"PROVIDER_UNAVAILABLE",
 			"Modal app or image could not be resolved",
 		);
+	}
+
+	let builtImagePromise: Promise<unknown> | undefined;
+	function resolveImage(app: unknown): Promise<unknown> {
+		if (!needsBuild) return Promise.resolve(image);
+		if (typeof image.build !== "function") {
+			return Promise.reject(
+				new SandboxError(
+					"PROVIDER_UNAVAILABLE",
+					"Modal image does not support builds",
+				),
+			);
+		}
+		builtImagePromise ??= image.build(app).catch(() => {
+			builtImagePromise = undefined;
+			throw new SandboxError(
+				"PROVIDER_UNAVAILABLE",
+				"Modal image could not be built",
+			);
+		});
+		return builtImagePromise;
 	}
 
 	// App resolution is the first network call, so it is deferred until a
@@ -188,7 +261,8 @@ export async function createModalSandboxClient(
 			let sandbox: ModalSdkSandbox;
 			try {
 				const app = await resolveApp();
-				sandbox = await client.sandboxes.create(app, image, {
+				const preparedImage = await resolveImage(app);
+				sandbox = await client.sandboxes.create(app, preparedImage, {
 					cpu: params.cpu,
 					memoryMiB: params.memoryMiB,
 					timeoutMs: params.timeoutMs,

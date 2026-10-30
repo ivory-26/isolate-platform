@@ -23,6 +23,8 @@ import {
 import {
 	type BranchLockAcquireResult,
 	type BranchLockInput,
+	type BranchLockRenewInput,
+	type BranchLockRenewResult,
 	type BranchLockRepository,
 	requireBranchLockKey,
 	resolveBranchLockTtlMs,
@@ -320,9 +322,10 @@ type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
  * Shares `requireBranchLockKey` and `resolveBranchLockTtlMs` with the driver,
  * so key and TTL bounds cannot drift. Like the real row: a live lease makes a
  * second acquire `LOCKED`; an expired lease (`expiresAt <= now`) can be taken
- * over; `release` deletes only the caller's lease and is idempotent. One
- * injected clock drives both expiry checks, so a frozen clock cannot behave
- * differently between `acquire` and `heldCount`.
+ * over; `renew` extends only the caller's row and reports `LOST` once another
+ * owner holds it; `release` deletes only the caller's lease and is idempotent.
+ * One injected clock drives both expiry checks, so a frozen clock cannot
+ * behave differently between `acquire` and `heldCount`.
  */
 export class InMemoryBranchLockRepository implements BranchLockRepository {
 	private readonly leases = new Map<
@@ -345,6 +348,7 @@ export class InMemoryBranchLockRepository implements BranchLockRepository {
 		let released = false;
 		return {
 			ok: true,
+			ownerId,
 			release: async () => {
 				if (released) return;
 				released = true;
@@ -355,6 +359,22 @@ export class InMemoryBranchLockRepository implements BranchLockRepository {
 				}
 			},
 		};
+	}
+
+	async renew(input: BranchLockRenewInput): Promise<BranchLockRenewResult> {
+		const key = requireBranchLockKey(input);
+		const ttlMs = resolveBranchLockTtlMs(input.ttlMs);
+		if (typeof input.ownerId !== "string" || input.ownerId.length === 0) {
+			throw new Error("branch lock ownerId must be a non-empty string");
+		}
+		const lease = this.leases.get(key);
+		// Owner-guarded exactly like the UPDATE: a row held by another owner is
+		// indistinguishable from no row to the caller.
+		if (lease === undefined || lease.ownerId !== input.ownerId) {
+			return { ok: false, code: "LOST" };
+		}
+		lease.expiresAt = this.clock().getTime() + ttlMs;
+		return { ok: true };
 	}
 
 	/** Test introspection only: number of live (unexpired) leases. */

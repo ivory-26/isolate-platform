@@ -31,6 +31,21 @@ shared `costPriceTableSchema`:
   sandbox row uses `sandboxCostUsd` over measured wall seconds and the
   provisioned CPU/memory.
 
+## Branch lease and acceptance semantics
+
+- A `run_task`/`resume_task` job holds one row lease per
+  `(organization, repository, branch)` (`branch_locks`). The handler renews it
+  on its per-turn heartbeat points, at most once per
+  `BRANCH_LOCK_RENEW_INTERVAL_MS` (5 minutes; the default lease is 15), and
+  never acquires a second lease. A failed renewal returns the bounded
+  `retry`/`LEASE_LOST` verdict; the sandbox is destroyed and the lease is
+  released (a no-op if it was already taken over).
+- `content_matches` acceptance checks are **literal substring** tests
+  (`text.includes(pattern)`), not regular expressions. Patterns such as
+  `a+`, `^done$` or `([a-z` are matched character for character; regex
+  metacharacters have no special meaning. The shared field name `pattern` and
+  its 200-character bound are unchanged, and no pattern is rejected.
+
 ## Metric vocabulary (`isolate.metric`)
 
 Every metric is one log record: `logger.info("isolate.metric", { metric, ... })`

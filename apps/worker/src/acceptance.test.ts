@@ -250,7 +250,7 @@ describe("acceptance verifier — content_matches", () => {
 		expect(serialized).not.toContain("const SECRET_TOKEN");
 	});
 
-	test("fails when the pattern does not match", async () => {
+	test("fails when the literal substring is absent", async () => {
 		const backend = new FakeBackend({ "a.txt": { content: "nothing here" } });
 		const report = await runAcceptanceChecks(
 			depsFor(new FakeProvider(), backend, [
@@ -265,15 +265,44 @@ describe("acceptance verifier — content_matches", () => {
 		});
 	});
 
-	test("an invalid regular expression fails the check, not the runner", async () => {
-		const backend = new FakeBackend({ "a.txt": { content: "x" } });
+	test("regex metacharacters match literally only", async () => {
+		// `a+` is a literal two-character needle: it matches the text "a+" but
+		// never the run "aaa" a regular expression would accept.
+		const literal = new FakeBackend({
+			"a.txt": { content: "the quantifier a+ stays as written" },
+		});
+		const literalReport = await runAcceptanceChecks(
+			depsFor(new FakeProvider(), literal, [
+				{ kind: "content_matches", path: "a.txt", pattern: "a+" },
+			]),
+		);
+		expect(literalReport.passed).toBe(true);
+
+		const run = new FakeBackend({ "a.txt": { content: "aaa" } });
+		const runReport = await runAcceptanceChecks(
+			depsFor(new FakeProvider(), run, [
+				{ kind: "content_matches", path: "a.txt", pattern: "a+" },
+			]),
+		);
+		expect(runReport.passed).toBe(false);
+		expect(runReport.checks[0]?.detail).toBe("pattern not matched");
+	});
+
+	test("an unterminated character class is a literal needle, not a crash", async () => {
+		const backend = new FakeBackend({
+			"a.txt": { content: "text with ([a-z inside" },
+		});
 		const report = await runAcceptanceChecks(
 			depsFor(new FakeProvider(), backend, [
 				{ kind: "content_matches", path: "a.txt", pattern: "([a-z" },
 			]),
 		);
-		expect(report.passed).toBe(false);
-		expect(report.checks[0]?.detail).toBe("invalid pattern");
+		expect(report.passed).toBe(true);
+		expect(report.checks[0]).toEqual({
+			kind: "content_matches",
+			target: "a.txt",
+			passed: true,
+		});
 	});
 
 	test("a missing file fails with a bounded detail", async () => {

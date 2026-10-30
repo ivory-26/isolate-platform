@@ -24,8 +24,12 @@ import { PlatformError } from "@isolate/shared";
  *
  * Refusals:
  * - a malformed check is reported as a failed check, never silently skipped;
- * - an invalid regular expression fails `content_matches` without echoing the
- *   pattern's target content;
+ * - `content_matches` is a bounded LITERAL substring test (`String#includes`)
+ *   over the capped read, never a compiled regular expression: an
+ *   operator-authored pattern cannot trigger catastrophic backtracking, and
+ *   every character (including `+`, `*`, `(`, `.`, `^`) matches itself. The
+ *   shared schema still calls the field `pattern` and bounds it at 200
+ *   characters; that name is retained for wire compatibility only.
  * - a refused command (not on the validation allowlist) fails the check and
  *   the provider is never called;
  * - cancellation (`CANCELLED` / lease lost) is re-thrown so a lost lease does
@@ -192,12 +196,6 @@ async function evaluateCheck(
 					"read surface unavailable",
 				);
 			}
-			let pattern: RegExp;
-			try {
-				pattern = new RegExp(check.pattern);
-			} catch {
-				return failure("content_matches", check.path, "invalid pattern");
-			}
 			assertNotAborted(deps.signal);
 			let content: string;
 			try {
@@ -217,8 +215,10 @@ async function evaluateCheck(
 						: "file unreadable",
 				);
 			}
-			// Content is tested and discarded: only booleans leave this scope.
-			return pattern.test(content)
+			// Bounded literal substring match: no RegExp is constructed, so no
+			// operator-authored pattern can backtrack. Content is tested and
+			// discarded: only booleans leave this scope.
+			return content.includes(check.pattern)
 				? success("content_matches", check.path)
 				: failure("content_matches", check.path, "pattern not matched");
 		}

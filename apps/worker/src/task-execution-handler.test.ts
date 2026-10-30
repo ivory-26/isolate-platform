@@ -48,6 +48,7 @@ import type {
 import { PlatformError } from "@isolate/shared";
 import type { HandlerContext, HandlerVerdict } from "./contracts";
 import {
+	BRANCH_LOCK_RENEW_INTERVAL_MS,
 	buildTaskPrompt,
 	createResumeTaskHandler,
 	createTaskExecutionHandler,
@@ -2875,6 +2876,153 @@ describe("task execution handler — wave 9 branch lock", () => {
 			harness.logs.some((log) => log.message === "branch lock release failed"),
 		).toBe(true);
 		expect(JSON.stringify(harness.logs)).not.toContain("lock store down");
+	});
+});
+
+/* -------------------- wave 12 — branch lease renewal ---------------------- */
+
+function fakeRenewableLock(renewResult: () => boolean = () => true) {
+	let acquisitions = 0;
+	let releases = 0;
+	let renews = 0;
+	return {
+		acquireBranchLock: async () => {
+			acquisitions += 1;
+			return {
+				release: () => {
+					releases += 1;
+				},
+				renew: async () => {
+					renews += 1;
+					return renewResult();
+				},
+			};
+		},
+		get acquisitions() {
+			return acquisitions;
+		},
+		get releases() {
+			return releases;
+		},
+		get renews() {
+			return renews;
+		},
+	};
+}
+
+describe("task execution handler — wave 12 branch lease renewal", () => {
+	test("renews at most once per interval while the turn loop runs", async () => {
+		const clock = new FakeClock();
+		const lock = fakeRenewableLock();
+		const harness = makeHarness({
+			clock,
+			maxSandboxSeconds: 3600,
+			acquireBranchLock: lock.acquireBranchLock,
+			script: [
+				{
+					output: "working",
+					onTurn: () => clock.advance(BRANCH_LOCK_RENEW_INTERVAL_MS),
+				},
+				{
+					output: "working",
+					// One millisecond short of another interval: no second renew.
+					onTurn: () => clock.advance(BRANCH_LOCK_RENEW_INTERVAL_MS - 1),
+				},
+				{ output: "" },
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.heartbeats).toHaveLength(3);
+		expect(lock.renews).toBe(1);
+		// A renewal extends the SAME lease: never a second acquire.
+		expect(lock.acquisitions).toBe(1);
+		expect(lock.releases).toBe(1);
+	});
+
+	test("a failed renewal aborts with LEASE_LOST and releases once", async () => {
+		const clock = new FakeClock();
+		const lock = fakeRenewableLock(() => false);
+		const harness = makeHarness({
+			clock,
+			maxSandboxSeconds: 3600,
+			workspaceGit: new FakeWorkspaceGit(),
+			acquireBranchLock: lock.acquireBranchLock,
+			script: [
+				{
+					output: "working",
+					onTurn: () => clock.advance(BRANCH_LOCK_RENEW_INTERVAL_MS),
+				},
+				{ output: "" },
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "retry", code: "LEASE_LOST" });
+		// The second turn never started.
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(lock.renews).toBe(1);
+		expect(lock.acquisitions).toBe(1);
+		expect(lock.releases).toBe(1);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a throwing renewal is treated as a lost lease, not an internal fault", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			maxSandboxSeconds: 3600,
+			acquireBranchLock: async () => ({
+				release: () => {},
+				renew: async () => {
+					throw new PlatformError("DB_UNAVAILABLE", "lock store down");
+				},
+			}),
+			script: [
+				{
+					output: "working",
+					onTurn: () => clock.advance(BRANCH_LOCK_RENEW_INTERVAL_MS),
+				},
+				{ output: "" },
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual({ outcome: "retry", code: "LEASE_LOST" });
+		expect(
+			harness.logs.some((log) => log.message === "branch lock renewal failed"),
+		).toBe(true);
+		expect(JSON.stringify(harness.logs)).not.toContain("lock store down");
+	});
+
+	test("a lease without renew keeps the wave-9 behaviour", async () => {
+		const clock = new FakeClock();
+		const lock = fakeRenewableLock();
+		const harness = makeHarness({
+			clock,
+			maxSandboxSeconds: 3600,
+			acquireBranchLock: async () => {
+				const lease = await lock.acquireBranchLock();
+				return { release: lease.release };
+			},
+			script: [
+				{
+					output: "working",
+					onTurn: () => clock.advance(BRANCH_LOCK_RENEW_INTERVAL_MS),
+				},
+				{ output: "" },
+			],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(lock.renews).toBe(0);
+		expect(lock.releases).toBe(1);
 	});
 });
 

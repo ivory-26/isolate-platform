@@ -1,8 +1,25 @@
 # Status
 
-Last updated: 2026-10-30 (wave 11 complete: workflow retired, cost/metrics/summary, blob store live-proven; wave 12 hardening + DevSecOps research starting)
+Last updated: 2026-10-30 (wave 12: hardening merged, connector survey written, signed-webhook intake in progress; **live retry proof passed**)
 
-## Current: wave 11 — P1: runtime clarity, observability, blob storage (merged, `0008` applied, live-proven)
+## Current: wave 12 — Hardening + DevSecOps context (hardening merged, retry live-proven, intake in progress)
+
+Backend hardening only, per the user: no UI, no hosting yet.
+
+- **Approval follow-up is enqueue-first** (`d2f21c9`, merge `e1f9424`): the job is enqueued with `approval:<id>`, `notBefore +15s` and `maxAttempts 60` before the decision commits, so a decision can never strand a task without a job.
+- **Pending means wait** (coordinator, after review): both worker handlers now return a bounded `retry` with `APPROVAL_REQUIRED` while the approval is pending — no task failure, no job consumption. Previously the pre-enqueued job could fail the task before the human answered.
+- **Lease renewal + literal acceptance matching** (`def8254`, merge `bcb8a8b`): `BranchLockRepository.renew` + handler renewal on the heartbeat (5 min against a 15 min lease); `content_matches` is now a bounded literal substring, removing the ReDoS surface.
+- **DevSecOps survey** (`e80f36c`, merge `23cfe35`): `docs/devsecops-connectors.md` — 937 lines, 66 sources, per-connector auth/scopes/webhooks/rate limits, a `ContextBundle` shape with caps and citations, a phased order (webhook → GitHub context → one incident source → metrics → Slack), and a risk register.
+- **Signed incident intake** (`task/h12-foundation`, in progress): `IncidentSignal`/`ContextBundle` contracts, HMAC webhook verification (timestamp window, 64 KiB cap, constant-time), dedupe by fingerprint, and a server-only route that creates a task through the normal submission path with the payload marked untrusted.
+- **Live retry proof (2026-10-30)**: failed task `06090543…` → `retryTask` → new task `ef96f8d7…` on `task/w8-live-9c768d96-retry-1`, `retry_of` linked, depth 1, exactly one `run_task`, one attempt, diff artifact, status `review_ready`. Real Meta turns **6403/1801** and **8742/3261** tokens; one Modal sandbox 97 s; **0 running** after. Push disabled, so no GitHub write.
+- **Gates on `main`**: biome 0 errors · typecheck 8/8 · **1574 pass / 0 fail** offline · `acceptance:offline` PASS.
+
+### Wave 12 open items
+1. Vendor connectors need answers from the user (accounts/plans, which incidents create tasks, allowed writes, data-retention rules) — `docs/devsecops-connectors.md §7`.
+2. UI and deployment remain deferred by the user; deployment stays local for now.
+3. Acceptance PRs `#1`, `#2` and branches remain as evidence.
+
+## Previous: wave 11 — P1: runtime clarity, observability, blob storage (merged, `0008` applied, live-proven)
 
 - **Mastra SDLC workflow retired** (`2101dca`, merge `e9df7e1`): `createSdlcWorkflow`, its test and the unused `defaultSdlcPlan` are deleted; `ARCHITECTURE.md` now names `apps/worker/src/task-execution-handler.ts` as the runtime of record. A Mastra workflow only returns with a plan-execution design.
 - **Observability and cost** (`1299ff7`, merge `4a16950`): `COST_PRICE_TABLE` is parsed once at boot (`pricing.ts`, absent → null, present-invalid → fail closed); model rows use `modelCallCostUsd`, sandbox rows `sandboxCostUsd` from measured seconds; `buildRunSummary` + `summarizeTask` roll up tokens, sandbox seconds, attempts, artifacts, validation and PR; fixed-name metrics (`worker.job.*`, `worker.turn.latency_ms`, `worker.sandbox.seconds`, `worker.validation.outcome`, `worker.pr.outcome`) emit through the logger with a whitelist that drops payloads.

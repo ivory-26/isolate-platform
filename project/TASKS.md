@@ -521,6 +521,9 @@ User decision (2026-10-30): finish backend hardening and evaluate the DevSecOps 
 
 Coordinator integration after the merges: both handlers now **wait** on a `pending` approval (bounded retry, no task transition) instead of failing or consuming the job, and the pre-enqueued follow-up uses `APPROVAL_FOLLOW_UP_MAX_ATTEMPTS = 60`; tests added for both handlers. Documented in DECISIONS and CHALLENGES, including the queue-backoff clarification.
 
+**Live retry proof (2026-10-30)**: `retryTask` on failed task `06090543…` created `ef96f8d7…` (`retry_of` linked, depth 1, branch `task/w8-live-9c768d96-retry-1`), exactly one `run_task`, one attempt and a diff artifact; the worker ran real Meta turns in one Modal sandbox (97 s) and stopped at `review_ready` (push disabled). Meta 6403/1801 and 8742/3261 tokens; 0 sandboxes after.
+
+
 ## Wave 13 — Product surface (web UI) and deployment decision (planned; blocked on user input)
 
 - **Does not start without the user's design direction.** Design-system/token pass, run detail, approvals page, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).

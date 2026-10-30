@@ -5,7 +5,8 @@ export type SandboxErrorCode =
 	| "TIMEOUT"
 	| "OUTPUT_LIMIT"
 	| "CANCELLED"
-	| "GIT_FAILED";
+	| "GIT_FAILED"
+	| "SANDBOX_IMAGE_UNSUPPORTED";
 
 /** Messages never include repository output, command arguments, or credentials. */
 export class SandboxError extends Error {

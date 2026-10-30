@@ -33,7 +33,7 @@ const worktrees = new WeakMap<
 >();
 
 // Defense in depth INSIDE the sandbox, never a host security boundary.
-const GIT_OPTIONS = [
+export const GIT_OPTIONS = [
 	"--no-pager",
 	"--no-optional-locks",
 	"--no-replace-objects",

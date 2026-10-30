@@ -5,7 +5,12 @@ import type {
 	ModalSandboxClient,
 } from "./modal";
 
-export const DEFAULT_MODAL_IMAGE = "node:22-bookworm";
+/**
+ * Git + Bun image. The image name is a convenience, not a guarantee: the
+ * worker calls `assertToolchain` (git, bun, grep) before any network use and a
+ * missing binary fails closed as `SANDBOX_IMAGE_UNSUPPORTED`.
+ */
+export const DEFAULT_MODAL_IMAGE = "oven/bun:1";
 const MAX_ID_LENGTH = 512;
 const MAX_IMAGE_LENGTH = 255;
 const MAX_NAME_LENGTH = 255;
@@ -18,7 +23,15 @@ export interface ModalClientEnv {
 }
 
 /** Minimal structural view of the SDK objects the adapter actually uses. */
+export interface ModalSdkWriteStream {
+	/** Text mode; `writeText` is the SDK convenience over the WritableStream. */
+	writeText(text: string): Promise<void>;
+	/** EOF; the WritableStream `close()` marks stdin finished. */
+	close(): Promise<void>;
+}
+
 export interface ModalSdkProcess {
+	readonly stdin?: ModalSdkWriteStream;
 	readonly stdout: { readText(): Promise<string> };
 	readonly stderr: { readText(): Promise<string> };
 	wait(): Promise<number>;
@@ -188,6 +201,7 @@ export async function createModalSandboxClient(
 								outboundDomainAllowlist: [...params.outboundDomainAllowlist],
 							}
 						: {}),
+					...(params.env ? { env: { ...params.env } } : {}),
 				});
 			} catch (error) {
 				if (error instanceof SandboxError) throw error;
@@ -211,7 +225,7 @@ export async function createModalSandboxClient(
 			return { id };
 		},
 
-		async exec(id, argv, params): Promise<ModalExecResult> {
+		async exec(id, argv, params, stdinText): Promise<ModalExecResult> {
 			const sandbox = sandboxes.get(id);
 			if (!sandbox) {
 				throw new SandboxError(
@@ -230,6 +244,26 @@ export async function createModalSandboxClient(
 					"PROVIDER_UNAVAILABLE",
 					"Modal command could not be started",
 				);
+			}
+
+			// Stdin is written and closed (EOF) before output is consumed. The
+			// payload is trusted tooling content and must never appear in errors.
+			if (stdinText !== undefined) {
+				if (!proc.stdin) {
+					throw new SandboxError(
+						"PROVIDER_UNAVAILABLE",
+						"Modal command stdin is unavailable",
+					);
+				}
+				try {
+					await proc.stdin.writeText(stdinText);
+					await proc.stdin.close();
+				} catch {
+					throw new SandboxError(
+						"PROVIDER_UNAVAILABLE",
+						"Modal command stdin failed",
+					);
+				}
 			}
 
 			// Streams are consumed concurrently; a deadline rejection must not lose

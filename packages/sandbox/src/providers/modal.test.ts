@@ -52,6 +52,7 @@ interface ExecCall {
 	readonly id: string;
 	readonly argv: readonly string[];
 	readonly params: ModalExecParams;
+	readonly stdinText?: string;
 }
 
 interface FakeOptions {
@@ -60,6 +61,7 @@ interface FakeOptions {
 		id: string,
 		argv: readonly string[],
 		params: ModalExecParams,
+		stdinText?: string,
 	) => Promise<ModalExecResult>;
 	readonly terminate?: (id: string) => Promise<void>;
 }
@@ -75,10 +77,15 @@ function fakeClient(options: FakeOptions = {}) {
 			calls.create.push(params);
 			return options.create ? options.create(params) : { id: "sb-1" };
 		},
-		exec: async (id, argv, params) => {
-			calls.exec.push({ id, argv, params });
+		exec: async (id, argv, params, stdinText) => {
+			calls.exec.push({
+				id,
+				argv,
+				params,
+				...(stdinText === undefined ? {} : { stdinText }),
+			});
 			return options.exec
-				? options.exec(id, argv, params)
+				? options.exec(id, argv, params, stdinText)
 				: { exitCode: 0, stdout: "", stderr: "", timedOut: false };
 		},
 		terminate: async (id) => {
@@ -87,6 +94,12 @@ function fakeClient(options: FakeOptions = {}) {
 		},
 	};
 	return { client, calls };
+}
+
+function tooManyEnvKeys(): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (let index = 0; index < 17; index++) env[`KEY_${index}`] = "v";
+	return env;
 }
 
 function clock(values: readonly number[]): () => number {
@@ -155,6 +168,36 @@ describe("ModalSandboxProvider.create", () => {
 		const provider = new ModalSandboxProvider({ client });
 		await provider.create({ ...spec, idleTimeoutMs: 60_000 });
 		expect(calls.create[0].idleTimeoutMs).toBe(60_000);
+	});
+
+	test("forwards create-time env exactly without leaking it into argv", async () => {
+		const token = "ghs_w7sbx_forwarded_secret";
+		const env = {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${token}`,
+		};
+		const { client, calls } = fakeClient();
+		const provider = new ModalSandboxProvider({ client });
+		await provider.create({ ...spec, env });
+		expect(calls.create[0].env).toEqual(env);
+		expect((calls.create[0].command ?? []).join(" ")).not.toContain(token);
+		expect(JSON.stringify(calls.create[0].command)).not.toContain(token);
+	});
+
+	test.each([
+		["lowercase name", { git_config_count: "1" }],
+		["non-string value", { KEY: 7 }],
+		["oversized value", { KEY: "v".repeat(4097) }],
+		["control character", { KEY: "a\nb" }],
+		["too many keys", tooManyEnvKeys()],
+	] as const)("rejects invalid env (%s) before provisioning", async (_label, env) => {
+		const { client, calls } = fakeClient();
+		const provider = new ModalSandboxProvider({ client });
+		await expect(
+			provider.create({ ...spec, env: env as Record<string, string> }),
+		).rejects.toMatchObject({ code: "POLICY_DENIED" });
+		expect(calls.create).toHaveLength(0);
 	});
 
 	test("maps an allowlist policy to outboundDomainAllowlist with network enabled", async () => {
@@ -252,6 +295,26 @@ describe("ModalSandboxProvider.execute", () => {
 			argv: ["git", "--version"],
 			params: { timeoutMs: 5_000, workdir: "/workspace/repo" },
 		});
+	});
+
+	test("forwards trusted stdin text to the client as its fourth argument", async () => {
+		const { client, calls } = fakeClient({
+			exec: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const provider = new ModalSandboxProvider({ client });
+		await provider.execute(
+			{ id: "sb-1", workspaceRoot: "/workspace" },
+			authorized(),
+			undefined,
+			"file content",
+		);
+		expect(calls.exec[0].stdinText).toBe("file content");
+		expect(calls.exec[0].argv).toEqual(["git", "--version"]);
 	});
 
 	test("maps a timed-out command to the conventional timeout exit code", async () => {

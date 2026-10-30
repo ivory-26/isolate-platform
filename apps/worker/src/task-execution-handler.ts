@@ -788,23 +788,46 @@ function createHandler(
 						return leaseLostVerdict();
 					}
 					if (stop.kind === "budget") {
-						if (mode !== null) {
-							await transitionLifecycle(
-								mode.lifecycle,
-								ctx.logger,
-								{
-									organizationId: job.organizationId,
-									taskId: job.taskId,
-									from: "executing",
-									to: "failed",
-									actor: "worker",
+						// A finished turn that produced changes is the task's completion
+						// even when the model ends with a summary instead of the empty
+						// sentinel; the diff gate, validation and the human approval still
+						// decide what ships. Only the TURN budget qualifies: token, cost
+						// and wall-time caps stay hard failures.
+						const turnBudget = stop.note === "agent turn budget exhausted";
+						const producedChanges =
+							turnBudget &&
+							mode !== null &&
+							workspaceGit !== null &&
+							workspace !== null &&
+							(
+								await workspaceGit.diffStat(
+									workspace,
+									context.baseBranch,
+									ctx.signal,
+								)
+							).filesChanged > 0;
+						if (!producedChanges) {
+							if (mode !== null) {
+								await transitionLifecycle(
+									mode.lifecycle,
+									ctx.logger,
+									{
+										organizationId: job.organizationId,
+										taskId: job.taskId,
+										from: "executing",
+										to: "failed",
+										actor: "worker",
+										reason: "budget exhausted",
+									},
+									true,
+								);
+								attemptOutcome = {
+									status: "failed",
 									reason: "budget exhausted",
-								},
-								true,
-							);
-							attemptOutcome = { status: "failed", reason: "budget exhausted" };
+								};
+							}
+							return budgetVerdict(stop.note);
 						}
-						return budgetVerdict(stop.note);
 					}
 					if (stop.kind === "cancelled") {
 						if (mode !== null) {

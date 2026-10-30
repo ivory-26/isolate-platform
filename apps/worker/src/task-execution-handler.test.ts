@@ -837,6 +837,51 @@ describe("task execution handler — budgets", () => {
 		expect(modelRows(harness.sink.rows)).toHaveLength(2);
 	});
 
+	test("turn cap exhausted after a produced diff → review_ready, not BUDGET_EXCEEDED", async () => {
+		// Muse Spark ends a productive turn with a summary instead of the empty
+		// sentinel; the work must not be discarded when only the TURN budget ran out.
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 2 } },
+			script: [{ output: "summary one" }, { output: "summary two" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict.outcome).toBe("complete");
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+		expect(eventTypes(lifecycle)).toContain("validation.finished");
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("turn cap exhausted with an empty diff still fails closed", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 0,
+			insertions: 0,
+			deletions: 0,
+			files: [],
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 1 } },
+			script: [{ output: "summary only" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "agent turn budget exhausted",
+		});
+	});
+
 	test("zero turn allowance fails before provisioning", async () => {
 		const harness = makeHarness({
 			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 0 } },

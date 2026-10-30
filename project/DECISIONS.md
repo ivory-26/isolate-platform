@@ -275,3 +275,10 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: Modal rejects an allowlist combined with `blockNetwork` even when it is `false`; the d.ts states the two are mutually exclusive. Omitting the flag is the only valid representation of "network on, confined to these domains".
 - Consequences: the first live allowlist clone/push attempt failed before a sandbox was created; after the fix, the parameter shape is covered by fake-client tests. The corrected live rerun awaits explicit authorization because the credit policy forbids retrying after a failure without asking.
 - Alternatives rejected: sending `blockNetwork: true` with the allowlist (rejected by Modal and would block the clone); removing the allowlist (would leave network unrestricted).
+
+## 2026-10-30 — W7: the handler forwards a lifetime-clamped idle timeout
+
+- Decision: `TaskExecutionHandler` forwards `deps.sandbox.idleTimeoutMs` into `SandboxSpec` as `min(configuredIdle, lifetimeMs)`; when unset it omits the field. `lifetimeMs` itself remains `min(providerLifetime, maxSandboxSeconds*1000)`.
+- Rationale: the Modal adapter defaults idle to 300 s. A shorter sandbox lifetime (the live acceptance uses 240 s) makes that default invalid and the provider correctly denies provisioning. Carrying the value in deps without forwarding it turned a valid config into a `POLICY_DENIED` before any sandbox existed.
+- Consequences: every spec carries a self-consistent lifetime/idle pair; the adapter default is only used when the caller truly did not configure an idle bound. This is covered by a handler test that asserts the clamped value.
+- Alternatives rejected: raising the live lifetime to 300 s (still leaves the general handler bug); lowering the adapter default (changes behavior for every caller); dropping idle limits (unbounded idle spend).

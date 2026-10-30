@@ -362,3 +362,10 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: `SandboxError` is not a `PlatformError`; the handler's `toVerdict` mapped every non-PlatformError to retry `INTERNAL` without the adapter code.
 - Correction: `SandboxError` codes are mapped to bounded platform codes (`PROVIDER_UNAVAILABLE` → `INTEGRATION_UNAVAILABLE` retry; policy/other failures → dead-letter), and the failure log carries a bounded `sandboxCode` field. No message, path or credential is logged.
 - Prevention: every adapter boundary that can throw should map its own bounded code; "unknown → INTERNAL" is a last resort, not the normal path for a typed adapter.
+
+## 2026-10-30 — W7: an omitted idle timeout exceeded the sandbox lifetime
+
+- Symptom: the second live push attempt also failed at provisioning with `sandboxCode: POLICY_DENIED`, no sandbox usage row and no `workspace.cloned` event. The Modal egress fix was already in place.
+- Root cause: the handler carried `deps.sandbox.idleTimeoutMs` but never forwarded it into `SandboxSpec`. `ModalSandboxProvider` then used its 300 s default idle window, while the live spec lifetime was 240 s; `validateIdleTimeout(idle, lifetime)` correctly denied it before any sandbox existed.
+- Correction: the handler now computes one bounded `lifetimeMs` and forwards `idleTimeoutMs` clamped to that lifetime (or omits it when unset). The handler test asserts the forwarded spec includes the clamped idle bound.
+- Prevention: when a provider has a default for a resource bound, validate that default against the other configured bounds and forward every explicit limit. A missing optional field is not "no constraint"; it is the adapter's default.

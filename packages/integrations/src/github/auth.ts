@@ -11,11 +11,27 @@ import type { GitHubCredentials } from "./types";
  */
 export type GitHubRepoPermission = "read" | "write";
 
+/**
+ * Permissions a token may request. `contents` stays required (defaults are
+ * unchanged); wave 13 adds the read scopes for context assembly and the narrow
+ * write scopes for audited comment/rerun calls:
+ *
+ *  - `actions: read` — workflow runs and job metadata (never log bodies)
+ *  - `checks: read` — check suites and check runs
+ *  - `issues: write` — comment on a pull request/issue
+ *  - `administration: read` — branch protection and rulesets
+ *
+ * The minted token can never exceed what the App installation was granted.
+ */
 export type GitHubInstallationTokenRequest = {
 	/** `owner/name`; the token is scoped to this repository only. */
 	readonly repositoryFullName: string;
 	readonly contents: GitHubRepoPermission;
 	readonly pullRequests?: GitHubRepoPermission;
+	readonly actions?: GitHubRepoPermission;
+	readonly checks?: GitHubRepoPermission;
+	readonly issues?: GitHubRepoPermission;
+	readonly administration?: GitHubRepoPermission;
 };
 
 export type GitHubInstallationToken = {
@@ -66,8 +82,8 @@ type NormalizedConfig = {
 type ValidatedRequest = {
 	readonly repositoryFullName: string;
 	readonly repositoryName: string;
-	readonly contents: GitHubRepoPermission;
-	readonly pullRequests?: GitHubRepoPermission;
+	/** Wire-shaped permissions (`pull_requests`, `administration`, ...). */
+	readonly permissions: Readonly<Record<string, GitHubRepoPermission>>;
 };
 
 type CacheEntry = {
@@ -190,6 +206,18 @@ function isRepoPermission(value: unknown): value is GitHubRepoPermission {
 	return value === "read" || value === "write";
 }
 
+/**
+ * Optional permission fields, in camelCase request form and snake_case wire
+ * form. `contents` is handled separately because it is required.
+ */
+const OPTIONAL_PERMISSIONS = [
+	["pullRequests", "pull_requests"],
+	["actions", "actions"],
+	["checks", "checks"],
+	["issues", "issues"],
+	["administration", "administration"],
+] as const;
+
 function validateRequest(
 	request: GitHubInstallationTokenRequest,
 ): ValidatedRequest {
@@ -210,23 +238,25 @@ function validateRequest(
 			"contents permission must be read or write",
 		);
 	}
-	if (
-		request.pullRequests !== undefined &&
-		!isRepoPermission(request.pullRequests)
-	) {
-		throw new PlatformError(
-			"VALIDATION_FAILED",
-			"pullRequests permission must be read or write",
-		);
+	const permissions: Record<string, GitHubRepoPermission> = {
+		contents: request.contents,
+	};
+	for (const [field, wireName] of OPTIONAL_PERMISSIONS) {
+		const value = request[field];
+		if (value === undefined) continue;
+		if (!isRepoPermission(value)) {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				`${field} permission must be read or write`,
+			);
+		}
+		permissions[wireName] = value;
 	}
 	const separator = request.repositoryFullName.indexOf("/");
 	return {
 		repositoryFullName: request.repositoryFullName,
 		repositoryName: request.repositoryFullName.slice(separator + 1),
-		contents: request.contents,
-		...(request.pullRequests === undefined
-			? {}
-			: { pullRequests: request.pullRequests }),
+		permissions,
 	};
 }
 
@@ -396,13 +426,7 @@ export function createGitHubAppTokenProvider(
 				},
 				body: JSON.stringify({
 					repository: request.repositoryName,
-					permissions:
-						request.pullRequests === undefined
-							? { contents: request.contents }
-							: {
-									contents: request.contents,
-									pull_requests: request.pullRequests,
-								},
+					permissions: request.permissions,
 				}),
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
@@ -436,7 +460,11 @@ export function createGitHubAppTokenProvider(
 	return {
 		async getInstallationToken(request) {
 			const validated = validateRequest(request);
-			const cacheKey = `${validated.repositoryFullName}|${validated.contents}|${validated.pullRequests ?? ""}`;
+			const permissionKey = Object.entries(validated.permissions)
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([name, level]) => `${name}=${level}`)
+				.join(",");
+			const cacheKey = `${validated.repositoryFullName}|${permissionKey}`;
 			const nowMs = config.now();
 
 			const cached = cache.get(cacheKey);

@@ -575,3 +575,46 @@ describe("create_pull_request handler — payload and leak surface", () => {
 		).toBeLessThanOrEqual(20_000);
 	});
 });
+
+describe("create_pull_request handler — wave 11 metrics", () => {
+	function prMetric(logs: LogRecord[]): LogFields | undefined {
+		return logs.find((log) => log.message === "isolate.metric")?.fields;
+	}
+
+	test("a created pull request emits outcome created with no payload text", async () => {
+		const harness = makeHarness();
+		harness.lifecycle.approval = {
+			status: "approved",
+			payloadSha256: await approvedSha(),
+		};
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(prMetric(harness.logs)).toEqual({
+			metric: "worker.pr.outcome",
+			taskId: TASK_ID,
+			outcome: "created",
+		});
+		const serialized = JSON.stringify(harness.logs);
+		expect(serialized).not.toContain("Automated change");
+		expect(serialized).not.toContain("repositoryFullName");
+	});
+
+	test("an ineligible task emits outcome skipped", async () => {
+		const harness = makeHarness({
+			taskState: {
+				status: "failed",
+				pullRequestNumber: null,
+				pullRequestUrl: null,
+			},
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(prMetric(harness.logs)).toMatchObject({
+			metric: "worker.pr.outcome",
+			outcome: "skipped",
+			code: "TASK_NOT_ELIGIBLE",
+		});
+	});
+});

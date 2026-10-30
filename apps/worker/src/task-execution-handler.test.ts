@@ -416,7 +416,7 @@ type HarnessOptions = {
 	sandbox?: Partial<TaskExecutionDeps["sandbox"]>;
 	maxSandboxSeconds?: number;
 	maxCostUsdPerTask?: number;
-	priceTable?: TaskExecutionDeps["sandboxPriceTable"];
+	priceTable?: TaskExecutionDeps["priceTable"];
 	script?: ScriptTurn[];
 	runtime?: RuntimeScript;
 	provider?: FakeProvider;
@@ -496,9 +496,9 @@ function makeHarness(options: HarnessOptions = {}) {
 		},
 		maxSandboxSeconds: options.maxSandboxSeconds ?? 120,
 		maxCostUsdPerTask: options.maxCostUsdPerTask ?? 1,
-		sandboxPriceTable:
+		priceTable:
 			options.priceTable === undefined
-				? { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 }
+				? { models: [], sandbox: { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 } }
 				: options.priceTable,
 		now: clock.now,
 		...(options.lifecycle === undefined
@@ -1005,7 +1005,10 @@ describe("task execution handler — sandbox spend", () => {
 		const harness = makeHarness({
 			clock,
 			sandbox: { cpuCount: 2, memoryMb: 2048, lifetimeMs: 600_000 },
-			priceTable: { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 },
+			priceTable: {
+				models: [],
+				sandbox: { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 },
+			},
 			script: [{ output: "", onTurn: () => clock.advance(2000) }],
 		});
 		await harness.handler.handle(harness.job, harness.ctx);
@@ -1404,6 +1407,8 @@ describe("task execution handler — wave 7 execution flow", () => {
 			deletions: 2,
 			// Wave 9: no checks and no command — explicitly the diff-only fallback.
 			completion: "diff-only",
+			// Wave 11: measured sandbox time (frozen clock -> 0s).
+			sandboxSeconds: 0,
 		});
 
 		// Clone/push need GitHub egress; tool calls still authorize deny.
@@ -1468,6 +1473,7 @@ describe("task execution handler — wave 7 execution flow", () => {
 		expect(lastAttemptOutcome(lifecycle)).toEqual({
 			status: "failed",
 			reason: "empty diff",
+			sandboxSeconds: 0,
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
@@ -1493,7 +1499,10 @@ describe("task execution handler — wave 7 execution flow", () => {
 			["planning", "executing"],
 			["executing", "cancelled"],
 		]);
-		expect(lastAttemptOutcome(lifecycle)).toEqual({ status: "cancelled" });
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "cancelled",
+			sandboxSeconds: 0,
+		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
@@ -1530,7 +1539,10 @@ describe("task execution handler — wave 7 execution flow", () => {
 		expect(JSON.stringify(verdict)).not.toContain("token");
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 		expect(harness.runtime.runTurns).toHaveLength(0);
-		expect(lastAttemptOutcome(lifecycle)).toEqual({ status: "failed" });
+		expect(lastAttemptOutcome(lifecycle)).toEqual({
+			status: "failed",
+			sandboxSeconds: 0,
+		});
 	});
 
 	test("emits no turn summaries or credentials through lifecycle records", async () => {
@@ -1760,6 +1772,7 @@ describe("task execution handler — wave 7 push failure", () => {
 		expect(lastAttemptOutcome(lifecycle)).toEqual({
 			status: "failed",
 			reason: "push failed",
+			sandboxSeconds: 0,
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
@@ -1980,6 +1993,7 @@ describe("task execution handler — wave 8 validation gate", () => {
 			status: "failed",
 			reason: "validation command denied",
 			error: "POLICY_DENIED",
+			sandboxSeconds: 0,
 		});
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
@@ -2641,5 +2655,133 @@ describe("task execution handler — wave 9 branch lock", () => {
 			harness.logs.some((log) => log.message === "branch lock release failed"),
 		).toBe(true);
 		expect(JSON.stringify(harness.logs)).not.toContain("lock store down");
+	});
+});
+
+/* ---------------------- wave 11 — trusted cost + metrics -------------------- */
+
+describe("task execution handler — wave 11 cost accounting", () => {
+	test("model rows are priced from the trusted table, not the runtime value", async () => {
+		const harness = makeHarness({
+			priceTable: {
+				models: [
+					{
+						modelId: "test-model",
+						promptTokenUsdPerMillion: 1,
+						completionTokenUsdPerMillion: 2,
+					},
+				],
+				sandbox: { cpuSecondUsd: 0, gibSecondUsd: 0 },
+			},
+			script: [
+				{ output: "", promptTokens: 10, completionTokens: 5, costUsd: 99 },
+			],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		const modelRow = modelRows(harness.sink.rows)[0];
+		// 10 prompt tokens * $1/M + 5 completion tokens * $2/M
+		expect(modelRow?.costUsd).toBe(0.00002);
+	});
+
+	test("an uncovered model keeps the runtime-reported cost when a table exists", async () => {
+		const harness = makeHarness({
+			priceTable: { models: [], sandbox: { cpuSecondUsd: 0, gibSecondUsd: 0 } },
+			script: [{ output: "", costUsd: 0.001 }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(modelRows(harness.sink.rows)[0]?.costUsd).toBe(0.001);
+	});
+
+	test("a null table leaves model and sandbox cost exactly as before", async () => {
+		const harness = makeHarness({
+			priceTable: null,
+			script: [{ output: "", costUsd: 0.001 }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(modelRows(harness.sink.rows)[0]?.costUsd).toBe(0.001);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBeNull();
+	});
+
+	test("the measured sandbox time is recorded on the attempt for the summary", async () => {
+		const clock = new FakeClock();
+		const lifecycle = new FakeLifecycle();
+		const harness = makeHarness({
+			clock,
+			lifecycle,
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "", onTurn: () => clock.advance(7000) }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(lastAttemptOutcome(lifecycle)).toMatchObject({
+			status: "review_ready",
+			sandboxSeconds: 7,
+		});
+	});
+});
+
+describe("task execution handler — wave 11 metrics", () => {
+	function metricRecords(logs: LogRecord[]): LogFields[] {
+		return logs
+			.filter((log) => log.message === "isolate.metric")
+			.map((log) => log.fields);
+	}
+
+	test("emits turn, sandbox and validation metrics with bounded fields", async () => {
+		const harness = makeHarness({
+			lifecycle: new FakeLifecycle(),
+			workspaceGit: new FakeWorkspaceGit(),
+			script: [{ output: "working" }, { output: "" }],
+		});
+
+		await harness.handler.handle(harness.job, harness.ctx);
+
+		const records = metricRecords(harness.logs);
+		const turns = records.filter(
+			(record) => record.metric === "worker.turn.latency_ms",
+		);
+		expect(turns).toHaveLength(2);
+		expect(turns.map((record) => record.turn)).toEqual([1, 2]);
+		const sandbox = records.filter(
+			(record) => record.metric === "worker.sandbox.seconds",
+		);
+		expect(sandbox).toHaveLength(1);
+		expect(typeof sandbox[0]?.seconds).toBe("number");
+		const validation = records.filter(
+			(record) => record.metric === "worker.validation.outcome",
+		);
+		// No configured command: the gate is recorded as skipped, not passed.
+		expect(validation).toEqual([
+			{ metric: "worker.validation.outcome", outcome: "skipped" },
+		]);
+		// No prompt or tool payload ever reaches a metric record.
+		const serialized = JSON.stringify(records);
+		expect(serialized).not.toContain("Fix the widget");
+		expect(serialized).not.toContain("SECRET");
+	});
+
+	test("a failing validation command emits outcome failed", async () => {
+		const valid = makeHarness({
+			workspaceGit: new FakeWorkspaceGit(),
+			lifecycle: new FakeLifecycle(),
+			validationPolicy: { command: "bun test", timeoutMs: 5000 },
+			executeHandler: () => commandResult({ exitCode: 1, stdout: "boom" }),
+			script: [{ output: "" }],
+		});
+
+		await valid.handler.handle(valid.job, valid.ctx);
+
+		expect(
+			metricRecords(valid.logs).filter(
+				(record) => record.metric === "worker.validation.outcome",
+			),
+		).toMatchObject([{ outcome: "failed" }]);
 	});
 });

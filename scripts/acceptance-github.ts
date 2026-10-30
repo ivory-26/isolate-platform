@@ -200,7 +200,7 @@ try {
 		},
 		maxSandboxSeconds: 240,
 		maxCostUsdPerTask: 1,
-		sandboxPriceTable: null,
+		priceTable: null,
 	};
 
 	const task = await tasks.create({

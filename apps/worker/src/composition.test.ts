@@ -80,7 +80,7 @@ describe("worker composition — offline defaults", () => {
 		});
 		expect(deps.maxSandboxSeconds).toBe(CONFIG.maxSandboxSeconds);
 		expect(deps.maxCostUsdPerTask).toBe(CONFIG.maxCostUsdPerTask);
-		expect(deps.sandboxPriceTable).toBeNull();
+		expect(deps.priceTable).toBeNull();
 		expect(deps.sandboxPolicy.egress).toEqual({ mode: "deny" });
 		expect(deps.sandboxPolicy.workspaceRoot).toBe("/workspace/task");
 		expect(deps.sandbox.cpuCount).toBe(1);
@@ -251,7 +251,7 @@ describe("worker composition — adapter overrides", () => {
 			sandbox: { cpuCount: 2, memoryMb: 2048, lifetimeMs: 30_000 },
 			maxSandboxSeconds: 30,
 			maxCostUsdPerTask: 0,
-			sandboxPriceTable: { cpuSecondUsd: 1, gibSecondUsd: 1 },
+			priceTable: { models: [], sandbox: { cpuSecondUsd: 1, gibSecondUsd: 1 } },
 		});
 		const deps = composition.taskExecution;
 
@@ -272,9 +272,9 @@ describe("worker composition — adapter overrides", () => {
 		});
 		expect(deps.maxSandboxSeconds).toBe(30);
 		expect(deps.maxCostUsdPerTask).toBe(0);
-		expect(deps.sandboxPriceTable).toEqual({
-			cpuSecondUsd: 1,
-			gibSecondUsd: 1,
+		expect(deps.priceTable).toEqual({
+			models: [],
+			sandbox: { cpuSecondUsd: 1, gibSecondUsd: 1 },
 		});
 	});
 

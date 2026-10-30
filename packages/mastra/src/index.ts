@@ -2,6 +2,7 @@ export * from "./agents/baseten";
 export * from "./agents/meta";
 export * from "./agents/runtime";
 export * from "./agents/types";
+export * from "./tools/ownership";
 export * from "./tools/policy";
 export * from "./tools/registry";
 export * from "./tools/sandbox-backend";

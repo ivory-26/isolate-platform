@@ -111,6 +111,8 @@ export type CodingAgentRuntimeFactoryOptions = {
 		organizationId: string;
 		taskId: string;
 		scopes?: readonly string[];
+		/** Wave 7: authored paths the task may modify; empty means no writes. */
+		fileOwnership?: readonly string[];
 	};
 };
 

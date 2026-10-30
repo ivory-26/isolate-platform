@@ -58,6 +58,12 @@ export type ToolCallContext = {
 	organizationId: string;
 	taskId: string;
 	scopes: readonly string[];
+	/**
+	 * Wave 7: authored paths this task may modify (globs allowed). Absent or
+	 * empty means "no write tool may run". Supplied by the worker from the
+	 * persisted task row, never by the model.
+	 */
+	fileOwnership?: readonly string[];
 };
 
 /**

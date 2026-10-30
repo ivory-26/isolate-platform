@@ -129,7 +129,8 @@ const MAX_LOGGED_TURN = 10_000;
  * The full patch is stored in a `BlobStore` when it outgrows the inline
  * column; `content` then carries only the leading preview. The store ceiling
  * is 2 MiB. The sandbox workspace adapter currently refuses a patch request
- * above its own `MAX_PATCH_BYTES` (256 KiB), so the request is clamped: asking
+ * above its own `MAX_PATCH_BYTES` (1 MiB, the policy output ceiling), so the
+ * request is clamped: asking
  * for more would make every lifecycle run fail with POLICY_DENIED. When that
  * adapter bound is raised, this call already asks for the full store ceiling.
  */

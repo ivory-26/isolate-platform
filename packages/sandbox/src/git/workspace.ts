@@ -34,7 +34,10 @@ const PUSH_OUTPUT_BYTES = 16_384;
 
 export const MAX_DIFF_FILES = 200;
 export const DEFAULT_PATCH_BYTES = 65_536;
-export const MAX_PATCH_BYTES = 262_144;
+// Matches the command policy output ceiling (1 MiB). Payloads above the
+// 256 KiB inline artifact cap go to the blob store; this is the hard bound a
+// caller may request.
+export const MAX_PATCH_BYTES = 1_048_576;
 
 export const DEFAULT_COMMIT_AUTHOR = Object.freeze({
 	name: "Isolate Agent",

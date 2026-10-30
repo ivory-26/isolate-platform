@@ -10,6 +10,9 @@ import type {
 	SandboxProvider,
 } from "./providers/types";
 
+/** Bounded stdin payload for trusted file writes; never echoed or logged. */
+export const MAX_STDIN_BYTES = 1_048_576;
+
 /** Result checks detect broken adapters; they cannot replace isolation or stream caps. */
 export async function executeCommand(
 	provider: SandboxProvider,
@@ -17,13 +20,20 @@ export async function executeCommand(
 	policy: CommandPolicy,
 	request: CommandRequest,
 	signal?: AbortSignal,
+	stdinText?: string,
 ): Promise<CommandResult> {
 	if (sandbox.workspaceRoot !== policy.workspaceRoot)
 		deny("Policy does not belong to this sandbox");
 	if (signal?.aborted)
 		throw new SandboxError("CANCELLED", "Command was cancelled");
+	if (
+		stdinText !== undefined &&
+		(typeof stdinText !== "string" ||
+			Buffer.byteLength(stdinText, "utf8") > MAX_STDIN_BYTES)
+	)
+		deny("Stdin payload exceeds its budget");
 	const command = commandPolicy(policy, request);
-	const result = await provider.execute(sandbox, command, signal);
+	const result = await provider.execute(sandbox, command, signal, stdinText);
 	if (signal?.aborted)
 		throw new SandboxError("CANCELLED", "Command was cancelled");
 	if (

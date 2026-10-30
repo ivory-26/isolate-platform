@@ -44,10 +44,17 @@ export interface CommandResult {
 export interface SandboxProvider {
 	readonly name: string;
 	create(spec: SandboxSpec): Promise<SandboxHandle>;
+	/**
+	 * `stdinText` is an optional bounded payload written to the process stdin and
+	 * closed (EOF) before output is read. It exists so trusted tooling can write
+	 * file content without a shell or argv-sized payloads; it is never model
+	 * input and must not be echoed, logged or persisted by an adapter.
+	 */
 	execute(
 		sandbox: SandboxHandle,
 		command: AuthorizedCommand,
 		signal?: AbortSignal,
+		stdinText?: string,
 	): Promise<CommandResult>;
 	destroy(sandbox: SandboxHandle): Promise<void>;
 }

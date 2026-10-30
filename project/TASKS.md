@@ -521,3 +521,15 @@ Lanes are defined now so future agents can claim them without re-deriving contex
 - Coordinator verification: commit `9226219` — biome 0 issues, tsc clean, **26 pass / 0 fail** (redact 6 + rest-client 20). Deny-default approval gating redaction-proof + audit sink covered; contract note: failure union extended with NOT_FOUND/RATE_LIMITED (optional sanitized message), consumers switch on `code`.
 - Status: **done**
 
+
+### Wave 9 execution record (in progress)
+
+| Lane | Commit | Coordinator gates |
+|---|---|---|
+| W9-DB | `f7ee997` + `5277068` → merge `e515798` | biome 0 errors · typecheck 8/8 · 256 db tests ×2 |
+| W9-EXEC | checkpoint `cf90e2e`, being finished by W9-EXEC2 | pending |
+| W9-WEB | running | pending |
+
+W9-DB shipped `tasks.acceptance_checks` (`0007`, unapplied) with a shared validator, plus a **row-lease** `branch_locks` table and `BranchLockRepository`. The first implementation used session advisory locks; review caught that our `DATABASE_URL` is a `-pooler` host (PgBouncer transaction mode), where session locks can leak or double-grant, so it was replaced by a single-statement lease (`ON CONFLICT ... WHERE expires_at < now()`), with the lesson recorded in CHALLENGES.
+
+Known mid-wave red: `apps/web` "ownership, compile, task and queue writes share one transaction" — the transaction fixture still asserts the old task-insert argument shape now that `acceptance_checks` is a column. W9-WEB owns the fix.

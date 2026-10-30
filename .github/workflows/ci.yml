@@ -31,8 +31,8 @@ jobs:
         run: bun run test
       - name: Offline acceptance (zero provider credentials)
         env:
-          INFERENCE_PROVIDER: none
-          SANDBOX_PROVIDER: null
+          INFERENCE_PROVIDER: "none"
+          SANDBOX_PROVIDER: "null"
         run: bun run acceptance:offline
 
   secret-scan:

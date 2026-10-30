@@ -79,8 +79,9 @@ for (const [name, allowed] of [
 	["INFERENCE_PROVIDER", "none"],
 	["SANDBOX_PROVIDER", "null"],
 ] as const) {
-	const value = process.env[name];
-	if (value !== undefined && value !== allowed) {
+	// An empty value means unset (CI YAML `null` becomes an empty string).
+	const value = process.env[name]?.trim();
+	if (value !== undefined && value !== "" && value !== allowed) {
 		refuse(`${name}=${value} is not the offline value "${allowed}"`);
 	}
 }

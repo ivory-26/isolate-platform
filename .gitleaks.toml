@@ -1,0 +1,29 @@
+title = "isolate-platform gitleaks policy"
+
+# Keep the upstream rules; only add narrowly-scoped exceptions below.
+[extend]
+useDefault = true
+
+# The PEM markers in these unit tests are template strings; the key material is
+# generated at test runtime and never exists in the repository. The historical
+# commit below was flagged for the marker plus adjacent code (entropy 5.38), not
+# for a real key. Scoped by path AND pattern so a real key in these files still
+# trips the scanner on content that is not just a bare marker line.
+[[allowlists]]
+description = "PEM markers in unit tests (keys generated at runtime)"
+paths = ['''apps/worker/src/runtime-composition\.test\.ts''', '''packages/integrations/src/github/auth\.test\.ts''']
+regexes = ['''-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----''']
+
+# The single historical finding on the wave-7 branch; the file no longer
+# contains any key material beyond the same markers.
+[[allowlists]]
+description = "Historical synthetic PEM marker finding (commit 17d5e25)"
+commits = ["17d5e25ecf5ba58ea5865e0597c12eb09eb90732"]
+
+# Synthetic git-token fixtures in the sandbox provider tests (wave 7). The
+# prefixed values are not credentials; a real token in these files would not
+# match this exact pattern.
+[[allowlists]]
+description = "Synthetic ghs_w7sbx_* fixtures in sandbox provider tests"
+paths = ['''packages/sandbox/src/providers/modal\.test\.ts''', '''packages/sandbox/src/providers/modal-client\.test\.ts''']
+regexes = ['''ghs_w7sbx_[A-Za-z0-9_]+''']

@@ -7,13 +7,19 @@ import {
 import type { OrganizationId, UserId } from "@isolate/shared";
 import { z } from "zod";
 import {
+	type ApprovalDecisionReceipt,
+	decideApprovalSchema,
 	type FailureCode,
 	failureMessages,
 	listTasksSchema,
+	type RetryReceipt,
+	retryTaskSchema,
 	type ServiceResult,
 	type SubmissionReceipt,
 	submitTaskSchema,
 	type TaskSummary,
+	type ValidatedApprovalDecision,
+	type ValidatedRetry,
 	type ValidatedSubmission,
 	type WorkflowRejectionIssue,
 	workflowRejectionIssuesSchema,
@@ -31,14 +37,25 @@ export interface TaskStore {
 		input: ValidatedSubmission,
 	): Promise<SubmissionReceipt>;
 	listLatest(scope: CallerScope, limit: number): Promise<TaskSummary[]>;
+	/** Rerun a failed task as a NEW task in the same boundary. */
+	retry(scope: CallerScope, input: ValidatedRetry): Promise<RetryReceipt>;
+	/** Human decision on one pending approval; approval enqueues one follow-up. */
+	decideApproval(
+		scope: CallerScope,
+		input: ValidatedApprovalDecision,
+	): Promise<ApprovalDecisionReceipt>;
 }
 export class ControlPlaneError extends Error {
 	constructor(
 		readonly code: FailureCode,
 		/** Already sanitized by the compilation boundary; bounded again below. */
 		readonly issues?: readonly WorkflowRejectionIssue[],
+		/** Optional bounded message for an action-specific refusal. */
+		message?: string,
 	) {
-		super(failureMessages[code]);
+		super(
+			message === undefined ? failureMessages[code] : message.slice(0, 240),
+		);
 	}
 }
 const scopeSchema = z.strictObject({
@@ -76,11 +93,16 @@ export function createTaskService(deps: {
 			const issues =
 				error instanceof ControlPlaneError ? boundedIssues(error) : undefined;
 			// Never serialize driver errors, request data, stacks, or credentials.
+			// A ControlPlaneError message is already bounded by the server-side
+			// action that raised it.
 			return {
 				ok: false,
 				error: {
 					code,
-					message: failureMessages[code],
+					message:
+						error instanceof ControlPlaneError
+							? error.message
+							: failureMessages.UNAVAILABLE,
 					...(issues ? { issues } : {}),
 				},
 			};
@@ -115,6 +137,40 @@ export function createTaskService(deps: {
 			return scoped(
 				(store, scope) => store.listLatest(scope, parsed.data.limit),
 				"task:read",
+			);
+		},
+		retry(input: unknown): Promise<ServiceResult<RetryReceipt>> {
+			const parsed = retryTaskSchema.safeParse(input);
+			if (!parsed.success)
+				return Promise.resolve({
+					ok: false,
+					error: {
+						code: "INVALID_INPUT",
+						message: failureMessages.INVALID_INPUT,
+					},
+				});
+			// `task:submit` is checked inside scoped() BEFORE the store is touched.
+			return scoped(
+				(store, scope) => store.retry(scope, parsed.data),
+				"task:submit",
+			);
+		},
+		decideApproval(
+			input: unknown,
+		): Promise<ServiceResult<ApprovalDecisionReceipt>> {
+			const parsed = decideApprovalSchema.safeParse(input);
+			if (!parsed.success)
+				return Promise.resolve({
+					ok: false,
+					error: {
+						code: "INVALID_INPUT",
+						message: failureMessages.INVALID_INPUT,
+					},
+				});
+			// A viewer can never decide: capability before any storage read.
+			return scoped(
+				(store, scope) => store.decideApproval(scope, parsed.data),
+				"task:submit",
 			);
 		},
 	};

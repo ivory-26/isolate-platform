@@ -19,15 +19,17 @@ describe("server boundary", () => {
 			});
 		}
 	});
-	test("submit and list server functions keep private no-store headers", async () => {
+	test("every task server function keeps private no-store headers", async () => {
 		const source = await readFile(
 			join(serverDirectory, "..", "features", "tasks", "tasks.functions.ts"),
 			"utf8",
 		);
-		expect(
-			source.match(
-				/setResponseHeader\("Cache-Control", "private, no-store"\)/g,
-			),
-		).toHaveLength(2);
+		const serverFunctions = source.match(/createServerFn\(/g) ?? [];
+		const noStore = source.match(
+			/setResponseHeader\("Cache-Control", "private, no-store"\)/g,
+		);
+		expect(noStore).toHaveLength(serverFunctions.length);
+		// submit, list, retry and the approval decision.
+		expect(noStore).toHaveLength(4);
 	});
 });

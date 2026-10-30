@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { submitTaskSchema } from "./contracts";
+import {
+	decideApprovalSchema,
+	retryTaskSchema,
+	submitTaskSchema,
+} from "./contracts";
 
 const base = {
 	repositoryId: "10000000-0000-4000-8000-000000000003",
@@ -42,5 +46,51 @@ describe("submitTaskSchema task context", () => {
 				fileOwnership: [""],
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("decision action schemas", () => {
+	test("bounds the retry request key and rejects unknown fields", () => {
+		const failedTaskId = base.repositoryId;
+		expect(
+			retryTaskSchema.parse({
+				failedTaskId,
+				idempotencyKey: "  retry-key  ",
+			}).idempotencyKey,
+		).toBe("retry-key");
+		expect(
+			retryTaskSchema.safeParse({
+				failedTaskId,
+				idempotencyKey: "k".repeat(200),
+			}).success,
+		).toBe(true);
+		for (const idempotencyKey of ["", "k".repeat(201), "   "])
+			expect(
+				retryTaskSchema.safeParse({ failedTaskId, idempotencyKey }).success,
+			).toBe(false);
+		expect(
+			retryTaskSchema.safeParse({
+				failedTaskId,
+				idempotencyKey: "key",
+				goal: "smuggled",
+			}).success,
+		).toBe(false);
+	});
+
+	test("accepts only an explicit approve or reject decision", () => {
+		const decision = {
+			taskId: base.repositoryId,
+			approvalId: base.workflowDefinitionId,
+		};
+		for (const value of ["approved", "rejected"] as const)
+			expect(
+				decideApprovalSchema.safeParse({ ...decision, decision: value })
+					.success,
+			).toBe(true);
+		for (const value of ["maybe", "", null])
+			expect(
+				decideApprovalSchema.safeParse({ ...decision, decision: value })
+					.success,
+			).toBe(false);
 	});
 });

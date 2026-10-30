@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkflowVersionRow } from "@isolate/db";
 import {
+	InMemoryApprovalRepository,
+	InMemoryArtifactRepository,
 	InMemoryCompiledPlanRepository,
+	InMemoryExecutionLifecycle,
 	InMemoryQueueRepository,
 	InMemoryTaskRepository,
 	InMemoryWorkflowRejectionRepository,
@@ -136,6 +139,11 @@ function compilationHarness(
 	const store = createRepositoryStore({
 		tasks,
 		queue,
+		approvals: new InMemoryApprovalRepository(),
+		lifecycle: new InMemoryExecutionLifecycle({
+			tasks,
+			artifacts: new InMemoryArtifactRepository(tasks),
+		}),
 		repositoryBelongsToOrganization: async (organizationId, repositoryId) =>
 			organizationId === orgA && repositoryId === repoA,
 		compileSubmission,

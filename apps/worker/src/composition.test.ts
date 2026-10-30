@@ -263,6 +263,70 @@ describe("worker composition — adapter overrides", () => {
 		).toBe(true);
 	});
 
+	test("a PR seam registers create_pull_request next to run_task and resume_task", () => {
+		const lifecycle: ExecutionLifecycle = {
+			async transition() {},
+			async event() {},
+			async artifact() {
+				return { artifactId: "artifact_1" };
+			},
+			async attemptStarted() {
+				return { attemptId: "attempt_1", attemptIndex: 1 };
+			},
+			async attemptFinished() {},
+			async approvalRequested() {
+				return { approvalId: "approval_1" };
+			},
+			async approvalStatus() {
+				return null;
+			},
+			async isCancelled() {
+				return false;
+			},
+		};
+		const composition = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]), {
+			lifecycle,
+			pullRequest: {
+				loadTaskState: async () => null,
+				loadPullRequestTarget: async () => null,
+				recordPullRequest: async () => ({ ok: true }),
+				createPullRequest: async () => ({
+					ok: false,
+					code: "INTEGRATION_UNAVAILABLE",
+				}),
+			},
+		});
+		expect(composition.handlers.map((handler) => handler.jobType)).toEqual([
+			"run_task",
+			"resume_task",
+			"create_pull_request",
+		]);
+		const prHandler = composition.handlers[2];
+		expect(
+			prHandler?.supports({
+				taskId: "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f",
+				approvalId: "approval_1",
+			}),
+		).toBe(true);
+	});
+
+	test("a PR seam without a lifecycle registers no PR handler", () => {
+		const composition = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]), {
+			pullRequest: {
+				loadTaskState: async () => null,
+				loadPullRequestTarget: async () => null,
+				recordPullRequest: async () => ({ ok: true }),
+				createPullRequest: async () => ({
+					ok: false,
+					code: "INTEGRATION_UNAVAILABLE",
+				}),
+			},
+		});
+		expect(composition.handlers.map((handler) => handler.jobType)).toEqual([
+			"run_task",
+		]);
+	});
+
 	test("override runtime receives caps and listeners from the composed handler", async () => {
 		const seenCaps: unknown[] = [];
 		const sinkRows: UsageRecordInput[] = [];

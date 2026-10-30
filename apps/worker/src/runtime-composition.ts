@@ -3,13 +3,21 @@ import { resolve } from "node:path";
 import {
 	createDb,
 	type PgSql,
+	PostgresAuditRepository,
 	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
+	PostgresRepositoryRepository,
+	PostgresRunEventRepository,
 	PostgresTaskContextRepository,
+	PostgresTaskRepository,
 	PostgresUsageRepository,
+	type RepositoryRepository,
+	type RunEventRepository,
+	type TaskRepository,
 } from "@isolate/db";
 import {
 	createGitHubAppTokenProvider,
+	createPullRequestForTask,
 	type GitHubTokenProvider,
 } from "@isolate/integrations";
 import type { SandboxToolBackend } from "@isolate/mastra";
@@ -21,10 +29,27 @@ import {
 	NullProvider,
 	type SandboxProvider,
 } from "@isolate/sandbox";
-import { type Logger, PlatformError, type UsageSink } from "@isolate/shared";
+import {
+	type Logger,
+	type OrganizationId,
+	PlatformError,
+	type TaskId,
+	type TaskStatus,
+	type UsageSink,
+} from "@isolate/shared";
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
 import type { QueueLike } from "./contracts";
+import type {
+	CreatePullRequestSeam,
+	PullRequestTaskState,
+} from "./create-pull-request-handler";
+import {
+	PULL_REQUEST_APPROVAL_ACTION,
+	type PullRequestTarget,
+	parseGitHubFullName,
+	parsePullRequestApprovalEventData,
+} from "./pull-request-approval";
 import {
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
@@ -34,6 +59,8 @@ import {
 	createWorkspaceToolPolicy,
 } from "./sandbox-tool-backend";
 import { createTaskContextLoader } from "./task-context";
+
+export { parseGitHubFullName } from "./pull-request-approval";
 
 /**
  * Production composition for the worker (wave 6).
@@ -226,29 +253,100 @@ export function selectGitHubTokenProvider(
 	});
 }
 
-/** `owner/name` from the task's clean https GitHub URL. */
-export function parseGitHubFullName(repoUrl: string): string {
-	let parsed: URL;
-	try {
-		parsed = new URL(repoUrl);
-	} catch {
-		throw new PlatformError("VALIDATION_FAILED", "invalid repository URL");
+/**
+ * Wave-8 validation policy read: task → repository, both tenant-scoped. A
+ * foreign task or a repository without a configured command yields `null`
+ * (the handler then keeps the wave-7 "diff present" gate).
+ */
+export async function loadValidationPolicyForTask(
+	tasks: Pick<TaskRepository, "get">,
+	repositories: Pick<RepositoryRepository, "get">,
+	input: { organizationId: OrganizationId; taskId: TaskId },
+): Promise<{ command: string; timeoutMs: number } | null> {
+	const task = await tasks.get(input.taskId);
+	if (task === null || task.organization_id !== input.organizationId)
+		return null;
+	const repository = await repositories.get({
+		organizationId: input.organizationId,
+		repositoryId: task.repository_id,
+	});
+	if (repository === null || repository.validation_command === null)
+		return null;
+	return {
+		command: repository.validation_command,
+		timeoutMs: repository.validation_timeout_ms,
+	};
+}
+
+/**
+ * Wave-8 PR target read: the latest `approval.requested` event carrying a
+ * strict, validated `github.create_pull_request` payload. Anything malformed
+ * is indistinguishable from absent, so the PR job fails closed.
+ */
+export async function loadPullRequestTargetFromEvents(
+	runEvents: Pick<RunEventRepository, "listByTask">,
+	input: { organizationId: OrganizationId; taskId: TaskId },
+): Promise<PullRequestTarget | null> {
+	const events = await runEvents.listByTask({
+		organizationId: input.organizationId,
+		taskId: input.taskId,
+		limit: 500,
+	});
+	for (let index = events.length - 1; index >= 0; index--) {
+		const event = events[index];
+		if (event === undefined || event.type !== "approval.requested") continue;
+		const data = event.data;
+		if (data === null || typeof data !== "object" || Array.isArray(data))
+			continue;
+		// Only the PR action is interesting; an older push approval never
+		// becomes a PR target. A malformed PR event fails closed: no fallback
+		// to an earlier event, because that would approve a stale request.
+		if (
+			(data as Record<string, unknown>).action !== PULL_REQUEST_APPROVAL_ACTION
+		) {
+			continue;
+		}
+		return parsePullRequestApprovalEventData(data);
 	}
-	const match = /^\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/.exec(
-		parsed.pathname,
-	);
-	if (
-		parsed.protocol !== "https:" ||
-		parsed.hostname !== "github.com" ||
-		parsed.username !== "" ||
-		parsed.password !== "" ||
-		parsed.search !== "" ||
-		parsed.hash !== "" ||
-		match === null
-	) {
-		throw new PlatformError("VALIDATION_FAILED", "invalid repository URL");
-	}
-	return `${match[1]}/${match[2]}`;
+	return null;
+}
+
+/** Tenant-scoped task snapshot for the PR job (number/url/status only). */
+export async function loadPullRequestTaskState(
+	tasks: Pick<TaskRepository, "get">,
+	input: { organizationId: OrganizationId; taskId: TaskId },
+): Promise<PullRequestTaskState | null> {
+	const task = await tasks.get(input.taskId);
+	if (task === null || task.organization_id !== input.organizationId)
+		return null;
+	return {
+		status: task.status as TaskStatus,
+		pullRequestNumber: task.pull_request_number,
+		pullRequestUrl: task.pull_request_url,
+	};
+}
+
+/**
+ * Binds `createPullRequestForTask` with the repository-scoped token broker and
+ * the audit sink already attached. `organizationId` is supplied per call so
+ * one worker composition serves every tenant without logging a token.
+ */
+export function createPullRequestService(
+	sql: PgSql,
+	tokenProvider: GitHubTokenProvider,
+): CreatePullRequestSeam {
+	const audit = new PostgresAuditRepository(sql);
+	return async (input) => {
+		const { organizationId, ...request } = input;
+		return createPullRequestForTask(
+			{
+				tokenProvider,
+				audit,
+				actor: { organizationId, actorId: null, actorKind: "worker" },
+			},
+			request,
+		);
+	};
 }
 
 /**
@@ -305,6 +403,9 @@ export async function createConfiguredWorkerComposition(
 	const loadTaskContext = createTaskContextLoader(
 		new PostgresTaskContextRepository(sql),
 	);
+	const taskRepository = new PostgresTaskRepository(sql);
+	const repositoryRepository = new PostgresRepositoryRepository(sql);
+	const runEventRepository = new PostgresRunEventRepository(sql);
 
 	const overrides: WorkerCompositionOverrides = {
 		usageSink,
@@ -313,6 +414,10 @@ export async function createConfiguredWorkerComposition(
 		// actually moves through the new handler path.
 		lifecycle: new PostgresExecutionLifecycle(sql),
 		pushEnabled: false,
+		// Wave 8 review surface: the validation read is tenant-scoped and always
+		// safe to bind; the PR reads are bound with the PR stage below.
+		loadValidationPolicy: (input) =>
+			loadValidationPolicyForTask(taskRepository, repositoryRepository, input),
 	};
 
 	const sandbox = await selectSandboxProvider(env, deps);
@@ -333,6 +438,18 @@ export async function createConfiguredWorkerComposition(
 		// Push is the approval-gated action. Opt out explicitly with
 		// GITHUB_PUSH_ENABLED=false; without a broker, tasks stop at review_ready.
 		overrides.pushEnabled = env.GITHUB_PUSH_ENABLED?.trim() !== "false";
+		// PR creation is bound only with a real broker AND a real sandbox: the
+		// token can then be minted repo-scoped and the PR is bound to the exact
+		// pushed commit. No token or SDK symbol escapes this module.
+		overrides.pullRequest = {
+			loadTaskState: (input) => loadPullRequestTaskState(taskRepository, input),
+			loadPullRequestTarget: (input) =>
+				loadPullRequestTargetFromEvents(runEventRepository, input),
+			recordPullRequest: async (input) => ({
+				ok: (await taskRepository.recordPullRequest(input)) !== null,
+			}),
+			createPullRequest: createPullRequestService(sql, githubTokenProvider),
+		};
 	}
 
 	return {

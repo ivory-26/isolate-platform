@@ -376,3 +376,17 @@ Symptom / root cause / correction / prevention format for meaningful failures (e
 - Root cause: the `oven/bun:1` final stage is `debian:trixie` with Bun and CA certificates only; `git` is not installed. The adapter defaulted to that image when wave 7 changed the image for Bun support, and `assertToolchain` correctly rejected it.
 - Correction: `createModalSandboxClient` accepts `imageSetupCommands` and builds the base image with `apt-get install git grep` via `Image.dockerfileCommands(...).build(app)`, memoized per client. `selectSandboxProvider` enables the setup layer for the default Bun image and supports `MODAL_IMAGE_SETUP=off` for a custom image that already has the toolchain.
 - Prevention: treat an image name as a hypothesis and the preflight as the guarantee. Any image change must be validated for every binary the toolchain and tools rely on; a missing binary is a deterministic failure, not a transient one.
+
+## 2026-10-30 — W7: a commit-to-commit diff hid the first untracked file
+
+- Symptom: the fourth live attempt cloned successfully and started the first turn, then failed with an opaque `INTERNAL`. The write had succeeded, but `git.commit_local` rejected with "no changes to commit".
+- Root cause: `diffSummary` compared `origin/main...HEAD`, which only sees **committed** trees. A newly written file is untracked, so the changed-file list was empty and the ownership gate refused the commit.
+- Correction: the backend exposes `pendingPaths()` from `git status --porcelain` (including untracked/staged/renamed paths); `git.commit_local` authorizes ownership from pending paths and keeps `diffSummary` as the base-to-HEAD review view. Tests cover untracked authorization and the fallback path.
+- Prevention: "what changed" and "what will be committed" are different questions. Ownership for a commit must be checked against the pending working tree, not the last commit.
+
+## 2026-10-30 — W7: the hardened Git options blocked the push's https transport
+
+- Symptom: before the successful run, `pushBranch` used the shared `GIT_OPTIONS`, which sets `protocol.allow=never`, without re-allowing https. Clone had an explicit `protocol.https.allow=always`; push did not.
+- Root cause: protocol hardening was applied globally but only clone opted the https transport back in; push over an `https://github.com` remote would be denied or fail before credentials were used.
+- Correction: `pushBranch` passes `-c protocol.https.allow=always` before `push`, matching clone. The push test asserts the flag and still asserts no force flag.
+- Prevention: when a global hardening option denies by default, every allowed transport path (clone, fetch, push) must opt back in explicitly.

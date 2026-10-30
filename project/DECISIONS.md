@@ -289,3 +289,10 @@ Verified live against Neon project `divine-butterfly-60669535` (branch `br-steep
 - Rationale: `oven/bun:1` is a Debian base with Bun but no git, so the wave-7 toolchain preflight correctly rejects it. Installing the two missing tools at image-build time is deterministic, cached by Modal, and avoids putting a package manager or shell into the sandbox's command policy.
 - Consequences: the first `create` in a fresh Modal environment pays the image build latency (before the sandbox lifetime starts). A custom image is assumed to include git/grep/bun; disabling the layer without that guarantee fails the preflight closed.
 - Alternatives rejected: using `node:22-bookworm` (has git, lacks Bun, and the write/tool path is Bun-based); installing Bun at sandbox runtime (needs curl/shell, both outside the command policy); weakening `assertToolchain` (would defer a deterministic failure into the agent loop).
+
+## 2026-10-30 — W7: commit ownership reads pending paths; push re-allows https
+
+- Decision: `git.commit_local` authorizes ownership from `pendingPaths()` (`git status --porcelain`, including untracked files) rather than the commit-to-commit diff. `git.diff_summary` keeps the base-to-HEAD view. `pushBranch` passes `-c protocol.https.allow=always` so the hardened `protocol.allow=never` does not block the push transport.
+- Rationale: a newly written file has no commit yet, so a base-to-HEAD diff cannot see it; the first commit would always be rejected. Separately, clone explicitly re-allowed https but push did not, making the push fail before credentials were exercised.
+- Consequences: ownership is checked against exactly the paths the commit will include (staged, modified, untracked, renamed), and push uses the same transport allowance as clone. Both are covered by unit tests and by the successful live acceptance.
+- Alternatives rejected: staging inside `commitAll` before the ownership check (moves the gate after the mutation); using `git diff --cached` only (misses untracked until staged); removing `protocol.allow=never` (weakens fetch hardening).

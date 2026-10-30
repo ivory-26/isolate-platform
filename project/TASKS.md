@@ -448,13 +448,32 @@ Goal: the agent is triggered by real operational signals and resolves them end t
 - Queue claiming is already `FOR UPDATE SKIP LOCKED`; wave 9 adds a bounded in-process pool honouring `maxConcurrency` and a per-repository+branch advisory lock so two jobs never write one branch.
 - Per-organization quotas and provider rate limits are wave 10; the sandbox provider remains the concurrency ceiling.
 
-## Wave 11 — P1 fidelity, observability, storage, delivery (planned)
+## Wave 11 — P1 fidelity, observability, storage (planned, after wave 9 live proof)
 
-1. **Plan execution**: either make `compiled_plans` the orchestration input (the worker executes the compiled graph) or delete the write-only path and document the linear handler as the runtime. Plans saved at submit and never read is the largest fidelity gap.
-2. **Mastra SDLC workflow**: no production caller today while the handler implements the lifecycle imperatively. Wire it (storage-backed resume, wave-7/8 approval order) or retire it, and record the decision.
-3. **Observability**: OpenTelemetry spans for queue→sandbox→turn→tool→validation→PR, RED metrics, per-org/task dashboards, alerts on dead-letter rate and sandbox leaks, and a trusted price table so `cost_usd` stops being null.
-4. **Object storage**: move patches and log bundles out of Neon's 256 KiB inline cap with a lifecycle policy.
-5. **Delivery**: worker/web containers, deploy pipeline, production auth origin + own Google credentials, secret management, backup/restore drills.
+Lanes are defined now so future agents can claim them without re-deriving context. Contracts first (coordinator), then two parallel lanes, then integration.
+
+### W11-0 — Contracts (coordinator)
+-  interface in  ( with size + content-type + sha256),  type,  read shape (per-task tokens, sandbox seconds, cost, gate outcomes). No implementation.
+
+### W11-PLAN —  + docs (owner: agent W11-PLAN, branch )
+- Retire  and its tests; record the decision (already in DECISIONS); document the handler as the runtime of record in . If the user chooses plan execution instead, the lane instead rewrites the workflow around the current helpers with a documented storage/resume design — decide before coding and record it.
+- DoD: no dead lifecycle left, docs consistent, gates green ×2.
+
+### W11-OBS —  +  +  (owner: agent W11-OBS, branch )
+- A trusted **price table** (config-driven, no guessed numbers) so  is populated from measured tokens/seconds; a  read over  +  +  for a run summary; **structured metrics** emitted through the existing logger ( records with fixed names: claimed/completed/failed/dead_letter, turn latency, sandbox seconds, validation outcome, PR outcome).
+- DoD offline tests with fake clocks/rows; no external backend required; docs updated with the metric vocabulary.
+
+### W11-STORE —  +  (owner: agent W11-STORE, branch )
+-  over an inline/DB-backed implementation with a 2 MiB ceiling and a documented S3/R2 seam; large diffs and log bundles move to the store,  points at it, and the 256 KiB inline column stays for small payloads. No cloud credentials are introduced in this lane.
+- DoD: migration if needed, tenant-scoped reads, live suite that skips without , worker writes through the store.
+
+### W11-OPS — Coordinator
+- Merge green lanes, apply any migration with user approval, run full validate ×2, extend  where behaviour changed, update STATUS/CHALLENGES, and confirm the wave-9 live proofs still hold.
+
+## Wave 12 — Product surface (web UI) and deployment decision (planned; the user has design input)
+
+- **Does not start without the user's design direction.** It includes the design-system/token pass, run detail, approvals, repository onboarding, and the deployment decision (hosting, production auth origin, own Google credentials, object storage backend, observability backend, CI/CD deploy, secret management, backup/restore).
+- Entry criteria: waves 9–11 merged and documented; a short design brief from the user; the deployment questions answered (target host, budget, domain, data residency).
 
 ## Wave 4 — legacy handover (superseded by the provider-plane plan above)
 - W4-A → folded into W4-WEB; W4-B → W4-DB; W4-C → W4-WEB; W4-D → W4-WRK; W4-E → W4-SBX; W4-F → wave 5; W4-G → W4-OPS; W4-H → opportunistic tooling.

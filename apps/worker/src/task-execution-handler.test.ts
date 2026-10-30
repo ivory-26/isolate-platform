@@ -563,6 +563,9 @@ describe("task execution handler — success", () => {
 		expect(harness.provider.createCalls[0]).toEqual({
 			workspaceRoot: POLICY.workspaceRoot,
 			lifetimeMs: 120_000, // min(900s provider lifetime, 120s cap)
+			// The configured 300s idle window is clamped to the lifetime so the
+			// adapter default (300s) can never exceed it.
+			idleTimeoutMs: 120_000,
 			memoryMb: 512,
 			cpuCount: 1,
 			egress: { mode: "deny" },

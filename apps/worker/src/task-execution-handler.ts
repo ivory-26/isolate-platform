@@ -473,12 +473,24 @@ function createHandler(
 							})
 						: null;
 
+				const lifetimeMs = Math.min(
+					Math.max(1, deps.sandbox.lifetimeMs),
+					maxSandboxMs,
+				);
+				// The provider default idle window is 300s; a shorter lifetime makes
+				// that default invalid. Forward the configured idle bound, clamped to
+				// the lifetime, instead of letting the adapter default.
+				const idleTimeoutMs =
+					deps.sandbox.idleTimeoutMs === undefined
+						? undefined
+						: Math.max(
+								1,
+								Math.min(Math.floor(deps.sandbox.idleTimeoutMs), lifetimeMs),
+							);
+
 				const spec: SandboxSpec = {
 					workspaceRoot: deps.sandboxPolicy.workspaceRoot,
-					lifetimeMs: Math.min(
-						Math.max(1, deps.sandbox.lifetimeMs),
-						maxSandboxMs,
-					),
+					lifetimeMs,
 					memoryMb: deps.sandbox.memoryMb,
 					cpuCount: deps.sandbox.cpuCount,
 					// Clone/push need the GitHub endpoints; every tool command still
@@ -487,6 +499,7 @@ function createHandler(
 						mode === null
 							? { mode: "deny" }
 							: { mode: "allowlist", hosts: [...WORKSPACE_EGRESS_HOSTS] },
+					...(idleTimeoutMs === undefined ? {} : { idleTimeoutMs }),
 					...(sandboxEnv === null ? {} : { env: sandboxEnv }),
 				};
 

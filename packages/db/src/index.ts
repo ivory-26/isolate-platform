@@ -8,6 +8,7 @@ export * from "./repositories/membership-repository";
 export * from "./repositories/organization-repository";
 export * from "./repositories/queue-repository";
 export * from "./repositories/repository-repository";
+export * from "./repositories/run-event-repository";
 export * from "./repositories/task-attempt-repository";
 export * from "./repositories/task-context-repository";
 export * from "./repositories/task-repository";

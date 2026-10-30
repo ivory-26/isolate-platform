@@ -9,10 +9,18 @@ import {
 	type UsageRecordInput,
 } from "@isolate/shared";
 import type {
+	ApprovalDecisionInput,
+	ApprovalDecisionResult,
 	ApprovalRepository,
-	ApproveOrFailCode,
+	ListApprovalsByTaskInput,
+	PayloadBoundDecisionInput,
+	PayloadBoundDecisionResult,
 } from "../repositories/approval-repository";
-import { evaluateDecisionOutcome } from "../repositories/approval-repository";
+import {
+	evaluateApprovalDecision,
+	evaluateDecisionOutcome,
+} from "../repositories/approval-repository";
+import { clampPageLimit } from "../repositories/pagination";
 import {
 	ackFailOutcome,
 	type JobRow,
@@ -20,12 +28,17 @@ import {
 	type QueueRepository,
 } from "../repositories/queue-repository";
 import {
+	buildRetryIdempotencyKey,
+	deriveRetryBranch,
+	evaluateRetryEligibility,
 	guardTransition,
 	requireNonEmpty,
 	requireNonNegativeInt,
 	requirePositiveInt,
 	requireStringArray,
 	type TaskRepository,
+	type TaskRetryInput,
+	type TaskRetryResult,
 	type TaskTransitionFailureCode,
 } from "../repositories/task-repository";
 import {
@@ -36,7 +49,12 @@ import {
 	type UsageTotals,
 	validateUsageInput,
 } from "../repositories/usage-repository";
-import type { ApprovalRow, TaskRow, UsageRecordRow } from "../schema";
+import type {
+	ApprovalRow,
+	AuditEventRow,
+	TaskRow,
+	UsageRecordRow,
+} from "../schema";
 
 /**
  * In-memory implementations of the repository contracts. They embed the SAME
@@ -107,6 +125,10 @@ export class InMemoryTaskRepository implements TaskRepository {
 			goal,
 			acceptance_criteria: acceptanceCriteria,
 			file_ownership: fileOwnership,
+			pull_request_number: null,
+			pull_request_url: null,
+			retry_of: null,
+			retry_depth: 0,
 			created_by: input.createdBy as TaskRow["created_by"],
 			created_at: now,
 			updated_at: now,
@@ -181,12 +203,81 @@ export class InMemoryTaskRepository implements TaskRepository {
 		}
 		return out;
 	}
+
+	async createRetry(input: TaskRetryInput): Promise<TaskRetryResult> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.failedTaskId, "failedTaskId");
+		requireNonEmpty(input.idempotencyKey, "idempotencyKey");
+		if (input.idempotencyKey.length > 200) {
+			throw new Error("idempotencyKey must be at most 200 characters");
+		}
+		if (input.branch !== undefined) {
+			requireNonEmpty(input.branch, "branch");
+		}
+		const idempotencyKey = buildRetryIdempotencyKey(
+			input.failedTaskId,
+			input.idempotencyKey,
+		);
+		const source = this.rows.get(input.failedTaskId) ?? null;
+		// SAME pure gate as the driver: NOT_FOUND > CONFLICT > POLICY_DENIED.
+		const eligibility = evaluateRetryEligibility({
+			sourceFound: source !== null,
+			sameOrganization: source?.organization_id === input.organizationId,
+			sourceStatus: source?.status ?? null,
+			sourceRetryDepth: source?.retry_depth ?? null,
+		});
+		if (!eligibility.ok) {
+			return eligibility;
+		}
+		if (source === null) {
+			return { ok: false, code: "NOT_FOUND" };
+		}
+		// Replay: the derived key already addressed this retry.
+		for (const row of this.rows.values()) {
+			if (
+				row.organization_id === input.organizationId &&
+				row.idempotency_key === idempotencyKey
+			) {
+				return { ok: true, task: { ...row }, created: false };
+			}
+		}
+		const branch =
+			input.branch ?? deriveRetryBranch(source.branch, source.retry_depth + 1);
+		const now = new Date();
+		const id = asTaskId(newUuid());
+		const row: TaskRow = {
+			id,
+			organization_id: source.organization_id,
+			repository_id: source.repository_id,
+			worktree: branch,
+			branch,
+			status: "queued",
+			idempotency_key: idempotencyKey,
+			// Same boundary as the source, including the original cap.
+			budget_limits: { ...source.budget_limits },
+			goal: source.goal,
+			acceptance_criteria: [...source.acceptance_criteria],
+			file_ownership: [...source.file_ownership],
+			pull_request_number: null,
+			pull_request_url: null,
+			retry_of: source.id,
+			retry_depth: source.retry_depth + 1,
+			created_by: source.created_by,
+			created_at: now,
+			updated_at: now,
+		};
+		this.rows.set(id, row);
+		return { ok: true, task: { ...row }, created: true };
+	}
 }
 
 type ApprovalRequestInput = Parameters<ApprovalRepository["request"]>[0];
 
 export class InMemoryApprovalRepository implements ApprovalRepository {
 	private readonly rows = new Map<string, ApprovalRow>();
+	private readonly audits: AuditEventRow[] = [];
+
+	constructor(private readonly clock: () => Date = () => new Date()) {}
 
 	async request(input: ApprovalRequestInput): Promise<ApprovalRow> {
 		if (!isSha256Hex(input.payloadSha256)) {
@@ -198,7 +289,7 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 		) {
 			throw new Error("expiresInSeconds must be a positive integer");
 		}
-		const now = new Date();
+		const now = this.clock();
 		const row: ApprovalRow = {
 			id: newUuid() as ApprovalRow["id"],
 			organization_id: input.organizationId,
@@ -222,14 +313,22 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 		return row ? cloneApproval(row) : null;
 	}
 
-	async decide(input: {
-		approvalId: string;
-		decide: "approve" | "reject";
-		payloadSha256: string;
-		decidedBy: string;
-	}): Promise<
-		{ ok: true; approval: ApprovalRow } | { ok: false; code: ApproveOrFailCode }
-	> {
+	async decide(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult>;
+	async decide(
+		input: PayloadBoundDecisionInput,
+	): Promise<PayloadBoundDecisionResult>;
+	async decide(
+		input: ApprovalDecisionInput | PayloadBoundDecisionInput,
+	): Promise<ApprovalDecisionResult | PayloadBoundDecisionResult> {
+		if ("decision" in input) {
+			return this.decidePending(input);
+		}
+		return this.decidePayloadBound(input);
+	}
+
+	private async decidePayloadBound(
+		input: PayloadBoundDecisionInput,
+	): Promise<PayloadBoundDecisionResult> {
 		if (!isSha256Hex(input.payloadSha256)) {
 			throw new Error("payloadSha256 must be a 64-char lowercase hex digest");
 		}
@@ -237,11 +336,11 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 		if (!row) {
 			return { ok: false, code: "NOT_FOUND" };
 		}
-		const now = Date.now();
+		const now = this.clock();
 		const outcome = evaluateDecisionOutcome({
 			currentStatus: row.status,
 			expiresAtMs: row.expires_at.getTime(),
-			nowMs: now,
+			nowMs: now.getTime(),
 			payloadSha256Match: row.payload_sha256 === input.payloadSha256,
 		});
 		if (!outcome.ok) {
@@ -253,13 +352,69 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 		return { ok: true, approval: cloneApproval(row) };
 	}
 
+	private async decidePending(
+		input: ApprovalDecisionInput,
+	): Promise<ApprovalDecisionResult> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		requireNonEmpty(input.approvalId, "approvalId");
+		requireNonEmpty(input.decidedBy, "decidedBy");
+		if (input.expectedStatus !== "pending") {
+			throw new Error("expectedStatus must be 'pending'");
+		}
+		if (input.decision !== "approved" && input.decision !== "rejected") {
+			throw new Error("decision must be 'approved' or 'rejected'");
+		}
+		const row = this.rows.get(input.approvalId);
+		const found =
+			row !== undefined &&
+			row.organization_id === input.organizationId &&
+			row.task_id === input.taskId;
+		if (!found || row === undefined) {
+			return { ok: false, code: "NOT_FOUND" };
+		}
+		const now = this.clock();
+		// SAME pure gate as the driver: pending + unexpired, else CONFLICT.
+		const outcome = evaluateApprovalDecision({
+			found: true,
+			currentStatus: row.status,
+			expiresAtMs: row.expires_at.getTime(),
+			nowMs: now.getTime(),
+			expectedStatus: input.expectedStatus,
+		});
+		if (!outcome.ok) {
+			return outcome;
+		}
+		row.status = input.decision;
+		row.decided_by = input.decidedBy;
+		row.decided_at = now;
+		// The driver writes this row in the same transaction; the fake appends
+		// it before returning so a caller sees the same invariant.
+		this.audits.push({
+			id: newUuid(),
+			organization_id: row.organization_id,
+			actor_id: input.decidedBy,
+			actor_kind: "user",
+			action: "approval.decide",
+			target: `approval:${row.id}`,
+			details: {
+				approvalId: row.id,
+				taskId: row.task_id,
+				action: row.action,
+				decision: input.decision,
+			},
+			created_at: now,
+		});
+		return { ok: true, approval: cloneApproval(row) };
+	}
+
 	async expirePending(ms: number): Promise<number> {
 		if (!Number.isFinite(ms) || ms < 0) {
 			throw new Error(
 				"ms must be a non-negative age threshold in milliseconds",
 			);
 		}
-		const now = Date.now();
+		const now = this.clock().getTime();
 		let expired = 0;
 		for (const row of this.rows.values()) {
 			if (
@@ -275,7 +430,7 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 	}
 
 	async expirePendingForTask(taskId: TaskId): Promise<number> {
-		const now = Date.now();
+		const now = this.clock().getTime();
 		let expired = 0;
 		for (const row of this.rows.values()) {
 			if (row.task_id === taskId && row.status === "pending") {
@@ -295,6 +450,33 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
 			}
 		}
 		return out;
+	}
+
+	async listByTask(input: ListApprovalsByTaskInput): Promise<ApprovalRow[]> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		return [...this.rows.values()]
+			.filter(
+				(row) =>
+					row.organization_id === input.organizationId &&
+					row.task_id === input.taskId,
+			)
+			.sort(
+				(a, b) =>
+					b.created_at.getTime() - a.created_at.getTime() ||
+					b.id.localeCompare(a.id),
+			)
+			.slice(0, clampPageLimit(input.limit))
+			.map(cloneApproval);
+	}
+
+	/** Test introspection only; the audit trail is append-only in the driver. */
+	listAuditEvents(): AuditEventRow[] {
+		return this.audits.map((row) => ({
+			...row,
+			details: { ...row.details },
+			created_at: new Date(row.created_at),
+		}));
 	}
 }
 

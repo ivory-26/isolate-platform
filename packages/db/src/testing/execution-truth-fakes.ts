@@ -25,12 +25,17 @@ import {
 	validateLifecycleApprovalInput,
 	validateTransitionInput,
 } from "../repositories/execution-lifecycle";
+import { clampPageLimit } from "../repositories/pagination";
 import {
 	type CreateRepositoryInput,
 	type CreateRepositoryResult,
+	DEFAULT_VALIDATION_TIMEOUT_MS,
+	normalizeValidationPolicy,
 	type RepositoryRepository,
+	type SetValidationPolicyInput,
 	validateCreateRepositoryInput,
 } from "../repositories/repository-repository";
+import type { RunEventRepository } from "../repositories/run-event-repository";
 import {
 	requireNonEmpty,
 	type TaskRepository,
@@ -39,6 +44,7 @@ import type {
 	ApprovalRow,
 	ArtifactRow,
 	RepositoryRow,
+	RunEventRow,
 	TaskRow,
 } from "../schema";
 import { InMemoryTaskRepository } from "./fakes";
@@ -83,10 +89,27 @@ export class InMemoryRepositoryRepository implements RepositoryRepository {
 			provider: validated.provider,
 			external_full_name: validated.externalFullName,
 			default_branch: validated.defaultBranch,
+			validation_command: null,
+			validation_timeout_ms: DEFAULT_VALIDATION_TIMEOUT_MS,
 			created_at: this.clock(),
 		};
 		this.rows.set(row.id, row);
 		return { ok: true, repository: { ...row } };
+	}
+
+	async setValidationPolicy(
+		input: SetValidationPolicyInput,
+	): Promise<RepositoryRow | null> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.repositoryId, "repositoryId");
+		// Same pure helper as the driver: bounds/metacharacter refusals cannot
+		// drift between Postgres and this fake.
+		const policy = normalizeValidationPolicy(input);
+		const row = this.rows.get(input.repositoryId);
+		if (!row || row.organization_id !== input.organizationId) return null;
+		row.validation_command = policy.validationCommand;
+		row.validation_timeout_ms = policy.validationTimeoutMs;
+		return { ...row };
 	}
 
 	async get(input: {
@@ -411,6 +434,85 @@ export class InMemoryExecutionLifecycle implements ExecutionLifecycle {
 }
 
 /**
+ * In-memory run-event timeline. The fake has no `organization_id` column to
+ * filter on (mirroring 0001), so it asks the task source — exactly like the
+ * driver's join — and defaults to the rejecting side: an absent/foreign task
+ * yields an empty page.
+ */
+export class InMemoryRunEventRepository implements RunEventRepository {
+	private readonly rows: RunEventRow[] = [];
+
+	constructor(
+		private readonly tasks: Pick<TaskRepository, "get">,
+		private readonly clock: () => Date = () => new Date(),
+	) {}
+
+	/** Test helper: appends after proving the task belongs to the tenant. */
+	async append(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		workflowRunId: string | null;
+		type: string;
+		actor: RunEventRow["actor"];
+		data?: Record<string, unknown>;
+	}): Promise<RunEventRow> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		await this.requireTask(input.organizationId, input.taskId);
+		const row: RunEventRow = {
+			id: newUuid(),
+			task_id: input.taskId,
+			workflow_run_id: input.workflowRunId as RunEventRow["workflow_run_id"],
+			type: input.type,
+			actor: input.actor,
+			// Round-trip like jsonb: drops undefined, rejects cycles.
+			data: JSON.parse(JSON.stringify(input.data ?? {})) as Record<
+				string,
+				unknown
+			>,
+			occurred_at: this.clock(),
+		};
+		this.rows.push(row);
+		return cloneEvent(row);
+	}
+
+	async listByTask(input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		limit?: number;
+	}): Promise<RunEventRow[]> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.taskId, "taskId");
+		const task = await this.tasks.get(input.taskId);
+		if (!task || task.organization_id !== input.organizationId) return [];
+		return this.rows
+			.filter((row) => row.task_id === input.taskId)
+			.sort(
+				(a, b) =>
+					a.occurred_at.getTime() - b.occurred_at.getTime() ||
+					a.id.localeCompare(b.id),
+			)
+			.slice(0, clampPageLimit(input.limit))
+			.map(cloneEvent);
+	}
+
+	private async requireTask(
+		organizationId: OrganizationId,
+		taskId: TaskId,
+	): Promise<TaskRow> {
+		const task = await this.tasks.get(taskId);
+		if (!task || task.organization_id !== organizationId) {
+			throw new Error("task not found in this organization");
+		}
+		return task;
+	}
+}
+
+function cloneEvent(row: RunEventRow): RunEventRow {
+	return { ...row, data: { ...row.data } };
+}
+
+/**
  * Wires the in-memory execution-truth stack used by offline tests and the
  * wave-7 acceptance script. The artifact repository and lifecycle share the
  * same task repository, so tenant checks agree.
@@ -422,6 +524,7 @@ export function createInMemoryExecutionTruth(
 	readonly repositories: InMemoryRepositoryRepository;
 	readonly artifacts: InMemoryArtifactRepository;
 	readonly lifecycle: InMemoryExecutionLifecycle;
+	readonly runEvents: InMemoryRunEventRepository;
 } {
 	const tasks = new InMemoryTaskRepository();
 	const repositories = new InMemoryRepositoryRepository(clock);
@@ -431,5 +534,6 @@ export function createInMemoryExecutionTruth(
 		artifacts,
 		clock,
 	});
-	return { tasks, repositories, artifacts, lifecycle };
+	const runEvents = new InMemoryRunEventRepository(tasks, clock);
+	return { tasks, repositories, artifacts, lifecycle, runEvents };
 }

@@ -50,6 +50,11 @@ export type RepositoryRow = {
 	provider: "github";
 	external_full_name: string; // e.g. "org/repo"
 	default_branch: string;
+	// Validation policy (migration 0006). NULL means no validation gate.
+	// Bounded to 512 characters and free of shell metacharacters by the
+	// repository layer; the DB CHECK enforces the length only.
+	validation_command: string | null;
+	validation_timeout_ms: number; // 1000..900000 ms, default 300000
 	created_at: Date;
 };
 
@@ -197,6 +202,13 @@ export type TaskRow = {
 	acceptance_criteria: string[];
 	/** Paths the agent may modify; everything else is out of bounds. */
 	file_ownership: string[];
+	/** Pull request opened after human approval (migration 0006); NULL until then. */
+	pull_request_number: number | null;
+	pull_request_url: string | null;
+	/** Failed task this row reproduces; NULL for a first submission. */
+	retry_of: TaskId | null;
+	/** 0 for a first submission, source.retry_depth + 1 for a retry (max 3). */
+	retry_depth: number;
 	created_by: UserId;
 	created_at: Date;
 	updated_at: Date;

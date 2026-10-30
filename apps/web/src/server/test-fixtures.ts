@@ -1,10 +1,18 @@
 import "@tanstack/react-start/server-only";
 import type { QueueRepository, TaskRepository, TaskRow } from "@isolate/db";
 import {
+	InMemoryApprovalRepository,
+	InMemoryArtifactRepository,
+	InMemoryExecutionLifecycle,
 	InMemoryQueueRepository,
 	InMemoryTaskRepository,
 } from "@isolate/db/testing";
-import { asOrganizationId, asUserId, type TaskId } from "@isolate/shared";
+import {
+	asOrganizationId,
+	asUserId,
+	type OrganizationId,
+	type TaskId,
+} from "@isolate/shared";
 import type {
 	SubmitTaskInput,
 	WorkflowRejectionIssue,
@@ -57,10 +65,12 @@ export type FakeCompilationOutcome =
 	| "not_found"
 	| "forbidden"
 	| "storage";
+export const APPROVAL_SHA = "a".repeat(64);
 export function harness() {
 	class Tasks extends InMemoryTaskRepository {
 		ids = new Set<TaskId>();
 		calls: Parameters<TaskRepository["create"]>[0][] = [];
+		retryCalls: Parameters<TaskRepository["createRetry"]>[0][] = [];
 		fail = false;
 		corruptOwner = false;
 		override async create(value: Parameters<TaskRepository["create"]>[0]) {
@@ -72,6 +82,14 @@ export function harness() {
 			return this.corruptOwner
 				? { ...task, organization_id: otherScope.organizationId }
 				: task;
+		}
+		override async createRetry(
+			value: Parameters<TaskRepository["createRetry"]>[0],
+		) {
+			this.retryCalls.push(value);
+			const result = await super.createRetry(value);
+			if (result.ok) this.ids.add(result.task.id);
+			return result;
 		}
 	}
 	class Queue extends InMemoryQueueRepository {
@@ -90,6 +108,14 @@ export function harness() {
 	}
 	const tasks = new Tasks();
 	const queue = new Queue();
+	let nowMs = Date.now();
+	const clock = () => new Date(nowMs);
+	const approvals = new InMemoryApprovalRepository(clock);
+	const lifecycle = new InMemoryExecutionLifecycle({
+		tasks,
+		artifacts: new InMemoryArtifactRepository(tasks, clock),
+		clock,
+	});
 	let allowed = true;
 	let repositoryOwners: Map<string, string> | null = null;
 	let listFails = false;
@@ -167,6 +193,9 @@ export function harness() {
 	const store = createRepositoryStore({
 		tasks,
 		queue,
+		approvals,
+		lifecycle,
+		now: clock,
 		repositoryBelongsToOrganization: async (org, repo) =>
 			allowed &&
 			(repositoryOwners === null || repositoryOwners.get(repo) === org),
@@ -199,10 +228,30 @@ export function harness() {
 	return {
 		tasks,
 		queue,
+		approvals,
+		lifecycle,
 		store,
 		compilation,
 		service: serviceFor(),
 		serviceFor,
+		advanceClock: (ms: number) => {
+			nowMs += ms;
+		},
+		requestApproval: (input: {
+			taskId: TaskId;
+			action: string;
+			expiresInSeconds?: number;
+			organizationId?: OrganizationId;
+		}) =>
+			approvals.request({
+				organizationId: input.organizationId ?? scope.organizationId,
+				taskId: input.taskId,
+				workflowRunId: null,
+				action: input.action,
+				payloadSha256: APPROVAL_SHA,
+				requestedBy: scope.userId,
+				expiresInSeconds: input.expiresInSeconds ?? 300,
+			}),
 		denyRepository: () => {
 			allowed = false;
 		},

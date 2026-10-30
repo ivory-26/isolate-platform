@@ -1,7 +1,9 @@
 import "@tanstack/react-start/server-only";
 import {
 	type PgSql,
+	PostgresApprovalRepository,
 	PostgresCompiledPlanRepository,
+	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
 	PostgresTaskRepository,
 	PostgresWorkflowRejectionRepository,
@@ -9,7 +11,12 @@ import {
 } from "@isolate/db";
 import type { SubmissionReceipt } from "../features/tasks/contracts";
 import { taskSummarySchema } from "../features/tasks/contracts";
-import { createRepositoryStore } from "./repository-store.server";
+import {
+	createRepositoryStore,
+	decideApprovalWithDependencies,
+	retryTaskWithDependencies,
+	type StoreActionDependencies,
+} from "./repository-store.server";
 import { createSubmissionCompiler } from "./submission-compilation.server";
 import { ControlPlaneError, type TaskStore } from "./task-service.server";
 
@@ -31,6 +38,21 @@ function iso(value: unknown): string {
 	if (value instanceof Date) return value.toISOString();
 	if (typeof value === "string") return new Date(value).toISOString();
 	throw new Error("Invalid stored timestamp");
+}
+/**
+ * Binds the action seams to one connection. A retry runs inside ONE
+ * transaction (task row, both events and the queue row commit together), so a
+ * failed enqueue cannot leave a retry with no job.
+ */
+function postgresActionDependencies(
+	connection: PgSql,
+): StoreActionDependencies {
+	return {
+		tasks: new PostgresTaskRepository(connection),
+		queue: new PostgresQueueRepository(connection),
+		approvals: new PostgresApprovalRepository(connection),
+		lifecycle: new PostgresExecutionLifecycle(connection),
+	};
 }
 export function createPostgresStore(sql: PgSql): TaskStore {
 	const listLatest: TaskStore["listLatest"] = async (scope, limit) => {
@@ -89,8 +111,7 @@ export function createPostgresStore(sql: PgSql): TaskStore {
 					});
 					try {
 						return await createRepositoryStore({
-							tasks: new PostgresTaskRepository(connection),
-							queue: new PostgresQueueRepository(connection),
+							...postgresActionDependencies(connection),
 							repositoryBelongsToOrganization: async (
 								organizationId,
 								repositoryId,
@@ -119,6 +140,26 @@ export function createPostgresStore(sql: PgSql): TaskStore {
 			if (rejection) throw rejection;
 			if (receipt === null) throw new ControlPlaneError("UNAVAILABLE");
 			return receipt;
+		},
+		async retry(scope, input) {
+			// Task row, both events and the queue row commit together; a failed
+			// enqueue rolls the retry row back instead of stranding it.
+			return sql.begin(async (transaction) =>
+				retryTaskWithDependencies(
+					postgresActionDependencies(transaction as unknown as PgSql),
+					scope,
+					input,
+				),
+			);
+		},
+		async decideApproval(scope, input) {
+			// The decision opens its own transaction (decision + audit row); the
+			// event and the follow-up job follow the committed decision.
+			return decideApprovalWithDependencies(
+				postgresActionDependencies(sql),
+				scope,
+				input,
+			);
 		},
 	};
 }

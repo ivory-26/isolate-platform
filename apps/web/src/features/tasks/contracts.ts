@@ -34,6 +34,37 @@ export const submitTaskSchema = z.strictObject({
 export const listTasksSchema = z.strictObject({
 	limit: z.number().int().min(1).max(100).default(25),
 });
+/**
+ * A rerun is a NEW task in the same boundary. The caller supplies a bounded
+ * request key; the retry is derived from it + the source id, so a replay
+ * returns the same task instead of a second one.
+ */
+export const retryTaskSchema = z.strictObject({
+	failedTaskId: z.uuid(),
+	idempotencyKey: z.string().trim().min(1).max(200),
+});
+export const decideApprovalSchema = z.strictObject({
+	taskId: z.uuid(),
+	approvalId: z.uuid(),
+	decision: z.enum(["approved", "rejected"]),
+});
+/** Approval actions with a server-side follow-up job (wave 8 vocabulary). */
+export const approvalActionPushBranch = "git.push_branch";
+export const approvalActionCreatePullRequest = "github.create_pull_request";
+/**
+ * Bounded operator-facing messages for the decision actions. They never echo
+ * an approval payload, a branch, a repository or a driver error.
+ */
+export const decisionMessages = {
+	retryNotFailed: "Only a task that failed can be rerun.",
+	retryDepthExhausted:
+		"This task has reached the maximum retry depth (3). Start a new task instead.",
+	approvalNotPending: "This approval has already been decided or has expired.",
+	approvalActionUnsupported:
+		"This approval action has no server-side follow-up.",
+	approvalTransitionFailed:
+		"This approval can no longer change the task state.",
+} as const;
 export const taskSummarySchema = z.strictObject({
 	id: z.uuid(),
 	repositoryId: z.uuid(),
@@ -68,6 +99,10 @@ export const submissionCompilationSchema = z.strictObject({
 });
 export type SubmitTaskInput = z.input<typeof submitTaskSchema>;
 export type ValidatedSubmission = z.output<typeof submitTaskSchema>;
+export type RetryTaskInput = z.input<typeof retryTaskSchema>;
+export type ValidatedRetry = z.output<typeof retryTaskSchema>;
+export type DecideApprovalInput = z.input<typeof decideApprovalSchema>;
+export type ValidatedApprovalDecision = z.output<typeof decideApprovalSchema>;
 export type TaskSummary = z.infer<typeof taskSummarySchema>;
 export type WorkflowRejectionIssue = z.infer<
 	typeof workflowRejectionIssueSchema
@@ -93,6 +128,19 @@ export type SubmissionReceipt = {
 	task: TaskSummary;
 	jobId: string;
 	compilation: SubmissionCompilation;
+};
+/** A rerun is a new task; `created: false` means the same request key replayed. */
+export type RetryReceipt = {
+	taskId: string;
+	branch: string;
+	created: boolean;
+};
+/** `jobId` is null only for a rejection, which fails the task instead. */
+export type ApprovalDecisionReceipt = {
+	taskId: string;
+	approvalId: string;
+	decision: "approved" | "rejected";
+	jobId: string | null;
 };
 export const failureMessages: Record<FailureCode, string> = {
 	INVALID_INPUT: "Check the request fields and execution budget.",

@@ -2,6 +2,9 @@ import "@tanstack/react-start/server-only";
 import type { TaskRepository, TaskRow } from "@isolate/db";
 import {
 	createInMemoryWorkflowCompilationRepositories,
+	InMemoryApprovalRepository,
+	InMemoryArtifactRepository,
+	InMemoryExecutionLifecycle,
 	InMemoryQueueRepository,
 	InMemoryTaskRepository,
 } from "@isolate/db/testing";
@@ -53,6 +56,13 @@ export function createDevelopmentStore(config: RuntimeConfig): TaskStore {
 	return createRepositoryStore({
 		tasks,
 		queue: new InMemoryQueueRepository(),
+		approvals: new InMemoryApprovalRepository(),
+		// The local demo has no execution plane, so retry/decide run against the
+		// same in-memory task rows and produce the same events a real worker sees.
+		lifecycle: new InMemoryExecutionLifecycle({
+			tasks,
+			artifacts: new InMemoryArtifactRepository(tasks),
+		}),
 		repositoryBelongsToOrganization: async (org, repo) =>
 			org === localDemo.organizationId && repo === localDemo.repositoryId,
 		compileSubmission,

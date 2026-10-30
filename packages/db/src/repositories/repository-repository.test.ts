@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { asOrganizationId, type OrganizationId } from "@isolate/shared";
 import { InMemoryRepositoryRepository } from "../testing/execution-truth-fakes";
-import { validateCreateRepositoryInput } from "./repository-repository";
+import {
+	DEFAULT_VALIDATION_TIMEOUT_MS,
+	normalizeValidationPolicy,
+	validateCreateRepositoryInput,
+} from "./repository-repository";
 
 const orgA = asOrganizationId("10000000-0000-4000-8000-000000000001");
 const orgB = asOrganizationId("10000000-0000-4000-8000-000000000002");
@@ -102,5 +106,136 @@ describe("InMemoryRepositoryRepository (RepositoryRepository contract)", () => {
 				defaultBranch: "",
 			}),
 		).toThrow(/defaultBranch/);
+	});
+});
+
+describe("validation policy (RepositoryRepository.setValidationPolicy)", () => {
+	test("new repositories start with no command and the default timeout", async () => {
+		const repos = new InMemoryRepositoryRepository(fixedClock());
+		const created = await repos.create(input(orgA));
+		if (!created.ok) throw new Error("seed failed");
+		expect(created.repository.validation_command).toBeNull();
+		expect(created.repository.validation_timeout_ms).toBe(
+			DEFAULT_VALIDATION_TIMEOUT_MS,
+		);
+	});
+
+	test("normalizeValidationPolicy trims, clears blank, and bounds the timeout", () => {
+		expect(
+			normalizeValidationPolicy({
+				validationCommand: "  bun test  ",
+				validationTimeoutMs: 120000,
+			}),
+		).toEqual({ validationCommand: "bun test", validationTimeoutMs: 120000 });
+		for (const blank of ["", "   ", null]) {
+			expect(
+				normalizeValidationPolicy({
+					validationCommand: blank,
+					validationTimeoutMs: 1000,
+				}).validationCommand,
+			).toBeNull();
+		}
+		for (const timeout of [999, 900001, 1000.5, Number.NaN]) {
+			expect(() =>
+				normalizeValidationPolicy({
+					validationCommand: "bun test",
+					validationTimeoutMs: timeout,
+				}),
+			).toThrow(/validationTimeoutMs/);
+		}
+		expect(
+			normalizeValidationPolicy({
+				validationCommand: "bun test",
+				validationTimeoutMs: 900000,
+			}).validationTimeoutMs,
+		).toBe(900000);
+	});
+
+	test("normalizeValidationPolicy rejects oversize and shell-bearing commands", () => {
+		expect(() =>
+			normalizeValidationPolicy({
+				validationCommand: "x".repeat(513),
+				validationTimeoutMs: 60000,
+			}),
+		).toThrow(/512/);
+		// One probe per forbidden metacharacter class; none may reach the DB.
+		for (const command of [
+			"bun test; rm -rf /",
+			"bun test | tee out",
+			"bun test && echo ok",
+			"bun test > out.log",
+			"bun test < input",
+			"bun test $(whoami)",
+			"bun test `whoami`",
+			"bun test\nrm -rf /",
+		]) {
+			expect(() =>
+				normalizeValidationPolicy({
+					validationCommand: command,
+					validationTimeoutMs: 60000,
+				}),
+			).toThrow(/metacharacters/);
+		}
+		// A colon-bearing script name is legitimate and stays verbatim.
+		expect(
+			normalizeValidationPolicy({
+				validationCommand: "bun run test:unit",
+				validationTimeoutMs: 60000,
+			}).validationCommand,
+		).toBe("bun run test:unit");
+	});
+
+	test("setValidationPolicy updates the read shape and clears with null", async () => {
+		const repos = new InMemoryRepositoryRepository(fixedClock());
+		const created = await repos.create(input(orgA));
+		if (!created.ok) throw new Error("seed failed");
+		const updated = await repos.setValidationPolicy({
+			organizationId: orgA,
+			repositoryId: created.repository.id,
+			validationCommand: "bun test",
+			validationTimeoutMs: 60000,
+		});
+		expect(updated).toMatchObject({
+			validation_command: "bun test",
+			validation_timeout_ms: 60000,
+		});
+		expect(
+			await repos.get({
+				organizationId: orgA,
+				repositoryId: created.repository.id,
+			}),
+		).toMatchObject({ validation_command: "bun test" });
+		expect(
+			(
+				await repos.setValidationPolicy({
+					organizationId: orgA,
+					repositoryId: created.repository.id,
+					validationCommand: null,
+					validationTimeoutMs: DEFAULT_VALIDATION_TIMEOUT_MS,
+				})
+			)?.validation_command,
+		).toBeNull();
+	});
+
+	test("setValidationPolicy is tenant-scoped and never writes a foreign row", async () => {
+		const repos = new InMemoryRepositoryRepository(fixedClock());
+		const created = await repos.create(input(orgA));
+		if (!created.ok) throw new Error("seed failed");
+		expect(
+			await repos.setValidationPolicy({
+				organizationId: orgB,
+				repositoryId: created.repository.id,
+				validationCommand: "bun test",
+				validationTimeoutMs: 60000,
+			}),
+		).toBeNull();
+		expect(
+			(
+				await repos.get({
+					organizationId: orgA,
+					repositoryId: created.repository.id,
+				})
+			)?.validation_command,
+		).toBeNull();
 	});
 });

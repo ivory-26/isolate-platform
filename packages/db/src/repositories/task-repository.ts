@@ -55,11 +55,43 @@ export function buildTransitionValuesSql(
 export const TASK_TRANSITION_VALUES_SQL = buildTransitionValuesSql();
 
 const TASK_COLUMNS =
-	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, file_ownership, created_by, created_at, updated_at";
+	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, created_by, created_at, updated_at";
+
+/** Hard retry ceiling mirrored by the 0006 `retry_depth` CHECK (0..3). */
+export const MAX_RETRY_DEPTH = 3;
+
+/** Practical git ref-name bound; a derived retry branch is clamped to it. */
+export const MAX_RETRY_BRANCH_LENGTH = 255;
 
 /**
- * Statements. Plain string literals — no template interpolation anywhere.
- * `$n` placeholders map positionally to the parameters bound at call time.
+ * Derives the retry task's idempotency key from the caller's key. The source
+ * id is part of the derivation, so replaying the same request returns the same
+ * retry row while two different sources can never collide.
+ */
+export function buildRetryIdempotencyKey(
+	failedTaskId: TaskId,
+	idempotencyKey: string,
+): string {
+	return `retry:${failedTaskId}:${idempotencyKey}`;
+}
+
+/** Deterministic branch for a retry: `<source branch>-retry-<depth>`, clamped. */
+export function deriveRetryBranch(
+	sourceBranch: string,
+	retryDepth: number,
+): string {
+	const suffix = `-retry-${retryDepth}`;
+	const maxBase = Math.max(1, MAX_RETRY_BRANCH_LENGTH - suffix.length);
+	const base =
+		sourceBranch.length > maxBase
+			? sourceBranch.slice(0, maxBase)
+			: sourceBranch;
+	return `${base}${suffix}`;
+}
+
+/**
+ * Statements. Plain string literals — no template interpolation anywhere
+ * except frozen numeric constants (`MAX_RETRY_DEPTH`).
  */
 const STMT = {
 	insert: `INSERT INTO tasks (
@@ -70,6 +102,23 @@ const STMT = {
 		gen_random_uuid(), $1, $2, $3, $3, 'queued', $4, $5::text::jsonb,
 		$6, $7::text::jsonb, $8::text::jsonb, $9, now(), now()
 	)
+	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+	RETURNING ${TASK_COLUMNS}`,
+	// One statement expresses the whole retry decision: the source must be in
+	// THIS organization, still `failed`, and below the depth ceiling. The new
+	// row copies the boundary columns from the source; budget is the original
+	// cap, never enlarged. jsonb columns move column-to-column (no re-encoding).
+	insertRetry: `INSERT INTO tasks (
+		id, organization_id, repository_id, worktree, branch, status,
+		idempotency_key, budget_limits, goal, acceptance_criteria,
+		file_ownership, created_by, retry_of, retry_depth, created_at, updated_at
+	)
+	SELECT gen_random_uuid(), t.organization_id, t.repository_id, $4, $4,
+		'queued', $3, t.budget_limits, t.goal, t.acceptance_criteria,
+		t.file_ownership, t.created_by, t.id, t.retry_depth + 1, now(), now()
+	FROM tasks t
+	WHERE t.id = $1 AND t.organization_id = $2
+	  AND t.status = 'failed' AND t.retry_depth < ${MAX_RETRY_DEPTH}
 	ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	RETURNING ${TASK_COLUMNS}`,
 	get: `SELECT ${TASK_COLUMNS} FROM tasks WHERE id = $1`,
@@ -95,6 +144,31 @@ export type TaskTransitionFailureCode =
 	| "NOT_FOUND"
 	| "INVALID_TRANSITION"
 	| "CONFLICT";
+
+/**
+ * Retry refusal codes reuse the platform vocabulary: `NOT_FOUND` for a
+ * foreign/absent source, `CONFLICT` for a source that is not `failed`, and
+ * `POLICY_DENIED` (a `PlatformError` code) for a source already at depth 3.
+ */
+export type TaskRetryFailureCode = "NOT_FOUND" | "CONFLICT" | "POLICY_DENIED";
+
+export type TaskRetryInput = {
+	organizationId: OrganizationId;
+	failedTaskId: TaskId;
+	/** Caller-supplied key; the stored key is derived from it (replay-stable). */
+	idempotencyKey: string;
+	/** Overrides the derived `<source branch>-retry-<depth>` branch. */
+	branch?: string;
+};
+
+export type TaskRetryResult =
+	| {
+			ok: true;
+			task: TaskRow;
+			/** false when the derived idempotency key hit an existing retry. */
+			created: boolean;
+	  }
+	| { ok: false; code: TaskRetryFailureCode };
 
 /**
  * Contract for the task lifecycle store. Declared in this module (not
@@ -132,6 +206,12 @@ export interface TaskRepository {
 		{ ok: true; task: TaskRow } | { ok: false; code: TaskTransitionFailureCode }
 	>;
 	listExpiredOverBudget(): Promise<TaskRow[]>;
+	/**
+	 * Creates the rerun task for a `failed` source in the same boundary
+	 * (organization, repository, goal, acceptance criteria, file ownership,
+	 * budget caps). `failed` stays terminal: this inserts a NEW row.
+	 */
+	createRetry(input: TaskRetryInput): Promise<TaskRetryResult>;
 }
 
 /** Pure transition guard used by the driver path and by contract-test fakes. */
@@ -145,6 +225,33 @@ export function guardTransition(
 	}
 	if (!canTransition(current, to)) {
 		return { ok: false, code: "INVALID_TRANSITION" };
+	}
+	return { ok: true };
+}
+
+/**
+ * Pure retry eligibility gate shared by the driver and the in-memory fake.
+ * Order matters and is stable: NOT_FOUND (foreign/absent) wins over CONFLICT
+ * (source not failed), which wins over POLICY_DENIED (depth exhausted).
+ */
+export function evaluateRetryEligibility(input: {
+	sourceFound: boolean;
+	sameOrganization: boolean;
+	sourceStatus: TaskStatus | null;
+	sourceRetryDepth: number | null;
+}): { ok: true } | { ok: false; code: TaskRetryFailureCode } {
+	if (
+		!input.sourceFound ||
+		!input.sameOrganization ||
+		input.sourceStatus === null
+	) {
+		return { ok: false, code: "NOT_FOUND" };
+	}
+	if (input.sourceStatus !== "failed") {
+		return { ok: false, code: "CONFLICT" };
+	}
+	if ((input.sourceRetryDepth ?? 0) >= MAX_RETRY_DEPTH) {
+		return { ok: false, code: "POLICY_DENIED" };
 	}
 	return { ok: true };
 }
@@ -299,6 +406,63 @@ export class PostgresTaskRepository implements TaskRepository {
 		)) as unknown as Record<string, unknown>[];
 		return rows.map(mapTaskRow);
 	}
+
+	async createRetry(input: TaskRetryInput): Promise<TaskRetryResult> {
+		requireNonEmpty(input.organizationId, "organizationId");
+		requireNonEmpty(input.failedTaskId, "failedTaskId");
+		requireNonEmpty(input.idempotencyKey, "idempotencyKey");
+		if (input.idempotencyKey.length > 200) {
+			throw new Error("idempotencyKey must be at most 200 characters");
+		}
+		if (input.branch !== undefined) {
+			requireNonEmpty(input.branch, "branch");
+		}
+		const idempotencyKey = buildRetryIdempotencyKey(
+			input.failedTaskId,
+			input.idempotencyKey,
+		);
+
+		// Fast refusal path: classify from a tenant-scoped read so the caller
+		// gets NOT_FOUND / CONFLICT / POLICY_DENIED instead of a silent no-op.
+		const source = await this.get(input.failedTaskId);
+		const eligibility = evaluateRetryEligibility({
+			sourceFound: source !== null,
+			sameOrganization: source?.organization_id === input.organizationId,
+			sourceStatus: source?.status ?? null,
+			sourceRetryDepth: source?.retry_depth ?? null,
+		});
+		if (!eligibility.ok) {
+			return eligibility;
+		}
+		if (source === null) {
+			return { ok: false, code: "NOT_FOUND" };
+		}
+
+		const branch =
+			input.branch ?? deriveRetryBranch(source.branch, source.retry_depth + 1);
+		// The INSERT ... SELECT re-checks org/failed/depth, so a status change
+		// between the read above and this statement can never create a retry
+		// of a non-failed task.
+		const inserted = (await this.sql.unsafe(STMT.insertRetry, [
+			input.failedTaskId,
+			input.organizationId,
+			idempotencyKey,
+			branch,
+		])) as unknown as Record<string, unknown>[];
+		if (inserted.length > 0) {
+			return { ok: true, task: mapTaskRow(inserted[0]), created: true };
+		}
+		// Replay: the derived key already exists in this organization.
+		const replay = (await this.sql.unsafe(STMT.getByIdempotencyKey, [
+			input.organizationId,
+			idempotencyKey,
+		])) as unknown as Record<string, unknown>[];
+		if (replay.length > 0) {
+			return { ok: true, task: mapTaskRow(replay[0]), created: false };
+		}
+		// The source changed between the read and the INSERT (lost race).
+		return { ok: false, code: "CONFLICT" };
+	}
 }
 
 type Row = Record<string, unknown>;
@@ -322,6 +486,12 @@ function mapTaskRow(row: Row): TaskRow {
 		file_ownership: parseJsonbColumn<TaskRow["file_ownership"]>(
 			row.file_ownership,
 		) as TaskRow["file_ownership"],
+		pull_request_number: (row.pull_request_number ??
+			null) as TaskRow["pull_request_number"],
+		pull_request_url: (row.pull_request_url ??
+			null) as TaskRow["pull_request_url"],
+		retry_of: (row.retry_of ?? null) as TaskRow["retry_of"],
+		retry_depth: Number(row.retry_depth ?? 0),
 		created_by: row.created_by as TaskRow["created_by"],
 		created_at: row.created_at as Date,
 		updated_at: row.updated_at as Date,

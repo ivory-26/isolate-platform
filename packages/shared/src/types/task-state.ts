@@ -49,13 +49,26 @@ export const TASK_STATE_TRANSITIONS: Readonly<
 		"cancelled",
 		"blocked",
 	],
-	awaiting_approval: ["executing", "failed", "cancelled", "blocked"],
-	executing: ["validating", "failed", "cancelled", "blocked"],
+	awaiting_approval: [
+		"executing",
+		"pull_request_created",
+		"failed",
+		"cancelled",
+		"blocked",
+	],
+	executing: [
+		"validating",
+		"awaiting_approval",
+		"failed",
+		"cancelled",
+		"blocked",
+	],
 	validating: ["repairing", "review_ready", "failed", "cancelled", "blocked"],
 	// bounded repair budget is enforced separately with attempt counters
 	repairing: ["validating", "failed", "cancelled", "blocked"],
 	review_ready: [
 		"pull_request_created",
+		"awaiting_approval",
 		"completed",
 		"failed",
 		"cancelled",

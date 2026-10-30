@@ -10,6 +10,7 @@ import {
 	PostgresRunEventRepository,
 	PostgresTaskContextRepository,
 	PostgresTaskRepository,
+	PostgresToolInvocationRepository,
 	PostgresUsageRepository,
 	type RepositoryRepository,
 	type RunEventRepository,
@@ -378,6 +379,31 @@ export function createSandboxEnvResolver(provider: GitHubTokenProvider) {
 	};
 }
 
+/**
+ * Wave 9 tool audit writer: maps the handler's bounded audit record onto the
+ * existing `tool_invocations` repository. Only the argument digest is stored
+ * (`arguments_redacted = { sha256 }`), so no tool payload can reach the table.
+ * `executed` maps to the DB's `allowed` decision; denials keep their reason.
+ */
+export function createToolInvocationRecorder(
+	sql: PgSql,
+): NonNullable<WorkerCompositionOverrides["recordToolInvocation"]> {
+	const repository = new PostgresToolInvocationRepository(sql);
+	return async (input) => {
+		await repository.record({
+			organizationId: input.organizationId,
+			taskId: input.taskId,
+			workflowRunId: input.workflowRunId,
+			toolName: input.toolName,
+			argumentsRedacted:
+				input.argumentsSha256 === null ? {} : { sha256: input.argumentsSha256 },
+			decision: input.outcome === "executed" ? "allowed" : "denied",
+			denialReason: input.denialReason,
+			durationMs: input.durationMs,
+		});
+	};
+}
+
 export async function createConfiguredWorkerComposition(
 	config: WorkerConfig,
 	logger: Logger,
@@ -418,6 +444,9 @@ export async function createConfiguredWorkerComposition(
 		// safe to bind; the PR reads are bound with the PR stage below.
 		loadValidationPolicy: (input) =>
 			loadValidationPolicyForTask(taskRepository, repositoryRepository, input),
+		// Wave 9 tool audit: one `tool_invocations` row per gated call (executed
+		// or denied), carrying a SHA-256 argument digest — never the arguments.
+		recordToolInvocation: createToolInvocationRecorder(sql),
 	};
 
 	const sandbox = await selectSandboxProvider(env, deps);

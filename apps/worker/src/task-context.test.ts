@@ -66,6 +66,18 @@ describe("toTaskContext", () => {
 		);
 	});
 
+	test("forwards a repository id when the source row exposes one", () => {
+		const withId = row() as TaskContextSourceRow & { repositoryId?: string };
+		withId.repositoryId = "44444444-4444-4444-8444-444444444444";
+		expect(
+			toTaskContext(withId, { organizationId: ORG, taskId: TASK }).repositoryId,
+		).toBe("44444444-4444-4444-8444-444444444444");
+		// Without the column the lock falls back to the repo URL, not a guess.
+		expect(
+			toTaskContext(row(), { organizationId: ORG, taskId: TASK }).repositoryId,
+		).toBeUndefined();
+	});
+
 	test("rejects a mismatched organization", () => {
 		expect(() =>
 			toTaskContext(row(), {

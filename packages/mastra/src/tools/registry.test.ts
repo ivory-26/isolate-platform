@@ -5,6 +5,7 @@ import { denyByDefault, type PolicyDecision, type ToolPolicy } from "./policy";
 import {
 	type ToolCallContext,
 	type ToolDecisionRecord,
+	toolArgumentsDigest,
 	type WiredToolOutput,
 	wirePlatformTools,
 } from "./registry";
@@ -65,7 +66,7 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 			audited: true,
 			value: { content: '{"path":"src/a.ts"}' },
 		});
-		expect(decisions).toEqual([
+		expect(decisions).toMatchObject([
 			{
 				tool: "repo.read_file",
 				taskId: "task-1",
@@ -74,6 +75,13 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 				reason: null,
 			},
 		]);
+		// Wave 9: a payload-free digest and a bounded duration, never the args.
+		expect(decisions[0]?.argumentsSha256).toMatch(/^[0-9a-f]{64}$/);
+		expect(decisions[0]?.argumentsSha256).toBe(
+			toolArgumentsDigest({ path: "src/a.ts" }),
+		);
+		expect(decisions[0]?.durationMs).toBeGreaterThanOrEqual(0);
+		expect(JSON.stringify(decisions)).not.toContain("src/a.ts");
 	});
 
 	test("an implementation-level policy rejection is audited as denied", async () => {
@@ -96,7 +104,7 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 			{ path: "src/a.ts" },
 		);
 		expect(output).toEqual({ state: "failed", code: "POLICY_DENIED" });
-		expect(decisions).toEqual([
+		expect(decisions).toMatchObject([
 			{
 				tool: "repo.read_file",
 				taskId: "task-1",
@@ -105,6 +113,7 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 				reason: "POLICY_DENIED",
 			},
 		]);
+		expect(decisions[0]?.argumentsSha256).toMatch(/^[0-9a-f]{64}$/);
 	});
 
 	test("deny-by-default denies allowlisted tools that missed the risk table", async () => {
@@ -219,5 +228,36 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 			"sandbox.exec",
 		);
 		expect(output).toEqual({ state: "failed", code: "INTERNAL" });
+	});
+
+	test("a failing audit sink never changes the gate outcome", async () => {
+		const registry = wirePlatformTools({
+			policy: allowEverything(),
+			implementations: {
+				"repo.list_files": async () => ({ entries: [] }),
+			},
+			onDecision: () => {
+				throw new Error("audit store down");
+			},
+		});
+		const executed = await callTool(
+			registry.forTask(taskContext),
+			"repo.list_files",
+			{ path: "." },
+		);
+		expect(executed).toMatchObject({ state: "executed" });
+
+		const denying = wirePlatformTools({
+			policy: denyByDefault({}),
+			implementations: {},
+			onDecision: async () => {
+				throw new Error("audit store down");
+			},
+		});
+		const denied = await callTool(
+			denying.forTask(taskContext),
+			"repo.list_files",
+		);
+		expect(denied).toEqual({ state: "denied", reason: "POLICY_DENIED" });
 	});
 });

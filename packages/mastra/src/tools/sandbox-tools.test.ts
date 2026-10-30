@@ -347,7 +347,7 @@ describe("sandbox tools behind the policy gate", () => {
 		await callTool(registry, "repo.read_file", { path: "src/a.ts" });
 		await callTool(registry, "git.push_branch");
 		await callTool(registry, "db.migrate");
-		expect(decisions).toEqual([
+		expect(decisions).toMatchObject([
 			{
 				tool: "repo.read_file",
 				taskId: "task-1",
@@ -370,6 +370,12 @@ describe("sandbox tools behind the policy gate", () => {
 				reason: "POLICY_DENIED",
 			},
 		]);
+		// Every call, executed or denied, carries a digest and a duration.
+		expect(decisions).toHaveLength(3);
+		for (const decision of decisions) {
+			expect(decision.argumentsSha256).toMatch(/^[0-9a-f]{64}$/);
+			expect(decision.durationMs).toBeGreaterThanOrEqual(0);
+		}
 	});
 });
 

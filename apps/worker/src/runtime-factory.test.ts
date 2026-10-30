@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { SandboxToolBackend } from "@isolate/mastra";
+import type { SandboxToolBackend, ToolDecisionRecord } from "@isolate/mastra";
 import {
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
+	createTaskTools,
 } from "./runtime-factory";
 
 const backend: SandboxToolBackend = {
@@ -81,5 +82,41 @@ describe("createBasetenRuntimeFactory", () => {
 				META_MODEL_ID: "muse-spark-1.3",
 			}),
 		).toThrow(/META_MODEL_ID/);
+	});
+});
+
+describe("createTaskTools", () => {
+	test("threads the tool audit hook to wired sandbox tools (allowed and denied)", async () => {
+		const decisions: ToolDecisionRecord[] = [];
+		const tools = createTaskTools({
+			backend,
+			toolContext: {
+				organizationId: "11111111-1111-4111-8111-111111111111",
+				taskId: "22222222-2222-4222-8222-222222222222",
+			},
+			onToolDecision: (record) => {
+				decisions.push(record);
+			},
+		});
+		const read = tools["repo.read_file"].execute;
+		const push = tools["git.push_branch"].execute;
+		if (read === undefined || push === undefined) {
+			throw new Error("wired tools are missing execute");
+		}
+		await read({ path: "src/a.ts" }, {} as never);
+		await push({}, {} as never);
+
+		expect(decisions).toMatchObject([
+			{ tool: "repo.read_file", outcome: "executed", reason: null },
+			{
+				tool: "git.push_branch",
+				outcome: "denied",
+				reason: "APPROVAL_REQUIRED",
+			},
+		]);
+		for (const decision of decisions) {
+			expect(decision.argumentsSha256).toMatch(/^[0-9a-f]{64}$/);
+			expect(decision.durationMs).toBeGreaterThanOrEqual(0);
+		}
 	});
 });

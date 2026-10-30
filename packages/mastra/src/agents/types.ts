@@ -1,5 +1,6 @@
 import { PlatformError } from "@isolate/shared";
 import { Agent, type ToolsInput } from "@mastra/core/agent";
+import type { ToolDecisionRecord } from "../tools/registry";
 import type { SandboxToolBackend } from "../tools/sandbox-backend";
 
 /**
@@ -26,6 +27,12 @@ export type TaskContext = {
 	// Explicit file ownership keeps parallel agents out of shared paths.
 	fileOwnership: string[];
 	acceptanceCriteria: string[];
+	/**
+	 * Wave 9: stable repository identity for the per-branch execution lock.
+	 * Supplied by the loader when the task row exposes the repository id; the
+	 * worker falls back to `repoUrl` (same string for every job on one repo).
+	 */
+	repositoryId?: string;
 	limits: TaskLimits;
 };
 
@@ -114,6 +121,12 @@ export type CodingAgentRuntimeFactoryOptions = {
 		/** Wave 7: authored paths the task may modify; empty means no writes. */
 		fileOwnership?: readonly string[];
 	};
+	/**
+	 * Wave 9: audit hook for every gated tool call (executed, denied or
+	 * approval-required). Receives ids, the denial reason and an argument
+	 * digest only — never tool payloads. Threaded into `wireSandboxTools`.
+	 */
+	onToolDecision?: (record: ToolDecisionRecord) => Promise<void> | void;
 };
 
 export type CodingAgentRuntimeFactory = (

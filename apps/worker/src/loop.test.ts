@@ -213,6 +213,8 @@ function makeHarness(
 		pollIntervalMs?: number;
 		leaseSeconds?: number;
 		reaperIntervalMs?: number;
+		/** Wave 9: in-process pool size (config.maxConcurrency). */
+		maxConcurrency?: number;
 		/** Dep-level test seam: hard override of the parsed budget. */
 		jobTimeoutMs?: number;
 		/** Parsed WorkerConfig value: the production precedence path. */
@@ -233,6 +235,9 @@ function makeHarness(
 			maxAttemptsDefault: options.maxAttemptsDefault ?? 5,
 			reaperIntervalMs: options.reaperIntervalMs ?? 10_000, // off by default
 			jobTimeoutMs: options.configJobTimeoutMs,
+			...(options.maxConcurrency === undefined
+				? {}
+				: { maxConcurrency: options.maxConcurrency }),
 		}),
 		logger: makeFakingLogger(logs),
 		handlers,
@@ -741,6 +746,97 @@ describe("worker loop — per-job timeout sourcing", () => {
 		} finally {
 			await harness.stop("done");
 		}
+	});
+});
+
+describe("worker loop — bounded concurrency (wave 9)", () => {
+	function gated() {
+		const started: string[] = [];
+		const finished: string[] = [];
+		let active = 0;
+		let peak = 0;
+		const releases = new Map<string, () => void>();
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async (job) => {
+				active += 1;
+				peak = Math.max(peak, active);
+				started.push(job.id);
+				await new Promise<void>((resolve) => {
+					releases.set(job.id, resolve);
+				});
+				active -= 1;
+				finished.push(job.id);
+				return { outcome: "complete" };
+			},
+		};
+		return {
+			handler,
+			started,
+			finished,
+			releases,
+			peak: () => peak,
+		};
+	}
+
+	test("never exceeds config.maxConcurrency and keeps claiming as slots free", async () => {
+		const gate = gated();
+		const harness = makeHarness([gate.handler], { maxConcurrency: 2 });
+		harness.queue.jobs.push(makeJob(), makeJob(), makeJob());
+
+		await eventually(() => gate.started.length === 2);
+		// Pool full: the third job must not start while two are running.
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		expect(gate.started).toHaveLength(2);
+		expect(gate.peak()).toBe(2);
+
+		gate.releases.get(gate.started[0] as string)?.();
+		await eventually(() => gate.started.length === 3);
+		expect(gate.peak()).toBe(2);
+
+		for (const id of [...gate.started]) gate.releases.get(id)?.();
+		await eventually(() => harness.queue.ackCompletes.length === 3);
+
+		expect(gate.peak()).toBe(2);
+		expect(harness.queue.ackFails).toEqual([]);
+		await harness.stop("done");
+	});
+
+	test("stop() drains every in-flight job before resolving", async () => {
+		const aborted: string[] = [];
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async (job, ctx) => {
+				await new Promise<void>((resolve) => {
+					if (ctx.signal.aborted) {
+						aborted.push(job.id);
+						resolve();
+						return;
+					}
+					ctx.signal.addEventListener(
+						"abort",
+						() => {
+							aborted.push(job.id);
+							resolve();
+						},
+						{ once: true },
+					);
+				});
+				return { outcome: "complete" };
+			},
+		};
+		const harness = makeHarness([handler], { maxConcurrency: 3 });
+		harness.queue.jobs.push(makeJob(), makeJob(), makeJob());
+		await eventually(() => harness.queue.claimNextCalls >= 3);
+
+		await harness.stop("drain");
+
+		expect(aborted).toHaveLength(3);
+		const claimsAfterStop = harness.queue.claimNextCalls;
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		expect(harness.queue.claimNextCalls).toBe(claimsAfterStop);
 	});
 });
 

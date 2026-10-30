@@ -153,6 +153,18 @@ export function createOfflineWorkerDeps(
 		...(overrides.loadValidationPolicy === undefined
 			? {}
 			: { loadValidationPolicy: overrides.loadValidationPolicy }),
+		// Wave 9 seams. Dropping any of these would silently degrade completion
+		// to the diff-only fallback, disable the tool audit or allow two writers
+		// on one branch, so every one is forwarded explicitly.
+		...(overrides.loadAcceptanceChecks === undefined
+			? {}
+			: { loadAcceptanceChecks: overrides.loadAcceptanceChecks }),
+		...(overrides.recordToolInvocation === undefined
+			? {}
+			: { recordToolInvocation: overrides.recordToolInvocation }),
+		...(overrides.acquireBranchLock === undefined
+			? {}
+			: { acquireBranchLock: overrides.acquireBranchLock }),
 	};
 
 	const handlers: JobHandler[] = [createTaskExecutionHandler(taskExecution)];

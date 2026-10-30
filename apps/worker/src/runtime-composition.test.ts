@@ -16,6 +16,7 @@ import { workerConfigSchema } from "./config";
 import {
 	createConfiguredWorkerComposition,
 	createSandboxEnvResolver,
+	createToolInvocationRecorder,
 	loadPullRequestTargetFromEvents,
 	loadPullRequestTaskState,
 	loadValidationPolicyForTask,
@@ -188,8 +189,54 @@ describe("configured composition", () => {
 		expect(composition.overrides.createWorkspaceGit).toBeUndefined();
 		expect(composition.overrides.pushEnabled).toBe(false);
 		expect(typeof composition.overrides.loadValidationPolicy).toBe("function");
+		// Wave 9: the tool audit sink is bound with the database composition.
+		expect(typeof composition.overrides.recordToolInvocation).toBe("function");
 		expect(composition.overrides.pullRequest).toBeUndefined();
 		expect(composition.githubAuth).toBe(false);
+	});
+
+	test("the tool audit writer stores only the argument digest", async () => {
+		const inserts: unknown[][] = [];
+		const sql = {
+			async unsafe(_query: string, params: unknown[]) {
+				inserts.push(params);
+				return [
+					{
+						id: "ti_1",
+						organization_id: params[0],
+						task_id: params[1],
+						workflow_run_id: params[2],
+						tool_name: params[3],
+						arguments_redacted: params[4],
+						decision: params[5],
+						denial_reason: params[6],
+						duration_ms: params[7],
+						created_at: new Date(),
+					},
+				];
+			},
+		} as unknown as PgSql;
+		const record = createToolInvocationRecorder(sql);
+		await record({
+			organizationId: "11111111-1111-4111-8111-111111111111" as OrganizationId,
+			taskId: "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f" as TaskId,
+			workflowRunId: null,
+			toolName: "repo.write_file",
+			outcome: "denied",
+			denialReason: "POLICY_DENIED",
+			argumentsSha256: "c".repeat(64),
+			durationMs: 7,
+		});
+
+		expect(inserts).toHaveLength(1);
+		const params = inserts[0] ?? [];
+		expect(params[3]).toBe("repo.write_file");
+		expect(params[4]).toBe(JSON.stringify({ sha256: "c".repeat(64) }));
+		expect(params[5]).toBe("denied");
+		expect(params[6]).toBe("POLICY_DENIED");
+		expect(params[7]).toBe(7);
+		// No tool argument content can reach the row.
+		expect(JSON.stringify(params)).not.toContain("fileContent");
 	});
 });
 

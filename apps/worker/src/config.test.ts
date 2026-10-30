@@ -19,9 +19,32 @@ describe("worker config", () => {
 		const config = loadWorkerConfig({
 			WORKER_ID: "ci-worker",
 			WORKER_POLL_INTERVAL_MS: "250",
+			WORKER_MAX_CONCURRENCY: "3",
 		});
 		expect(config.workerId).toBe("ci-worker");
 		expect(config.pollIntervalMs).toBe(250);
+		expect(config.maxConcurrency).toBe(3);
+	});
+
+	test("maxConcurrency defaults to the shared contract and stays bounded", () => {
+		expect(workerConfigSchema.parse({}).maxConcurrency).toBe(
+			WORKER_CONFIG_DEFAULTS.maxConcurrency,
+		);
+		expect(workerConfigSchema.parse({ maxConcurrency: 1 }).maxConcurrency).toBe(
+			1,
+		);
+		expect(
+			workerConfigSchema.parse({ maxConcurrency: 16 }).maxConcurrency,
+		).toBe(16);
+		expect(workerConfigSchema.safeParse({ maxConcurrency: 0 }).success).toBe(
+			false,
+		);
+		expect(workerConfigSchema.safeParse({ maxConcurrency: 17 }).success).toBe(
+			false,
+		);
+		expect(workerConfigSchema.safeParse({ maxConcurrency: 1.5 }).success).toBe(
+			false,
+		);
 	});
 
 	test("WORKER_JOB_TIMEOUT_MS coerces and mirrors shared contract bounds", () => {

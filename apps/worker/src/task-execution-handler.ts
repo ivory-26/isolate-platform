@@ -6,6 +6,7 @@ import type {
 	CodingAgentRuntimeFactory,
 	SandboxToolBackend,
 	TaskContext,
+	ToolDecisionRecord,
 } from "@isolate/mastra";
 import type {
 	CommandPolicy,
@@ -22,12 +23,15 @@ import {
 	SandboxError,
 } from "@isolate/sandbox";
 import type {
+	AcceptanceCheck,
+	AcceptanceReport,
 	ExecutionLifecycle,
 	LifecycleTransitionInput,
 	UsageSink,
 	ValidationReport,
 } from "@isolate/shared";
 import {
+	acceptanceCheckSchema,
 	errorCodeOf,
 	isPlatformError,
 	type Logger,
@@ -35,6 +39,12 @@ import {
 	PlatformError,
 	type TaskId,
 } from "@isolate/shared";
+import {
+	acceptanceReportArtifact,
+	invalidAcceptanceReport,
+	MAX_ACCEPTANCE_CHECKS,
+	runAcceptanceChecks,
+} from "./acceptance";
 import type { HandlerContext, HandlerVerdict, JobHandler } from "./contracts";
 import { readApprovalId, readTaskId } from "./payload";
 import {
@@ -117,8 +127,50 @@ const HEAD_SHA_OUTPUT_BYTES = 4_096;
 const HEAD_SHA_PATTERN = /^[0-9a-f]{40,64}$/i;
 /** Approval validity window; the resume job must arrive before this. */
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+/** Bounded requeue delay for a branch-lock miss (the queue owns real backoff). */
+const BRANCH_LOCK_BACKOFF_MS = 30_000;
 /** Hosts the clone/push helpers are allowed to reach inside the sandbox. */
 const WORKSPACE_EGRESS_HOSTS = ["github.com", "codeload.github.com"] as const;
+
+/**
+ * Wave 9: what the acceptance gate proved before `review_ready`. Recorded on
+ * the attempt so "completed" can never be read as "the environment passed"
+ * when no environment check existed.
+ */
+type CompletionMode = "acceptance" | "validation" | "diff-only";
+
+/**
+ * One audited tool call for the `tool_invocations` table. Bounded fields only:
+ * tool name, decision/outcome, denial reason, a SHA-256 argument digest (never
+ * the arguments) and the call duration. The sink is injected by the
+ * composition root; a failing sink never changes a tool decision.
+ */
+export type ToolInvocationAudit = {
+	organizationId: OrganizationId;
+	taskId: TaskId;
+	workflowRunId: string | null;
+	toolName: string;
+	outcome: "executed" | "denied";
+	denialReason: string | null;
+	argumentsSha256: string | null;
+	durationMs: number | null;
+};
+
+/** Idempotent handle returned by `acquireBranchLock`; release in `finally`. */
+export type BranchLockLease = {
+	release(): Promise<void> | void;
+};
+
+export type BranchLockAcquireInput = {
+	organizationId: OrganizationId;
+	/**
+	 * Stable repository identity: the DB repository id when the task context
+	 * exposes it, otherwise the repository URL (identical for every job on the
+	 * same repository). Never model-supplied.
+	 */
+	repositoryId: string;
+	branch: string;
+};
 
 const TURN_STATUSES: ReadonlySet<string> = new Set([
 	"started",
@@ -205,6 +257,30 @@ export type TaskExecutionDeps = {
 		organizationId: OrganizationId;
 		taskId: TaskId;
 	}) => Promise<{ command: string; timeoutMs: number } | null>;
+	/**
+	 * Wave 9 machine-checkable acceptance criteria for the task. `null` or an
+	 * absent seam means "no checks declared": the gate then depends on the
+	 * validation command, or falls back to the diff-only rule.
+	 */
+	loadAcceptanceChecks?: (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+	}) => Promise<readonly AcceptanceCheck[] | null>;
+	/**
+	 * Wave 9 tool audit sink. Bound by the composition root to the
+	 * `tool_invocations` repository; the handler records every executed and
+	 * denied tool call through it and never lets a sink failure change a verdict.
+	 */
+	recordToolInvocation?: (input: ToolInvocationAudit) => Promise<void> | void;
+	/**
+	 * Wave 9 per-repository+branch execution lock. Acquired after the task
+	 * context loads and before any sandbox is provisioned; released (idempotent)
+	 * in `finally`. `null` means another job holds it: the handler returns a
+	 * bounded retry and never becomes a second writer. Absent = no lock bound.
+	 */
+	acquireBranchLock?: (
+		input: BranchLockAcquireInput,
+	) => Promise<BranchLockLease | null>;
 };
 
 /**
@@ -493,6 +569,7 @@ function createHandler(
 			let spentUsd = 0;
 
 			let attemptId: string | null = null;
+			let branchLock: BranchLockLease | null = null;
 			let attemptOutcome: Readonly<Record<string, unknown>> = {
 				status: "failed",
 			};
@@ -661,8 +738,40 @@ function createHandler(
 							? {}
 							: { baseBranch: context.baseBranch, repoPath }),
 					});
+					/**
+					 * Wave 9 tool audit: the runtime factory forwards this hook to
+					 * `wireSandboxTools`, so every gated call (executed, denied or
+					 * approval-required) reaches the injected sink. Audit failures are
+					 * logged with a bounded code and never change a tool decision.
+					 */
+					const recordToolDecision =
+						deps.recordToolInvocation === undefined
+							? undefined
+							: async (record: ToolDecisionRecord): Promise<void> => {
+									const sink = deps.recordToolInvocation;
+									if (sink === undefined) return;
+									try {
+										await sink({
+											organizationId: job.organizationId,
+											taskId: job.taskId,
+											workflowRunId: null,
+											toolName: record.tool,
+											outcome: record.outcome,
+											denialReason: record.reason,
+											argumentsSha256: record.argumentsSha256 ?? null,
+											durationMs: record.durationMs ?? null,
+										});
+									} catch (error) {
+										ctx.logger.warn("tool invocation not recorded", {
+											code: clampErrorCode(errorCodeOf(error)),
+										});
+									}
+								};
 					const runtime = deps.createRuntime({
 						caps: deps.caps,
+						...(recordToolDecision === undefined
+							? {}
+							: { onToolDecision: recordToolDecision }),
 						onRecord: async (record) => {
 							logTurnRecord(ctx.logger, record);
 						},
@@ -909,6 +1018,141 @@ function createHandler(
 									organizationId: job.organizationId,
 									taskId: job.taskId,
 								});
+
+					// Wave 9 acceptance gate. Declared checks run first (file checks
+					// are cheap and fail fast); every one must pass. A validation
+					// command, when configured, must pass as well. Both run in THIS
+					// sandbox through the same trusted policy.
+					const acceptanceChecks =
+						deps.loadAcceptanceChecks === undefined
+							? []
+							: ((await deps.loadAcceptanceChecks({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+								})) ?? []);
+					let acceptanceReport: AcceptanceReport | null = null;
+					if (acceptanceChecks.length > 0) {
+						const acceptanceSinks = {
+							started: async (input: { total: number }) => {
+								await mode.lifecycle.event({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									workflowRunId: null,
+									type: "acceptance.started",
+									actor: "worker",
+									data: { total: input.total },
+								});
+							},
+							finished: async (report: AcceptanceReport) => {
+								await mode.lifecycle.event({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									workflowRunId: null,
+									type: "acceptance.finished",
+									actor: "worker",
+									data: { ...report },
+								});
+							},
+							artifact: async (input: { content: string; sha256: string }) => {
+								const stored = await mode.lifecycle.artifact({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									kind: "report",
+									contentType: "application/json",
+									content: input.content,
+									sha256: input.sha256,
+								});
+								await mode.lifecycle.event({
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									workflowRunId: null,
+									type: "artifact.created",
+									actor: "worker",
+									data: {
+										artifactId: stored.artifactId,
+										kind: "report",
+										sha256: input.sha256,
+										bytes: Buffer.byteLength(input.content, "utf8"),
+										truncated: false,
+									},
+								});
+							},
+						};
+						const parsedChecks: AcceptanceCheck[] = [];
+						let malformed = false;
+						for (const candidate of acceptanceChecks.slice(
+							0,
+							MAX_ACCEPTANCE_CHECKS,
+						)) {
+							const parsed = acceptanceCheckSchema.safeParse(candidate);
+							if (!parsed.success) {
+								malformed = true;
+								break;
+							}
+							parsedChecks.push(parsed.data);
+						}
+						if (malformed) {
+							// Fail closed on a malformed persisted row: no check runs,
+							// and the bounded report still explains the attempt.
+							acceptanceReport = invalidAcceptanceReport(
+								acceptanceChecks.length,
+							);
+							await acceptanceSinks.started({
+								total: acceptanceReport.total,
+							});
+							await acceptanceSinks.finished(acceptanceReport);
+							await acceptanceSinks.artifact(
+								acceptanceReportArtifact(acceptanceReport),
+							);
+						} else {
+							acceptanceReport = await runAcceptanceChecks({
+								provider: deps.provider,
+								sandbox: handle,
+								repoPath,
+								backend: sandboxBackend ?? null,
+								checks: parsedChecks,
+								...(validationPolicy === null
+									? {}
+									: { timeoutMs: validationPolicy.timeoutMs }),
+								now,
+								signal: ctx.signal,
+								sinks: acceptanceSinks,
+							});
+						}
+						if (!acceptanceReport.passed) {
+							// Terminal for this attempt: the report is stored, nothing is
+							// pushed, no diff artifact and no repair turn.
+							await transitionLifecycle(
+								mode.lifecycle,
+								ctx.logger,
+								{
+									organizationId: job.organizationId,
+									taskId: job.taskId,
+									from: "validating",
+									to: "failed",
+									actor: "worker",
+									reason: malformed
+										? "invalid acceptance checks"
+										: "acceptance failed",
+								},
+								false,
+							);
+							attemptOutcome = {
+								status: "failed",
+								reason: malformed
+									? "invalid acceptance checks"
+									: "acceptance failed",
+								acceptance: acceptanceReport,
+							};
+							return {
+								outcome: "dead_letter",
+								code: "VALIDATION_FAILED",
+								note: malformed
+									? "invalid acceptance checks"
+									: "acceptance failed",
+							};
+						}
+					}
 					let validationReport: ValidationReport | null = null;
 					if (validationPolicy === null) {
 						await mode.lifecycle.event({
@@ -1124,14 +1368,28 @@ function createHandler(
 						},
 						false,
 					);
+					// What proved completion: every acceptance check, the repository
+					// validation command, or neither (the wave-7 diff-only fallback,
+					// recorded explicitly so it is never mistaken for an environment
+					// proof).
+					const completion: CompletionMode =
+						acceptanceReport !== null
+							? "acceptance"
+							: validationReport !== null
+								? "validation"
+								: "diff-only";
 					attemptOutcome = {
 						status: "review_ready",
 						filesChanged: stat.filesChanged,
 						insertions: stat.insertions,
 						deletions: stat.deletions,
+						completion,
 						...(validationReport === null
 							? {}
 							: { validation: validationReport }),
+						...(acceptanceReport === null
+							? {}
+							: { acceptance: acceptanceReport }),
 					};
 
 					if (mode.pushEnabled) {
@@ -1356,6 +1614,29 @@ function createHandler(
 				}
 
 				const lifecycle = deps.lifecycle;
+
+				// Wave 9 branch lock: one writer per repository+branch. Acquired
+				// before any provisioning (including the legacy lifecycle-less
+				// flow) so two jobs can never clone/push the same branch; a miss
+				// is a bounded requeue, never a second writer.
+				if (deps.acquireBranchLock !== undefined) {
+					branchLock = await deps.acquireBranchLock({
+						organizationId: job.organizationId,
+						repositoryId: context.repositoryId ?? context.repoUrl,
+						branch: context.isolatedBranch,
+					});
+					if (branchLock === null) {
+						ctx.logger.warn("branch lock unavailable; requeueing job", {
+							backoffMs: BRANCH_LOCK_BACKOFF_MS,
+						});
+						return {
+							outcome: "retry",
+							code: "DEPENDENCY_CONFLICT",
+							backoffMs: BRANCH_LOCK_BACKOFF_MS,
+						};
+					}
+				}
+
 				if (lifecycle === undefined) {
 					return await runWithSandbox(context, allowedTurns, null);
 				}
@@ -1545,6 +1826,19 @@ function createHandler(
 				});
 				return toVerdict(error, ctx);
 			} finally {
+				// Release the branch lock before the attempt is closed: the next
+				// job for this repository+branch must not see a held lock after the
+				// task's outcome is durable. Release is idempotent and its failure
+				// never replaces the job's verdict.
+				if (branchLock !== null) {
+					try {
+						await branchLock.release();
+					} catch (error) {
+						ctx.logger.warn("branch lock release failed", {
+							code: clampErrorCode(errorCodeOf(error)),
+						});
+					}
+				}
 				await finishAttempt();
 			}
 		},

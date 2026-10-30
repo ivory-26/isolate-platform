@@ -154,8 +154,9 @@ describe("resource budgets", () => {
 	test("inclusive boundaries and hard caps", () => {
 		expect(validateTimeout(1, 300000)).toBe(1);
 		expect(validateTimeout(300000, 300000)).toBe(300000);
+		expect(validateTimeout(900000, 900000)).toBe(900000);
 		expect(validateOutputLimit(1048576, 1048576)).toBe(1048576);
-		for (const max of [0, -1, NaN, Infinity, 300001])
+		for (const max of [0, -1, NaN, Infinity, 900001])
 			denied(() => validateTimeout(1, max));
 		denied(() => validateOutputLimit(1, 1048577));
 	});

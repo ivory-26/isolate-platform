@@ -13,6 +13,7 @@ import {
 	asApprovalId,
 	asJobId,
 	asOrganizationId,
+	asRepositoryId,
 	asTaskId,
 	createConsoleLogger,
 } from "../packages/shared/src/index";
@@ -27,20 +28,23 @@ import {
 } from "../apps/worker/src/runtime-composition";
 
 /**
- * Wave 8 live acceptance (ONE bounded run, no retries).
+ * Wave 8/9 live acceptance (ONE bounded run per scenario, no retries).
  *
- * Real Meta inference, real Modal sandbox, real Git clone/commit/push, real
- * Postgres lifecycle, real approval pause/resume, and a real pull request:
+ * LIVE_SCENARIO=pass (default)
+ *   real Meta turns → clone → agent writes a doc + a Bun test → validation
+ *   command runs and passes → acceptance checks pass → push → PR approval →
+ *   PR created and verified.
  *
- *   run_task → push approval → resume → PR approval → create_pull_request
+ * LIVE_SCENARIO=fail
+ *   same setup with a validation command that exits non-zero → task fails,
+ *   nothing is pushed, the log artifact is stored.
  *
- * Requires LIVE_PR=1 plus the seeded identifiers and both provider configs.
- * Caps are mandatory and must be provided explicitly. On any failure the
- * script exits non-zero and must NOT be retried without a new decision.
+ * Both use the real Modal sandbox, the real Postgres lifecycle and the real
+ * approval gates. Caps are mandatory.
  */
 
 if (process.env.LIVE_PR !== "1") {
-	console.log("Set LIVE_PR=1 to run the bounded live pull-request acceptance.");
+	console.log("Set LIVE_PR=1 to run the bounded live acceptance.");
 	process.exit(0);
 }
 
@@ -53,6 +57,13 @@ function required(name: string): string {
 	return value;
 }
 
+const scenarioRaw = process.env.LIVE_SCENARIO?.trim() || "pass";
+if (scenarioRaw !== "pass" && scenarioRaw !== "fail") {
+	console.error("LIVE_SCENARIO must be 'pass' or 'fail'");
+	process.exit(1);
+}
+const scenario: "pass" | "fail" = scenarioRaw;
+
 const organizationId = asOrganizationId(required("LIVE_ORGANIZATION_ID"));
 const userId = required("LIVE_USER_ID");
 const repositoryId = required("LIVE_REPOSITORY_ID");
@@ -61,7 +72,6 @@ const repoFullName =
 const baseBranch = process.env.LIVE_BASE_BRANCH?.trim() || "main";
 const databaseUrl = required("DATABASE_URL");
 
-// Mandatory spend caps: refuse to start without them.
 const maxTokensPerTask = Number(required("WORKER_MAX_TOKENS_PER_TASK"));
 const maxSandboxSeconds = Number(required("WORKER_MAX_SANDBOX_SECONDS"));
 const maxCostUsdPerTask = Number(required("WORKER_MAX_COST_USD_PER_TASK"));
@@ -72,16 +82,26 @@ assert.equal(process.env.INFERENCE_PROVIDER?.trim(), "meta");
 assert.equal(process.env.SANDBOX_PROVIDER?.trim(), "modal");
 assert.notEqual(process.env.GITHUB_PUSH_ENABLED?.trim(), "false");
 
-const FILE = "LIVE_PR_ACCEPTANCE.md";
-const COMMIT_MESSAGE = "chore: wave 8 live pull request acceptance";
-const branch = `task/w8-live-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+const FILE = "LIVE_ACCEPTANCE.md";
+const TEST_FILE = "live_acceptance.test.ts";
+const MISSING_TEST = `live_missing_${suffix}.test.ts`;
+const branch = `task/w9-live-${suffix}`;
 const content = [
-	"# Wave 8 live acceptance",
+	"# Wave 9 live acceptance",
 	"",
 	`- repository: ${repoFullName}`,
 	`- branch: ${branch}`,
 	`- generated: ${new Date().toISOString()}`,
-	"- path: Meta inference → Modal sandbox → validation (skipped) → push → PR",
+	"- path: Meta → Modal → validation → acceptance → push → PR",
+	"",
+].join("\n");
+const testContent = [
+	'import { expect, test } from "bun:test";',
+	"",
+	'test("live acceptance fixture", () => {',
+	"\texpect(1 + 1).toBe(2);",
+	"});",
 	"",
 ].join("\n");
 
@@ -122,18 +142,6 @@ function handlerFor(
 	return handler;
 }
 
-async function sandboxCount(): Promise<number | null> {
-	try {
-		const { ModalClient } = await import("modal");
-		const client = new ModalClient();
-		let count = 0;
-		for await (const _sandbox of client.sandboxes.list()) count += 1;
-		return count;
-	} catch {
-		return null;
-	}
-}
-
 const sql = createDb(databaseUrl);
 const tasks = new PostgresTaskRepository(sql);
 const approvals = new PostgresApprovalRepository(sql);
@@ -143,6 +151,8 @@ const runs = new PostgresWorkflowRunRepository(sql);
 const repositories = new PostgresRepositoryRepository(sql);
 
 let taskId: ReturnType<typeof asTaskId> | null = null;
+let previousValidation: string | null = null;
+let policyChanged = false;
 
 try {
 	const config = loadWorkerConfig(
@@ -153,15 +163,35 @@ try {
 	assert.equal(composed.inferenceProvider, "meta", "inference is not Meta");
 	assert.ok(composed.overrides.pullRequest, "PR stage is not bound");
 	assert.equal(composed.overrides.pushEnabled, true, "push is not enabled");
+	assert.equal(
+		typeof composed.overrides.loadAcceptanceChecks,
+		"function",
+		"acceptance checks are not bound",
+	);
+	assert.equal(
+		typeof composed.overrides.acquireBranchLock,
+		"function",
+		"branch lock is not bound",
+	);
 
 	const repository = await repositories.get({
 		organizationId,
-		repositoryId,
+		repositoryId: asRepositoryId(repositoryId),
 	});
 	assert.ok(repository, "seeded repository not found in this organization");
-	const validationCommand = repository.validation_command;
+	previousValidation = repository.validation_command;
+
+	const validationCommand =
+		scenario === "pass" ? `bun test ${TEST_FILE}` : `bun test ${MISSING_TEST}`;
+	await repositories.setValidationPolicy({
+		organizationId,
+		repositoryId: asRepositoryId(repositoryId),
+		validationCommand,
+		validationTimeoutMs: 120_000,
+	});
+	policyChanged = true;
 	console.log(
-		`repository: ${repository.external_full_name} validation=${validationCommand ?? "none (skipped)"}`,
+		`scenario: ${scenario} · validation: ${validationCommand} · previous: ${previousValidation ?? "none"}`,
 	);
 
 	const lifetimeMs = Math.min(maxSandboxSeconds * 1000, 240_000);
@@ -182,25 +212,41 @@ try {
 		maxCostUsdPerTask,
 	});
 
+	const passGoal = `Create two files at the repository root. First ${FILE} with exactly this content:\n\n${content}\n\nSecond ${TEST_FILE} with exactly this content:\n\n${testContent}\n\nThen commit both with the message "chore: wave 9 live validation acceptance". Use repo.write_file and git.commit_local. Do not modify any other file.`;
+	const failGoal = `Create the file ${FILE} at the repository root with exactly this content:\n\n${content}\n\nThen commit it with the message "chore: wave 9 live validation failure acceptance". Use repo.write_file and git.commit_local. Do not modify any other file.`;
+
 	const task = await tasks.create({
 		organizationId,
 		repositoryId,
 		branch,
-		idempotencyKey: `live-pr:${crypto.randomUUID()}`,
+		idempotencyKey: `live-${scenario}:${suffix}`,
 		budgetLimits: {
 			maxAgentTurns: 2,
 			maxRepairAttempts: 0,
 			maxDurationMs: lifetimeMs,
 		},
-		goal: `Create the file ${FILE} at the repository root with exactly the content given in the acceptance criteria, then commit it with the message "${COMMIT_MESSAGE}". Use repo.write_file and git.commit_local. Do not modify any other file.`,
-		acceptanceCriteria: [
-			`${FILE} exists on ${branch} with the provided content`,
-			`the only changed path is ${FILE}`,
-			`content to write follows between the markers: <<<`,
-			content,
-			`>>>`,
-		],
-		fileOwnership: [FILE],
+		goal: scenario === "pass" ? passGoal : failGoal,
+		acceptanceCriteria:
+			scenario === "pass"
+				? [
+						`${FILE} exists and mentions Wave 9`,
+						`${TEST_FILE} exists and passes under bun test`,
+					]
+				: [`${FILE} exists on the branch`],
+		fileOwnership: scenario === "pass" ? [FILE, TEST_FILE] : [FILE],
+		...(scenario === "pass"
+			? {
+					acceptanceChecks: [
+						{ kind: "path_exists" as const, path: FILE },
+						{ kind: "path_exists" as const, path: TEST_FILE },
+						{
+							kind: "content_matches" as const,
+							path: FILE,
+							pattern: "Wave 9",
+						},
+					],
+				}
+			: {}),
 		createdBy: userId,
 	});
 	taskId = asTaskId(task.id);
@@ -234,7 +280,6 @@ try {
 		decidedBy: userId,
 	});
 	assert.ok(pushDecision.ok, `push approval failed: ${pushDecision.code}`);
-	console.log(`push approval: ${pushApproval.id} approved`);
 
 	const resumed = await handlerFor(composition, "resume_task").handle(
 		syntheticJob(taskId, "resume_task", {
@@ -246,58 +291,19 @@ try {
 	console.log(
 		`resume_task: ${resumed.outcome}${resumed.note ? ` (${resumed.note})` : ""}`,
 	);
-	assert.equal(resumed.outcome, "complete", "resume_task did not complete");
 
-	const afterPush = await tasks.get(taskId);
-	console.log(`task after push: ${afterPush?.status}`);
-	assert.equal(
-		afterPush?.status,
-		"awaiting_approval",
-		"task did not request the PR approval",
-	);
+	const afterRun = await tasks.get(taskId);
+	const eventRows = await runs.listEvents(taskId, 200);
+	const eventTypes = eventRows.map((row) => row.type);
+	const artifactRows = await artifacts.listByTask({ organizationId, taskId });
+	const reportArtifact = artifactRows.find((row) => row.kind === "report");
+	const logArtifact = artifactRows.find((row) => row.kind === "log_bundle");
 
-	const prApproval = (await approvals.listPending(organizationId)).find(
-		(row) =>
-			row.task_id === taskId && row.action === "github.create_pull_request",
-	);
-	assert.ok(prApproval, "pending PR approval was not persisted");
-	const prDecision = await approvals.decide({
-		approvalId: asApprovalId(prApproval.id),
-		decide: "approve",
-		payloadSha256: prApproval.payload_sha256,
-		decidedBy: userId,
-	});
-	assert.ok(prDecision.ok, `PR approval failed: ${prDecision.code}`);
-	console.log(`pr approval: ${prApproval.id} approved`);
-
-	const created = await handlerFor(
-		composition,
-		"create_pull_request",
-	).handle(
-		syntheticJob(taskId, "create_pull_request", {
-			taskId,
-			approvalId: prApproval.id,
-		}),
-		ctx,
-	);
-	console.log(
-		`create_pull_request: ${created.outcome}${created.note ? ` (${created.note})` : ""}`,
-	);
-	assert.equal(created.outcome, "complete", "create_pull_request did not complete");
-
-	const finalTask = await tasks.get(taskId);
-	assert.equal(finalTask?.status, "pull_request_created");
-	assert.ok(finalTask?.pull_request_number, "pull request number missing");
-	assert.ok(finalTask?.pull_request_url, "pull request url missing");
-	console.log(`pull request: #${finalTask.pull_request_number} ${finalTask.pull_request_url}`);
-
-	// Independent verification against GitHub using the repo-scoped broker.
 	const broker = selectGitHubTokenProvider(process.env);
 	assert.ok(broker, "GitHub broker is not configured");
 	const installation = await broker.getInstallationToken({
 		repositoryFullName: repoFullName,
 		contents: "read",
-		// The verification reads the PR itself and its files.
 		pullRequests: "read",
 	});
 	const headers = {
@@ -305,57 +311,130 @@ try {
 		Accept: "application/vnd.github+json",
 		"User-Agent": "isolate-platform",
 	};
-	const prResponse = await fetch(
-		`https://api.github.com/repos/${repoFullName}/pulls/${finalTask.pull_request_number}`,
+	const branchResponse = await fetch(
+		`https://api.github.com/repos/${repoFullName}/branches/${encodeURIComponent(branch)}`,
 		{ headers },
 	);
-	const prBody = (await prResponse.json()) as {
-		state?: string;
-		head?: { ref?: string; sha?: string };
-		base?: { ref?: string };
-	};
-	assert.equal(prResponse.status, 200, "pull request is not readable");
-	assert.equal(prBody.state, "open");
-	assert.equal(prBody.head?.ref, branch);
-	assert.equal(prBody.base?.ref, baseBranch);
-	const filesResponse = await fetch(
-		`https://api.github.com/repos/${repoFullName}/pulls/${finalTask.pull_request_number}/files`,
-		{ headers },
-	);
-	const filesBody = (await filesResponse.json()) as Array<{ filename?: string }>;
-	assert.equal(filesResponse.status, 200, "pull request files are not readable");
-	const changedFiles = filesBody.map((entry) => entry.filename);
-	assert.deepEqual(changedFiles, [FILE], "pull request touched an unexpected path");
-	console.log(`github: PR open on ${branch} → ${baseBranch}; files=${changedFiles.join(",")}`);
 
-	const usageRows = (await sql.unsafe(
-		`SELECT provider, model_id, prompt_tokens, completion_tokens, cost_usd
-		 FROM usage_records WHERE task_id = $1 ORDER BY created_at ASC`,
-		[taskId],
-	)) as Array<Record<string, unknown>>;
-	const eventRows = await runs.listEvents(taskId, 200);
-	const attemptRows = await attempts.listByTask(taskId);
-	const artifactRows = await artifacts.listByTask({ organizationId, taskId });
+	if (scenario === "fail") {
+		assert.equal(resumed.outcome, "dead_letter", "failure must not complete");
+		assert.equal(resumed.code, "VALIDATION_FAILED");
+		assert.equal(afterRun?.status, "failed");
+		assert.equal(branchResponse.status, 404, "a failed validation must not push");
+		assert.ok(logArtifact, "validation log artifact missing");
+		assert.ok(
+			eventTypes.includes("validation.finished"),
+			"validation event missing",
+		);
+		console.log(
+			JSON.stringify(
+				{
+					taskId,
+					scenario,
+					status: afterRun.status,
+					verdict: resumed.code,
+					branchStatus: branchResponse.status,
+					artifacts: artifactRows.map((row) => row.kind),
+					usage: await sql.unsafe(
+						"SELECT provider, model_id, prompt_tokens, completion_tokens FROM usage_records WHERE task_id=$1",
+						[taskId],
+					),
+				},
+				null,
+				2,
+			),
+		);
+		console.log("LIVE VALIDATION-FAIL ACCEPTANCE PASSED (gate blocked the push)");
+	} else {
+		assert.equal(resumed.outcome, "complete", "resume_task did not complete");
+		assert.equal(afterRun?.status, "awaiting_approval");
+		assert.ok(reportArtifact, "acceptance report artifact missing");
+		assert.ok(
+			eventTypes.includes("acceptance.finished"),
+			"acceptance event missing",
+		);
+		assert.equal(branchResponse.status, 200, "the branch was not pushed");
 
-	console.log(
-		JSON.stringify(
-			{
+		const prApproval = (await approvals.listPending(organizationId)).find(
+			(row) =>
+				row.task_id === taskId && row.action === "github.create_pull_request",
+		);
+		assert.ok(prApproval, "pending PR approval was not persisted");
+		const prDecision = await approvals.decide({
+			approvalId: asApprovalId(prApproval.id),
+			decide: "approve",
+			payloadSha256: prApproval.payload_sha256,
+			decidedBy: userId,
+		});
+		assert.ok(prDecision.ok, `PR approval failed: ${prDecision.code}`);
+
+		const created = await handlerFor(
+			composition,
+			"create_pull_request",
+		).handle(
+			syntheticJob(taskId, "create_pull_request", {
 				taskId,
-				branch,
-				status: finalTask.status,
-				pullRequestNumber: finalTask.pull_request_number,
-				pullRequestUrl: finalTask.pull_request_url,
-				attempts: attemptRows.length,
-				events: eventRows.length,
-				artifacts: artifactRows.length,
-				usageRows,
-				validationCommand: validationCommand ?? null,
-			},
-			null,
-			2,
-		),
-	);
-	console.log("LIVE PR ACCEPTANCE PASSED");
+				approvalId: prApproval.id,
+			}),
+			ctx,
+		);
+		console.log(
+			`create_pull_request: ${created.outcome}${created.note ? ` (${created.note})` : ""}`,
+		);
+		assert.equal(created.outcome, "complete");
+
+		const finalTask = await tasks.get(taskId);
+		assert.equal(finalTask?.status, "pull_request_created");
+		assert.ok(finalTask?.pull_request_number && finalTask.pull_request_url);
+
+		const prResponse = await fetch(
+			`https://api.github.com/repos/${repoFullName}/pulls/${finalTask.pull_request_number}`,
+			{ headers },
+		);
+		const prBody = (await prResponse.json()) as {
+			state?: string;
+			head?: { ref?: string; sha?: string };
+			base?: { ref?: string };
+		};
+		assert.equal(prResponse.status, 200);
+		assert.equal(prBody.state, "open");
+		assert.equal(prBody.head?.ref, branch);
+		assert.equal(prBody.base?.ref, baseBranch);
+		const filesResponse = await fetch(
+			`https://api.github.com/repos/${repoFullName}/pulls/${finalTask.pull_request_number}/files`,
+			{ headers },
+		);
+		const filesBody = (await filesResponse.json()) as Array<{
+			filename?: string;
+		}>;
+		assert.equal(filesResponse.status, 200);
+		const changedFiles = filesBody.map((entry) => entry.filename ?? "").sort();
+		assert.deepEqual(changedFiles, [FILE, TEST_FILE].sort());
+
+		console.log(
+			JSON.stringify(
+				{
+					taskId,
+					scenario,
+					branch,
+					status: finalTask.status,
+					pullRequest: finalTask.pull_request_number,
+					pullRequestUrl: finalTask.pull_request_url,
+					files: changedFiles,
+					events: eventTypes,
+					artifacts: artifactRows.map((row) => row.kind),
+					attempts: (await attempts.listByTask(taskId)).length,
+					usage: await sql.unsafe(
+						"SELECT provider, model_id, prompt_tokens, completion_tokens FROM usage_records WHERE task_id=$1 ORDER BY created_at",
+						[taskId],
+					),
+				},
+				null,
+				2,
+			),
+		);
+		console.log("LIVE VALIDATION-PASS ACCEPTANCE PASSED (validation + PR)");
+	}
 } catch (error) {
 	const code =
 		typeof error === "object" && error !== null && "code" in error
@@ -363,11 +442,20 @@ try {
 			: "INTERNAL";
 	const message =
 		error instanceof Error ? error.message.slice(0, 300) : "unknown failure";
-	console.error(`LIVE PR ACCEPTANCE FAILED: ${code}: ${message}`);
+	console.error(`LIVE ACCEPTANCE FAILED (${scenario}): ${code}: ${message}`);
 	if (taskId) console.error(`task for inspection: ${taskId}`);
 	process.exitCode = 1;
 } finally {
+	if (policyChanged) {
+		await repositories
+			.setValidationPolicy({
+				organizationId,
+				repositoryId: asRepositoryId(repositoryId),
+				validationCommand: previousValidation,
+				validationTimeoutMs: 300_000,
+			})
+			.catch(() => undefined);
+		console.log(`validation policy restored to: ${previousValidation ?? "none"}`);
+	}
 	await sql.end({ timeout: 5 });
-	const remaining = await sandboxCount();
-	console.log(`sandboxes running after run: ${remaining ?? "unverified"}`);
 }

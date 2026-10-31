@@ -18,22 +18,22 @@ Inbound webhook signing secrets are a separate case: they are verifier secrets, 
 | Connector | Adapter module | Intake binding | Tool binding | Live-proven? | Key type needed | Free tier | Guide |
 |---|---|---|---|---|---|---|---|
 | GitHub | Yes (`packages/integrations/src/github/`) | Yes, GitHub mode | No (writes are functions, not tools) | Yes: context and two writes, 2026-10-31 | GitHub App id, installation id, PKCS#8 key (platform-owned) | GitHub Free; 5,000 installation-token requests/hour | [github.md](github.md) |
-| Sentry | Yes (`sentry/`) | No (verifier only; no route mode) | No | No | Organization auth token plus internal-integration Client Secret | Developer: 5,000 errors/month, 1 user, 30-day retention | [sentry.md](sentry.md) |
-| Grafana | Yes (`grafana/`) | No (verifier only; bridge required) | No | No | Service-account token, Viewer plus fixed read roles | Cloud Free: 10k series, 50 GB logs/traces, 3 users, 14 days; OSS self-host | [grafana.md](grafana.md) |
-| PagerDuty | Yes (`pagerduty/`) | No (verifier only; no route mode) | No | No | Read-only account API key plus v3 webhook secret | Free: 5 users, 1 schedule, 1 escalation policy | [pagerduty.md](pagerduty.md) |
-| Kubernetes | Yes (`kubernetes/`) | No (no native webhook; bridge) | No | No | Namespaced ServiceAccount bound token plus CA | OSS; infrastructure cost only | [kubernetes.md](kubernetes.md) |
-| Datadog | No | No (unsigned; bridge required) | No | No | API key plus scoped application key | Free: 5 hosts, 1-day metric retention; free logs not stated (UNVERIFIED) | [datadog.md](datadog.md) |
-| New Relic | No | No (unsigned; bridge required) | No | No | User API key plus account id | Free: 100 GB/month, 1 full user, at least 8-day retention | [newrelic.md](newrelic.md) |
-| Honeycomb | No | No (token auth; bridge required) | No | No | Environment configuration key plus dataset | Free: 20M events, 100M points, 2 triggers, no SLOs | [honeycomb.md](honeycomb.md) |
-| Axiom | No | No (unsigned; bridge required) | No | No | Advanced API token plus dataset | Personal: 500 GB/month load, 25 GB storage, 30 days, 3 datasets, 1 user | [axiom.md](axiom.md) |
-| SigNoz | No | No (Basic auth; bridge required) | No | No | API key from a Viewer service account | Community Edition self-host only; Cloud is trial-only | [signoz.md](signoz.md) |
+| Sentry | Yes (`sentry/`) | Yes, signed mode | No (device transport pending) | No | Organization auth token plus internal-integration Client Secret | Developer: 5,000 errors/month, 1 user, 30-day retention | [sentry.md](sentry.md) |
+| Grafana | Yes (`grafana/`) | Yes, HMAC mode (unsigned opt-in) | No (device transport pending) | No | Service-account token, Viewer plus fixed read roles | Cloud Free: 10k series, 50 GB logs/traces, 3 users, 14 days; OSS self-host | [grafana.md](grafana.md) |
+| PagerDuty | Yes (`pagerduty/`) | Yes, v3 signed mode | No (device transport pending) | No | Read-only account API key plus v3 webhook secret | Free: 5 users, 1 schedule, 1 escalation policy | [pagerduty.md](pagerduty.md) |
+| Kubernetes | Yes (`kubernetes/`) | No (no native webhook; signed bridge) | No (device transport pending) | No | Namespaced ServiceAccount bound token plus CA | OSS; infrastructure cost only | [kubernetes.md](kubernetes.md) |
+| Datadog | Yes (`datadog/`) | No (unsigned; signed bridge) | No (device transport pending) | No | API key plus scoped application key | Free: 5 hosts, 1-day metric retention; free logs not stated (UNVERIFIED) | [datadog.md](datadog.md) |
+| New Relic | Yes (`newrelic/`) | No (unsigned; signed bridge) | No (device transport pending) | No | User API key plus account id | Free: 100 GB/month, 1 full user, at least 8-day retention | [newrelic.md](newrelic.md) |
+| Honeycomb | Yes (`honeycomb/`) | No (unsigned; signed bridge) | No (device transport pending) | No | Environment configuration key plus dataset | Free: 20M events, 100M points, 2 triggers, no SLOs | [honeycomb.md](honeycomb.md) |
+| Axiom | Yes (`axiom/`) | No (unsigned; signed bridge) | No (device transport pending) | No | Advanced API token plus dataset | Personal: 500 GB/month load, 25 GB storage, 30 days, 3 datasets, 1 user | [axiom.md](axiom.md) |
+| SigNoz | Yes (`signoz/`) | No (Basic auth; signed bridge) | No (device transport pending) | No | API key from a Viewer service account | Community Edition self-host only; Cloud is trial-only | [signoz.md](signoz.md) |
 
 Notes:
 
-- "No intake binding" means the receiver cannot yet verify that vendor's delivery. Do not point a production webhook at this deployment until the mode or bridge ships.
-- "No tool binding" means the adapter functions are not registered as agent tools. An allowlisted but unimplemented tool is denied with `POLICY_DENIED`.
-- Five adapter lanes (Datadog, New Relic, Honeycomb, Axiom, SigNoz) are in flight on separate wave-17 branches. Update this table to "Yes" only after each lane merges and its tests pass on the target branch.
-- No vendor except GitHub has been exercised live. Sentry, Grafana, PagerDuty and Kubernetes are fake-tested adapters; the other five have no merged adapter on this branch. Nothing below claims otherwise.
+- **All ten adapter modules are merged and fake-tested.** Five were merged in wave 17 (Datadog, New Relic, Honeycomb, Axiom, SigNoz).
+- Sentry, Grafana and PagerDuty now have signed intake modes. Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes have no native verifier and require the signed generic bridge.
+- "No tool binding" means the adapter functions are not registered as agent tools yet: the device transport and call queue are still landing. An allowlisted but unimplemented tool is denied with `POLICY_DENIED`.
+- No vendor except GitHub has been exercised live. Every other adapter is fake-tested; nothing below claims otherwise.
 
 ## 2. How credentials are held
 

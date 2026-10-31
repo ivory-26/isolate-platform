@@ -1,31 +1,67 @@
--- Per-organization connector credentials and free-tier ledger (wave 16).
+-- Per-organization connector metadata, device registry and free-tier ledger.
+--
+-- SECURITY: user provider keys are NEVER stored on the server. The secret lives
+-- on the user's device (OS keychain / browser storage). This database stores
+-- only connector metadata, a device registration, and a sha256 hash of the
+-- device auth token. There is no encrypted_payload, no wrapped DEK and no
+-- operator key: the server cannot decrypt a provider credential because it
+-- never receives one.
 --
 -- Idempotent, additive SQL for PostgreSQL >= 13. Apply only after 0001-0009;
 -- migration application belongs to the coordinator, never to repositories.
 --
--- Each row is one user-owned connection for one organization. The secret is
--- stored only as an AES-256-GCM envelope: `encrypted_payload` packs
--- nonce || tag || ciphertext and `wrapped_dek` is the DEK sealed under the
--- operator KEK (`CONNECTOR_CREDENTIAL_KEY`). Neither key nor plaintext is in
--- the database, and the repository's summary select list excludes both bytea
--- columns. The AAD binds organization, connector, display name and key
--- version, so a moved ciphertext fails authentication.
+-- A connector call is proxied to the device: the worker sends a typed request
+-- to the registered device endpoint, the device attaches the provider secret
+-- and calls the provider, and the bounded response is returned. `credential_ref`
+-- is an opaque device-side identifier (e.g. a keychain item name), never the
+-- secret itself. `token_hash` authenticates the device and cannot be reversed.
 --
--- Revocation keeps the row for provenance and zeroes both bytea columns, so
--- they are intentionally allowed to be empty. `connector_usage_ledger` is the
--- durable free-tier counter: `consume` increments and refuses an overage in
--- one statement (`WHERE request_count < limit`), never in application memory.
+-- `connector_usage_ledger` is the durable free-tier counter: `consume`
+-- increments and refuses an overage in one statement (`WHERE request_count <
+-- limit`), never in application memory.
 --
 -- NOTE: `scripts/apply-migration.ts` splits on line-ending semicolons, so each
 -- DO block would be intentionally a single line. This migration has none.
 
 -- ---------------------------------------------------------------------------
--- Connector credentials ------------------------------------------------------
+-- Connector devices (user-owned execution proxy) -----------------------------
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS connector_devices (
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	organization_id uuid NOT NULL REFERENCES organizations(id),
+	user_id uuid NULL,
+	display_name text NOT NULL
+		CHECK (char_length(display_name) BETWEEN 1 AND 100),
+	-- sha256 hex of the device auth token; the token itself never reaches the DB.
+	token_hash text NOT NULL
+		CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+	status text NOT NULL DEFAULT 'pending' CHECK (status IN (
+		'pending',
+		'active',
+		'revoked'
+	)),
+	last_seen_at timestamptz NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	updated_at timestamptz NOT NULL DEFAULT now(),
+	UNIQUE (organization_id, display_name)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS connector_devices_token_hash_unique
+	ON connector_devices (token_hash);
+
+CREATE INDEX IF NOT EXISTS connector_devices_org_status_idx
+	ON connector_devices (organization_id, status);
+
+-- ---------------------------------------------------------------------------
+-- Connector credentials (metadata only; the secret stays on the device) ------
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS connector_credentials (
 	id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	organization_id uuid NOT NULL REFERENCES organizations(id),
+	device_id uuid NOT NULL
+		REFERENCES connector_devices(id) ON DELETE CASCADE,
 	connector_id text NOT NULL
 		CHECK (connector_id ~ '^[a-z][a-z0-9-]{0,31}$'),
 	display_name text NOT NULL
@@ -38,9 +74,9 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
 		'bot_token',
 		'self_host_url_token'
 	)),
-	encrypted_payload bytea NOT NULL,
-	wrapped_dek bytea NOT NULL,
-	key_version integer NOT NULL DEFAULT 1 CHECK (key_version >= 1),
+	-- Opaque device-side reference (keychain item / credential name), never a secret.
+	credential_ref text NOT NULL
+		CHECK (char_length(credential_ref) BETWEEN 1 AND 200),
 	scopes text[] NOT NULL DEFAULT '{}',
 	status text NOT NULL DEFAULT 'pending_validation' CHECK (status IN (
 		'pending_validation',
@@ -57,10 +93,11 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
 	created_by uuid NULL,
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now(),
-	UNIQUE (organization_id, connector_id, display_name)
+	UNIQUE (organization_id, connector_id, display_name),
+	UNIQUE (device_id, connector_id, credential_ref)
 );
 
--- Operator listing and active-credential resolution for one tenant.
+-- Active-credential resolution for one tenant and connector.
 CREATE INDEX IF NOT EXISTS connector_credentials_org_connector_status_idx
 	ON connector_credentials (organization_id, connector_id, status);
 

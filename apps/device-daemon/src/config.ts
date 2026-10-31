@@ -63,6 +63,42 @@ function parseHttpsUrl(value: string): URL | null {
 	}
 }
 
+/**
+ * The platform origin. Production is https-only; a loopback http origin is
+ * accepted so the daemon can be exercised against a local dev server.
+ */
+function parseServerUrl(value: string): URL | null {
+	try {
+		const url = new URL(value);
+		const loopback =
+			url.hostname === "localhost" ||
+			url.hostname === "127.0.0.1" ||
+			url.hostname === "[::1]";
+		if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+			return null;
+		}
+		if (url.username !== "" || url.password !== "") return null;
+		if (url.search !== "" || url.hash !== "") return null;
+		return url;
+	} catch {
+		return null;
+	}
+}
+
+const serverOriginSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.max(512)
+	.refine((value) => {
+		const url = parseServerUrl(value);
+		return url !== null && (url.pathname === "/" || url.pathname === "");
+	}, "must be an https origin (loopback http allowed for local dev)")
+	.transform((value) => {
+		const url = new URL(value);
+		return url.origin;
+	});
+
 const httpsOriginSchema = z
 	.string()
 	.trim()
@@ -183,7 +219,7 @@ const signozVendorSchema = z.strictObject({
 
 export const deviceConfigSchema = z.strictObject({
 	/** Platform origin; the daemon appends `/api/device/...` itself. */
-	serverUrl: httpsOriginSchema,
+	serverUrl: serverOriginSchema,
 	/** Name of the env var holding the 43-character device token. */
 	deviceTokenEnv: envNameSchema,
 	pollIntervalMs: z.number().int().min(250).max(60_000).default(2_000),

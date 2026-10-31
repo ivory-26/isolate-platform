@@ -10,6 +10,15 @@
         "typescript": "^6.0.2",
       },
     },
+    "apps/device-daemon": {
+      "name": "@isolate/device-daemon",
+      "version": "0.1.0",
+      "dependencies": {
+        "@isolate/integrations": "workspace:*",
+        "@isolate/shared": "workspace:*",
+        "zod": "^4.6.7",
+      },
+    },
     "apps/web": {
       "name": "@isolate/web",
       "version": "0.1.0",
@@ -244,6 +253,8 @@
     "@isaacs/ttlcache": ["@isaacs/ttlcache@2.1.5", "", {}, "sha512-VwGZqqjAWPICTmxUZnbpEfO60LhPWzquik+bmyXGY7pYRn6diEvCI5i6Ca+J6o2y4vS73HrpuMTo2dOvUevH8w=="],
 
     "@isolate/db": ["@isolate/db@workspace:packages/db"],
+
+    "@isolate/device-daemon": ["@isolate/device-daemon@workspace:apps/device-daemon"],
 
     "@isolate/integrations": ["@isolate/integrations@workspace:packages/integrations"],
 

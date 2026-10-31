@@ -12,6 +12,7 @@ const candidates = [
 	"packages/sandbox",
 	"apps/worker",
 	"apps/web",
+	"apps/device-daemon",
 ];
 
 let failed = false;

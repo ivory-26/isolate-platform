@@ -510,6 +510,11 @@ function promptContextSection(context: TaskContext): string[] {
 		if (excerpt.text.length === 0) continue;
 		if (excerpt.clipped) clipped = true;
 		const capped = utf8Prefix(excerpt.text, remaining);
+		// Not even one code point fits: evidence stops here.
+		if (capped.length === 0) {
+			clipped = true;
+			break;
+		}
 		if (capped.length < excerpt.text.length) clipped = true;
 		usedBytes += encoder.encode(capped).byteLength;
 		const source =

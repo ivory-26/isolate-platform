@@ -149,6 +149,19 @@ describe("worker composition — offline defaults", () => {
 		expect(taskExecution.acquireBranchLock).toBe(acquireBranchLock);
 	});
 
+	test("forwards the wave 13 incident context seam", () => {
+		const loadContextBundle = async () => null;
+		const { taskExecution } = createOfflineWorkerDeps(
+			CONFIG,
+			makeFakeLogger([]),
+			{ loadContextBundle },
+		);
+		// Dropping this seam would silently strip evidence from incident prompts.
+		expect(taskExecution.loadContextBundle).toBe(loadContextBundle);
+		const unbound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]));
+		expect(unbound.taskExecution.loadContextBundle).toBeUndefined();
+	});
+
 	test("unconfigured runtime factory fails closed with MISSING_CONFIG", () => {
 		const { taskExecution } = createOfflineWorkerDeps(
 			CONFIG,

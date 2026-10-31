@@ -45,7 +45,15 @@ type Harness = {
 };
 
 async function createHarness(
-	options: { now?: () => Date } = {},
+	options: {
+		now?: () => Date;
+		usage?: {
+			consume: (
+				credentialId: string,
+				input: { limitPerPeriod: number; period: string },
+			) => Promise<{ consumed: boolean; requestCount: number }>;
+		};
+	} = {},
 ): Promise<Harness> {
 	const devices = new InMemoryConnectorDeviceRepository();
 	const credentials = new InMemoryConnectorCredentialRepository();
@@ -124,6 +132,7 @@ async function createHarness(
 			return organizationId === undefined ? null : { organizationId };
 		},
 		...(options.now === undefined ? {} : { now: options.now }),
+		...(options.usage === undefined ? {} : { usage: options.usage }),
 	};
 	return {
 		gateway: createDeviceGateway(dependencies),
@@ -573,5 +582,52 @@ describe("device gateway parsing helpers", () => {
 		).toEqual({ ok: false, errorCode: "POLICY_DENIED" });
 		expect(() => parseDeviceResultBody("[]")).toThrow();
 		expect(() => parseDeviceResultBody('{"ok":true,"data":{}}')).not.toThrow();
+	});
+});
+
+describe("device gateway free-tier guard", () => {
+	test("consumes one ledger unit before handing a call to the device", async () => {
+		const consumed: Array<{
+			credentialId: string;
+			limitPerPeriod: number;
+			period: string;
+		}> = [];
+		const harness = await createHarness({
+			usage: {
+				async consume(credentialId, input) {
+					consumed.push({ credentialId, ...input });
+					return { consumed: true, requestCount: 1 };
+				},
+			},
+		});
+		const callId = await enqueueCall(harness);
+
+		const response = await harness.gateway.handleClaim(claimRequest(TOKEN_A));
+		const body = await readResponse(response);
+
+		expect((body.call as { id?: string }).id).toBe(callId);
+		expect(consumed).toHaveLength(1);
+		expect(consumed[0]?.credentialId).toBe(harness.credentialAId);
+		expect(consumed[0]?.limitPerPeriod).toBe(1000);
+		expect(consumed[0]?.period).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+	});
+
+	test("refuses the call when the free-tier budget is exhausted", async () => {
+		const harness = await createHarness({
+			usage: {
+				async consume() {
+					return { consumed: false, requestCount: 1000 };
+				},
+			},
+		});
+		const callId = await enqueueCall(harness);
+
+		const response = await harness.gateway.handleClaim(claimRequest(TOKEN_A));
+		const body = await readResponse(response);
+
+		expect(body.call).toBeNull();
+		const row = harness.calls.peek(callId);
+		expect(row?.status).toBe("failed");
+		expect(row?.errorCode).toBe("RATE_LIMITED");
 	});
 });

@@ -6,12 +6,14 @@ import {
 	type ConnectorCallRepository,
 	type ConnectorCredentialRepository,
 	type ConnectorDeviceRepository,
+	type ConnectorUsageLedgerRepository,
 	createDb,
 	normalizeBoundedConnectorJsonObject,
 	type PgSql,
 	PostgresConnectorCallRepository,
 	PostgresConnectorCredentialRepository,
 	PostgresConnectorDeviceRepository,
+	PostgresConnectorUsageLedgerRepository,
 } from "@isolate/db";
 import {
 	DEVICE_PROXY_ERROR_CODES,
@@ -92,9 +94,43 @@ export type DeviceGatewayDependencies = {
 	devices: ConnectorDeviceRepository;
 	credentials: ConnectorCredentialRepository;
 	calls: ConnectorCallRepository;
+	/**
+	 * Durable free-tier counter. When present, one unit is consumed before a
+	 * call is handed to a device; an exhausted budget fails the call instead of
+	 * silently overaging the provider's free plan.
+	 */
+	usage?: Pick<ConnectorUsageLedgerRepository, "consume">;
+	/** Platform guard when the credential has no `requestsPerDay`. */
+	freeDailyLimit?: number;
 	lookupTokenHash: DeviceTokenHashLookup;
 	now?: () => Date;
 };
+
+const DEFAULT_FREE_DAILY_LIMIT = 1000;
+const MAX_FREE_DAILY_LIMIT = 1_000_000;
+
+function resolveDailyLimit(
+	freeTierRequestsPerDay: number | null | undefined,
+	fallback: number | undefined,
+): number {
+	if (
+		typeof freeTierRequestsPerDay === "number" &&
+		Number.isSafeInteger(freeTierRequestsPerDay) &&
+		freeTierRequestsPerDay >= 0 &&
+		freeTierRequestsPerDay <= MAX_FREE_DAILY_LIMIT
+	) {
+		return freeTierRequestsPerDay;
+	}
+	if (
+		typeof fallback === "number" &&
+		Number.isSafeInteger(fallback) &&
+		fallback > 0 &&
+		fallback <= MAX_FREE_DAILY_LIMIT
+	) {
+		return fallback;
+	}
+	return DEFAULT_FREE_DAILY_LIMIT;
+}
 
 export type DeviceGateway = {
 	handleClaim(request: Request): Promise<Response>;
@@ -348,6 +384,23 @@ export function createDeviceGateway(
 						"connector credential is unavailable",
 					);
 				}
+				if (dependencies.usage !== undefined) {
+					const limit = resolveDailyLimit(
+						credential.freeTierProfile.requestsPerDay,
+						dependencies.freeDailyLimit,
+					);
+					const period = now().toISOString().slice(0, 10);
+					const consumed = await dependencies.usage.consume(credential.id, {
+						limitPerPeriod: limit,
+						period,
+					});
+					if (!consumed.consumed) {
+						throw new PlatformError(
+							"RATE_LIMITED",
+							"connector free-tier budget exhausted",
+						);
+					}
+				}
 				payload = claimPayload(call, credential.credentialRef);
 			} catch (error) {
 				// The call cannot be executed without leaking or trusting bad data.
@@ -356,8 +409,9 @@ export function createDeviceGateway(
 					deviceId: auth.device.id,
 					errorCode:
 						error instanceof PlatformError &&
-						error.code === "INTEGRATION_UNAVAILABLE"
-							? "INTEGRATION_UNAVAILABLE"
+						(error.code === "INTEGRATION_UNAVAILABLE" ||
+							error.code === "RATE_LIMITED")
+							? error.code
 							: "VALIDATION_FAILED",
 				});
 				return response(200, { call: null });
@@ -419,6 +473,7 @@ function getDatabase(databaseUrl: string): {
 	devices: ConnectorDeviceRepository;
 	credentials: ConnectorCredentialRepository;
 	calls: ConnectorCallRepository;
+	usage: ConnectorUsageLedgerRepository;
 	lookupTokenHash: DeviceTokenHashLookup;
 } {
 	if (sql === undefined || sqlUrl !== databaseUrl) {
@@ -430,6 +485,7 @@ function getDatabase(databaseUrl: string): {
 		devices: new PostgresConnectorDeviceRepository(database),
 		credentials: new PostgresConnectorCredentialRepository(database),
 		calls: new PostgresConnectorCallRepository(database),
+		usage: new PostgresConnectorUsageLedgerRepository(database),
 		lookupTokenHash: async (tokenHash) => {
 			if (!/^[0-9a-f]{64}$/.test(tokenHash)) return null;
 			const rows = (await database.unsafe(
@@ -460,7 +516,13 @@ export function getDeviceGateway(
 	}
 	if (gateway !== undefined && sqlUrl === databaseUrl) return gateway;
 	const database = getDatabase(databaseUrl);
-	gateway = createDeviceGateway(database);
+	const configured = Number(env.CONNECTOR_FREE_DAILY_CALLS?.trim() ?? "");
+	gateway = createDeviceGateway({
+		...database,
+		...(Number.isSafeInteger(configured) && configured > 0
+			? { freeDailyLimit: configured }
+			: {}),
+	});
 	return gateway;
 }
 

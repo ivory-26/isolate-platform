@@ -39,15 +39,16 @@ User decisions: keys stay on the user's device (device daemon polls the server);
 | W17-SIGNOZ | `c62c705` → merge `1217440` | **done** |
 | W17-NEWRELIC | in flight | pending |
 | W17-HONEYCOMB | in flight | pending |
-| W17-INTAKE | in flight | pending (Sentry/Grafana/PagerDuty webhook modes) |
-| W17-TRANSPORT | in flight | pending (`0011` call queue + device endpoints; **not applied**) |
-| W17-SETUP | in flight | pending (`docs/connectors/SETUP.md`) |
-| W17-SECDOCS | in flight | pending (device-model doc rewrite) |
+| W17-INTAKE | `1ead20b` → merged | **done** — Sentry/Grafana/PagerDuty signed modes |
+| W17-TRANSPORT | `568ba41` → merged | **done** — `0011` applied + verified, three device endpoints, queue repository |
+| W17-SETUP | `646d88f` → merged | **done** — `docs/connectors/SETUP.md` (449 lines) |
+| W17-SECDOCS | `9aaf964` → merged | **done** — device-model docs, no server secrets |
+| W17-TOOLBIND | in flight | worker tools → device call queue |
 
-Coordinator `0473367`: 31 connector tool names/risk bands, source enums, barrel exports, and `bun run security:check` (PASS).
+Coordinator: `0473367` (31 tool names/risk bands, enums, barrels, `security:check`), `ad675eb` (literal device routes + regenerated route tree), `b9a7e86` (0011 applied record). Migrations applied: `0010` and `0011`, both verified.
 
 ### W17-OPS — remaining
-- Merge remaining lanes; apply `0011` **with approval**; bind worker tools to the device proxy; Kubernetes local acceptance (needs Docker daemon + kind); full gates ×2 + security loop; live acceptance per SaaS adapter; update SETUP statuses.
+- Merge `task/w17-toolbind`; run full gates ×2 + security loop; Kubernetes local acceptance (kind `isolate-demo` cluster, read-only SA token); update SETUP statuses; one bounded live acceptance per SaaS adapter when the user supplies device-held credentials.
 
 ## Wave 16 — first connector adapters + credential store (2026-10-31 → merged 2026-11-01)
 

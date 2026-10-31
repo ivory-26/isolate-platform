@@ -15,11 +15,12 @@ Last updated: 2026-11-01 (wave 17: device-held credentials applied to Neon; 10-c
 - **Gates at this point**: typecheck 8/8 · 314 scoped tests green · security check PASS. Full offline suite runs once all lanes merge.
 
 ### Wave 17 open items
-1. Merge New Relic + Honeycomb, intake, setup/secdocs and transport lanes.
-2. Apply `0011_connector_calls.sql` **with approval** (durable device call queue), then bind worker tool implementations to the device proxy.
-3. Kubernetes local acceptance: Docker Desktop daemon is installed but not running; `kind`/`k3d` not installed. Start Docker, install `kind`, create a disposable cluster, mint a namespaced read-only token, run the local acceptance.
-4. One bounded live acceptance per SaaS adapter once the user supplies device-held credentials.
-5. Validation loop: full biome/typecheck/tests ×2/acceptance after every merge; security loop after every merge.
+1. ~~Merge remaining lanes~~ done: all nine adapters, intake, setup/secdocs and the device transport are merged.
+2. ~~Apply `0011_connector_calls.sql`~~ **applied with approval** and verified (`connector_calls` with params/result/status/expiry, no secret columns). Tool binding to the queue is in flight (`task/w17-toolbind`).
+3. Kubernetes local acceptance: Docker daemon is **up**, `kind v0.33.0` is **installed**, and a disposable `isolate-demo` cluster is being created. Next: namespaced read-only ServiceAccount token and the local acceptance script.
+4. One bounded live acceptance per SaaS adapter once the user supplies device-held credentials; the setup guide (`docs/connectors/SETUP.md`) lists every key path for the ten.
+5. Validation loop: full biome/typecheck/tests ×2/acceptance after every merge; security loop after every merge (latest: 2256 tests green, security PASS).
+6. Remaining lanes: `task/w17-toolbind` (worker tool ↔ device queue).
 
 ## Previous: wave 16 — credential foundation + first four adapters (2026-11-01)
 

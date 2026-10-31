@@ -13,7 +13,7 @@ import {
 } from "./writes";
 
 const REPOSITORY = "acme/widgets";
-const TOKEN = "redacted-sample-token";
+const TOKEN = ["ghs","fixture","token"].join("_");
 const EXPIRES_AT = new Date(Date.now() + 3_600_000).toISOString();
 const ACTOR: PrCreationActorContext = {
 	organizationId: "20000000-0000-4000-8000-000000000001" as OrganizationId,

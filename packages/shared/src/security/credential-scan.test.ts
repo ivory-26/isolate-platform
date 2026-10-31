@@ -35,7 +35,7 @@ describe("findCredentialMaterial", () => {
 			findCredentialMaterial({ note: "-----BEGIN RSA PRIVATE KEY-----" }),
 		).not.toBeNull();
 		expect(
-			findCredentialMaterial({ note: "AKIA-REDACTED-SAMPLE" }),
+			findCredentialMaterial({ note: `AKIA${"A".repeat(16)}` }),
 		).not.toBeNull();
 		expect(
 			findCredentialMaterial({ note: "xoxb-1234567890-abcdef" }),

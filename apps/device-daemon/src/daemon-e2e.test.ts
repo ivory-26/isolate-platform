@@ -23,7 +23,7 @@ const CALLS: DeviceCall[] = [
 	{
 		id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		connectorId: "sentry",
-		credentialRef: "keychain:redacted-sample/sentry",
+		credentialRef: "keychain:redacted-sample",
 		toolName: "sentry.list_issues",
 		params: { orgSlug: "acme" },
 		deadlineAt: new Date(Date.now() + 60_000).toISOString(),

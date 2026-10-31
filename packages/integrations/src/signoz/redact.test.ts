@@ -29,7 +29,7 @@ describe("redactSignozText", () => {
 		expect(redactSignozText("password=hunter2")).toBe(
 			"password=[auth-redacted]",
 		);
-		expect(redactSignozText("api-key-line")).toBe(
+		expect(redactSignozText(`api_key: ${"test-value"}`)).toBe(
 			"api_key: [auth-redacted]",
 		);
 		expect(redactSignozText(JWT)).toBe("[token-redacted]");

@@ -26,6 +26,7 @@ import {
 import {
 	createGitHubAppTokenProvider,
 	createPullRequestForTask,
+	fetchGitHubIncidentContext,
 	type GitHubTokenProvider,
 } from "@isolate/integrations";
 import type { SandboxToolBackend } from "@isolate/mastra";
@@ -38,6 +39,7 @@ import {
 	type SandboxProvider,
 } from "@isolate/sandbox";
 import {
+	type ContextBundle,
 	type Logger,
 	type OrganizationId,
 	PlatformError,
@@ -469,6 +471,41 @@ export function createToolInvocationRecorder(
 	};
 }
 
+/**
+ * Wave 13: read-only incident context for tasks that carry a fingerprint.
+ * The task row is the gate, so an ordinary task never triggers GitHub reads.
+ * The GitHub client returns a bounded, cited bundle; failures are the
+ * handler's to degrade (it logs a bounded code and runs without evidence).
+ */
+export function createIncidentContextBundleLoader(
+	tokenProvider: Pick<GitHubTokenProvider, "getInstallationToken">,
+	tasks: Pick<TaskRepository, "get">,
+) {
+	return async (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		repositoryFullName: string;
+		ref: string;
+	}): Promise<ContextBundle | null> => {
+		const task = await tasks.get(input.taskId);
+		if (task === null || task.organization_id !== input.organizationId) {
+			return null;
+		}
+		const fingerprint = task.incident_fingerprint;
+		if (typeof fingerprint !== "string" || fingerprint.trim().length === 0) {
+			return null;
+		}
+		return fetchGitHubIncidentContext(
+			{ tokenProvider },
+			{
+				repositoryFullName: input.repositoryFullName,
+				ref: input.ref,
+				incidentFingerprint: fingerprint.trim(),
+			},
+		);
+	};
+}
+
 export async function createConfiguredWorkerComposition(
 	config: WorkerConfig,
 	logger: Logger,
@@ -495,7 +532,7 @@ export async function createConfiguredWorkerComposition(
 	const queue = new PostgresQueueRepository(sql);
 	const usageRepository = new PostgresUsageRepository(sql);
 	const usageSink = usageSinkFor(usageRepository);
-	const loadTaskContext = createTaskContextLoader(
+	const loadStoredTaskContext = createTaskContextLoader(
 		new PostgresTaskContextRepository(sql),
 	);
 	const taskRepository = new PostgresTaskRepository(sql);
@@ -507,7 +544,27 @@ export async function createConfiguredWorkerComposition(
 
 	const overrides: WorkerCompositionOverrides = {
 		usageSink,
-		loadTaskContext,
+		// Wave 13: the task-context projection predates the incident columns, so
+		// the task row is consulted once to carry the fingerprint into the
+		// context. Only an incident task pays for that second read.
+		loadTaskContext: async (input) => {
+			const context = await loadStoredTaskContext(input);
+			if (
+				typeof context.incidentFingerprint === "string" &&
+				context.incidentFingerprint.trim().length > 0
+			) {
+				return context;
+			}
+			const task = await taskRepository.get(input.taskId);
+			if (task === null || task.organization_id !== input.organizationId) {
+				return context;
+			}
+			const fingerprint = task.incident_fingerprint;
+			if (typeof fingerprint !== "string" || fingerprint.trim().length === 0) {
+				return context;
+			}
+			return { ...context, incidentFingerprint: fingerprint.trim() };
+		},
 		// Wave 11: trusted, config-loaded prices. `null` records unknown cost.
 		priceTable,
 		// Wave 11: one durable lifecycle per worker. It is inert until a task
@@ -588,6 +645,16 @@ export async function createConfiguredWorkerComposition(
 			}),
 			createPullRequest: createPullRequestService(sql, githubTokenProvider),
 		};
+	}
+
+	// Wave 13: read-only incident context. Bound only when a GitHub broker
+	// exists; the per-call task-row check is the second gate, so a normal task
+	// never pays for GitHub reads and never receives incident evidence.
+	if (githubTokenProvider !== null) {
+		overrides.loadContextBundle = createIncidentContextBundleLoader(
+			githubTokenProvider,
+			taskRepository,
+		);
 	}
 
 	return {

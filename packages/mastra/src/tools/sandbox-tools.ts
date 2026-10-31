@@ -215,6 +215,10 @@ export const SANDBOX_TOOL_RISKS = {
 	"git.push_branch": "sensitive",
 	"github.create_pull_request": "sensitive",
 	"github.merge_pull_request": "destructive",
+	"github.comment": "scoped_write",
+	"github.rerun_workflow": "scoped_write",
+	"github.deploy": "sensitive",
+	"github.rollback": "sensitive",
 	"db.migrate": "destructive",
 	"deploy.request": "destructive",
 } as const satisfies Partial<Record<ToolName, ToolRiskBand>>;

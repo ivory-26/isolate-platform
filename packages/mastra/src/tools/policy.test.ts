@@ -92,6 +92,10 @@ describe("createRiskTablePolicy band matrix", () => {
 			"git.push_branch": "sensitive",
 			"github.create_pull_request": "sensitive",
 			"github.merge_pull_request": "destructive",
+			"github.comment": "scoped_write",
+			"github.rerun_workflow": "scoped_write",
+			"github.deploy": "sensitive",
+			"github.rollback": "sensitive",
 			"db.migrate": "destructive",
 			"deploy.request": "destructive",
 			"sandbox.exec": "read_only",
@@ -114,6 +118,47 @@ describe("createRiskTablePolicy band matrix", () => {
 				if (!result.ok) {
 					expect(result.error.code).toBe("POLICY_DENIED");
 				}
+			}
+		}
+	});
+});
+
+/**
+ * Wave 13: the incident write surface is banded, not implemented. Commenting
+ * and rerunning CI are audited scoped writes (no second approval); deploy and
+ * rollback stay sensitive and therefore always surface APPROVAL_REQUIRED.
+ */
+describe("wave 13 github incident write bands", () => {
+	const bands = {
+		"github.comment": "scoped_write",
+		"github.rerun_workflow": "scoped_write",
+		"github.deploy": "sensitive",
+		"github.rollback": "sensitive",
+	} as const satisfies Partial<Record<ToolName, ToolRiskBand>>;
+
+	test("comment and rerun_workflow are audited scoped writes", async () => {
+		const policy = createRiskTablePolicy(bands);
+		for (const tool of ["github.comment", "github.rerun_workflow"] as const) {
+			const result = await decide(policy, tool);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.value).toEqual({
+					allowed: true,
+					risk: "scoped_write",
+					audited: true,
+				});
+			}
+		}
+	});
+
+	test("deploy and rollback require a persisted approval", async () => {
+		const policy = createRiskTablePolicy(bands);
+		for (const tool of ["github.deploy", "github.rollback"] as const) {
+			const result = await decide(policy, tool);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toBeInstanceOf(PlatformError);
+				expect(result.error.code).toBe("APPROVAL_REQUIRED");
 			}
 		}
 	});

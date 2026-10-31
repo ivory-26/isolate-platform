@@ -159,6 +159,10 @@ export function createOfflineWorkerDeps(
 		...(overrides.loadValidationPolicy === undefined
 			? {}
 			: { loadValidationPolicy: overrides.loadValidationPolicy }),
+		// Wave 13: incident context for tasks that carry a fingerprint.
+		...(overrides.loadContextBundle === undefined
+			? {}
+			: { loadContextBundle: overrides.loadContextBundle }),
 		// Wave 9 seams. Dropping any of these would silently degrade completion
 		// to the diff-only fallback, disable the tool audit or allow two writers
 		// on one branch, so every one is forwarded explicitly.

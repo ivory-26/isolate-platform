@@ -1,6 +1,7 @@
 import type { TaskContextRepository, TaskContextSourceRow } from "@isolate/db";
 import type { TaskContext } from "@isolate/mastra";
 import {
+	MAX_INCIDENT_FINGERPRINT_CHARS,
 	type OrganizationId,
 	PlatformError,
 	type TaskId,
@@ -76,6 +77,11 @@ export function toTaskContext(
 	// owned by the DB lane; until it is exposed the handler falls back to the
 	// repository URL (identical for every job on one repository).
 	const repositoryId = (row as { repositoryId?: unknown }).repositoryId;
+	// Wave 13: the incident fingerprint selects whether bounded GitHub evidence
+	// is fetched. Optional for older rows and fakes; bounded when present so a
+	// malformed value can never become an unbounded prompt gate.
+	const incidentFingerprint = (row as { incidentFingerprint?: unknown })
+		.incidentFingerprint;
 	return {
 		taskId: row.taskId,
 		organizationId: row.organizationId,
@@ -87,6 +93,14 @@ export function toTaskContext(
 		acceptanceCriteria: [...row.acceptanceCriteria],
 		...(typeof repositoryId === "string" && repositoryId.length > 0
 			? { repositoryId }
+			: {}),
+		...(typeof incidentFingerprint === "string" &&
+		incidentFingerprint.trim().length > 0
+			? {
+					incidentFingerprint: incidentFingerprint
+						.trim()
+						.slice(0, MAX_INCIDENT_FINGERPRINT_CHARS),
+				}
 			: {}),
 		limits: {
 			max_agent_turns: row.budgetLimits.max_agent_turns,

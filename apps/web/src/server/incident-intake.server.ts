@@ -8,9 +8,12 @@ import {
 import {
 	GITHUB_EVENT_HEADER,
 	type GitHubIncidentEvent,
+	GRAFANA_SIGNATURE_HEADER,
 	normalizeGitHubIncident,
 	normalizeGitHubRef,
-	readGitHubHeader,
+	PAGERDUTY_SIGNATURE_HEADER,
+	SENTRY_RESOURCE_HEADER,
+	SENTRY_SIGNATURE_HEADER,
 	verifyGitHubWebhook,
 } from "@isolate/integrations";
 import {
@@ -31,6 +34,16 @@ import {
 	type SubmissionReceipt,
 	type ValidatedSubmission,
 } from "../features/tasks/contracts";
+import type {
+	ConnectorIntakeFailure,
+	ConnectorIntakeOutcome,
+} from "./incident-intake-adapter.server";
+import {
+	GRAFANA_DEFAULT_TIMESTAMP_HEADER,
+	verifyAndNormalizeGrafana,
+} from "./incident-intake-grafana.server";
+import { verifyAndNormalizePagerDuty } from "./incident-intake-pagerduty.server";
+import { verifyAndNormalizeSentry } from "./incident-intake-sentry.server";
 import {
 	readWebhookHeader,
 	verifyWebhookSignature,
@@ -54,6 +67,18 @@ import {
  *   task only when the trigger policy accepts it (critical in production, or
  *   high on the repository default branch); it is the only mode that records
  *   signal provenance and enforces the per-organization cap.
+ *
+ * Wave 17 adds the first-batch adapter modes, each selected from its own
+ * headers and verified with its own server-only secret:
+ * - Sentry (`WEBHOOK_SENTRY_SECRET`): `Sentry-Hook-Signature` over the body;
+ * - Grafana (`WEBHOOK_GRAFANA_SECRET`): hex HMAC over `<timestamp>:<body>`;
+ * - PagerDuty (`WEBHOOK_PAGERDUTY_SECRET`): `v1=` HMAC over the body.
+ *
+ * They share the GitHub provider pipeline (signal dedupe, cap, provenance) but
+ * delegate trigger policy to the adapter normalizer: a `null` signal (resolved,
+ * non-production, unsupported action) is a 202 `{ignored: true}` with no task.
+ * Kubernetes has no native webhook and is intentionally not a mode; use the
+ * generic bridge (a signed `IncidentSignal`).
  */
 export const INCIDENT_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
 export const MAX_INCIDENT_GOAL_CHARS = 4000;
@@ -156,11 +181,18 @@ export type IncidentIntakeResult =
 			accepted: false;
 			deduped: boolean;
 			throttled: boolean;
+			/** Set when an adapter normalizer classified the delivery as no incident. */
+			ignored?: boolean;
 	  }
 	| { ok: false; code: IncidentIntakeFailureCode };
 
 /** Which verifier a delivery goes through; chosen from its headers only. */
-export type IncidentIntakeMode = "generic" | "github";
+export type IncidentIntakeMode =
+	| "generic"
+	| "github"
+	| "sentry"
+	| "grafana"
+	| "pagerduty";
 
 export type IncidentIntakeDependencies = {
 	/** Server-only HMAC secret for generic deliveries (`WEBHOOK_SIGNING_SECRET`). */
@@ -170,13 +202,31 @@ export type IncidentIntakeDependencies = {
 	 * GitHub deliveries are refused with 503, never downgraded to generic mode.
 	 */
 	githubSecret?: string | null;
+	/** `WEBHOOK_SENTRY_SECRET`; absent means Sentry deliveries get 503. */
+	sentrySecret?: string | null;
+	/** `WEBHOOK_GRAFANA_SECRET`; absent enables unsigned only with the opt-in. */
+	grafanaSecret?: string | null;
+	/** `WEBHOOK_PAGERDUTY_SECRET`; absent means PagerDuty deliveries get 503. */
+	pagerdutySecret?: string | null;
+	/**
+	 * `WEBHOOK_GRAFANA_ALLOW_UNSIGNED=true`: accept Grafana deliveries that carry
+	 * no signature at all. Deny-by-default; a claimed but unverifiable signature
+	 * is still rejected, and the 64 KiB cap still applies.
+	 */
+	grafanaAllowUnsigned?: boolean;
+	/**
+	 * Configured Grafana timestamp header (`GRAFANA_WEBHOOK_TIMESTAMP_HEADER`);
+	 * defaults to `GRAFANA_DEFAULT_TIMESTAMP_HEADER`. Null means the signature
+	 * covers the body only.
+	 */
+	grafanaTimestampHeader?: string | null;
 	/** The verified route binding; the only source of the organization. */
 	binding: WebhookRouteBinding;
 	resolveRepository: ResolveIncidentRepository;
 	/**
-	 * Signal store for GitHub deliveries: `recordIfNew` dedupes a redelivery and
-	 * `countActiveIncidentTasks` enforces the per-org cap. GitHub mode fails
-	 * closed (503) without it; generic mode does not use it.
+	 * Signal store for GitHub and adapter deliveries: `recordIfNew` dedupes a
+	 * redelivery and `countActiveIncidentTasks` enforces the per-org cap. Those
+	 * modes fail closed (503) without it; generic mode does not use it.
 	 */
 	incidentRepository?: IncidentRepository | null;
 	dedupe: IncidentDedupeStore;
@@ -321,15 +371,41 @@ export function buildIncidentGoalFor(
 }
 
 /**
- * Mode selection is a header decision, never a body or query decision: a
- * GitHub delivery always carries `x-github-event`, so a generic sender cannot
- * opt into GitHub normalization (or its secret) by shaping its payload.
+ * Mode selection is a header decision, never a body or query decision: each
+ * provider always sends its own header set, so a sender cannot opt into another
+ * mode's normalizer (or secret) by shaping its payload. Precedence is fixed
+ * (GitHub → Sentry → Grafana → PagerDuty → generic) so a delivery carrying two
+ * provider headers resolves deterministically and fails the chosen verifier,
+ * rather than trying secrets in turn.
  */
 export function detectIncidentIntakeMode(
 	headers: IncidentRequestHeaders,
+	options: { grafanaTimestampHeader?: string | null } = {},
 ): IncidentIntakeMode {
-	const event = readGitHubHeader(headers, GITHUB_EVENT_HEADER);
-	return event !== null && event.trim().length > 0 ? "github" : "generic";
+	if (hasHeader(headers, GITHUB_EVENT_HEADER)) return "github";
+	if (
+		hasHeader(headers, SENTRY_SIGNATURE_HEADER) ||
+		hasHeader(headers, SENTRY_RESOURCE_HEADER)
+	)
+		return "sentry";
+	const grafanaTimestampHeader =
+		options.grafanaTimestampHeader === undefined
+			? GRAFANA_DEFAULT_TIMESTAMP_HEADER
+			: options.grafanaTimestampHeader;
+	if (
+		hasHeader(headers, GRAFANA_SIGNATURE_HEADER) ||
+		(grafanaTimestampHeader !== null &&
+			hasHeader(headers, grafanaTimestampHeader))
+	)
+		return "grafana";
+	if (hasHeader(headers, PAGERDUTY_SIGNATURE_HEADER)) return "pagerduty";
+	return "generic";
+}
+
+/** A header is present only when it carries a non-blank value. */
+function hasHeader(headers: IncidentRequestHeaders, name: string): boolean {
+	const value = readWebhookHeader(headers, name);
+	return value !== null && value.trim().length > 0;
 }
 
 export type IncidentTriggerRejection = "severity" | "production" | "branch";
@@ -653,6 +729,28 @@ async function acceptGitHubIncident(
 	if (!decision.accepted)
 		return { ok: true, accepted: false, deduped: false, throttled: false };
 
+	return acceptProviderSignal(
+		deps,
+		context,
+		signal,
+		verification.delivery,
+		repository,
+	);
+}
+
+/**
+ * Shared provider pipeline (GitHub and the first-batch adapters): live dedupe
+ * replay, then the signal row, then the per-org cap, then one task carrying
+ * `incident_source`/`incident_fingerprint`. Dedupe is keyed by
+ * `(organization, source, fingerprint)`; delivery ids are audit only.
+ */
+async function acceptProviderSignal(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	signal: IncidentSignal,
+	deliveryId: string | null,
+	repository: IncidentRepository,
+): Promise<IncidentIntakeResult> {
 	const key: IncidentDedupeKey = {
 		organizationId: context.organizationId,
 		source: signal.source,
@@ -680,7 +778,7 @@ async function acceptGitHubIncident(
 			severity: signal.severity,
 			service: signal.service,
 			fingerprint: signal.fingerprint,
-			deliveryId: verification.delivery,
+			deliveryId,
 			receivedAt: new Date(signal.receivedAt),
 		});
 	} catch {
@@ -709,6 +807,77 @@ async function acceptGitHubIncident(
 	});
 }
 
+/** Bounded failure mapping for the adapter glue; never provider detail. */
+const CONNECTOR_FAILURE_CODE: Record<
+	ConnectorIntakeFailure,
+	IncidentIntakeFailureCode
+> = {
+	not_configured: "UNAVAILABLE",
+	body_too_large: "PAYLOAD_TOO_LARGE",
+	unauthorized: "UNAUTHORIZED",
+	invalid_input: "INVALID_INPUT",
+};
+
+/**
+ * First-batch adapter mode (Sentry, Grafana, PagerDuty): verify with the mode's
+ * own secret, normalize with the mode's own adapter, then the shared provider
+ * pipeline. `null` is an ignored delivery (202 `{ignored: true}`, no task); a
+ * missing mode secret is a 503 and never falls back to another verifier.
+ */
+async function acceptAdapterIncident(
+	deps: IncidentIntakeDependencies,
+	request: IncidentIntakeRequest,
+	context: AcceptanceContext,
+	mode: Extract<IncidentIntakeMode, "sentry" | "grafana" | "pagerduty">,
+): Promise<IncidentIntakeResult> {
+	let outcome: ConnectorIntakeOutcome;
+	if (mode === "sentry") {
+		outcome = verifyAndNormalizeSentry({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.sentrySecret,
+			nowMs: context.nowMs,
+		});
+	} else if (mode === "grafana") {
+		outcome = verifyAndNormalizeGrafana({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.grafanaSecret,
+			timestampHeader:
+				deps.grafanaTimestampHeader === undefined
+					? GRAFANA_DEFAULT_TIMESTAMP_HEADER
+					: deps.grafanaTimestampHeader,
+			allowUnsigned: deps.grafanaAllowUnsigned === true,
+			nowMs: context.nowMs,
+		});
+	} else {
+		outcome = verifyAndNormalizePagerDuty({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.pagerdutySecret,
+			nowMs: context.nowMs,
+		});
+	}
+	if (!outcome.ok)
+		return { ok: false, code: CONNECTOR_FAILURE_CODE[outcome.reason] };
+	if (outcome.signal === null)
+		return {
+			ok: true,
+			accepted: false,
+			deduped: false,
+			throttled: false,
+			ignored: true,
+		};
+
+	const repository = deps.incidentRepository;
+	if (repository === undefined || repository === null)
+		return { ok: false, code: "UNAVAILABLE" };
+
+	// Adapter deliveries have no platform delivery id; provenance and dedupe come
+	// from the normalized signal.
+	return acceptProviderSignal(deps, context, outcome.signal, null, repository);
+}
+
 /**
  * Accepts one delivery. The mode is chosen from the headers, each mode verifies
  * with its own secret, and every failure is a bounded code: never the payload,
@@ -726,9 +895,19 @@ export async function acceptIncident(
 		nowMs: toMillis(request.now, deps.now),
 	};
 
-	return detectIncidentIntakeMode(request.headers) === "github"
-		? acceptGitHubIncident(deps, request, context)
-		: acceptGenericIncident(deps, request, context);
+	const mode = detectIncidentIntakeMode(request.headers, {
+		grafanaTimestampHeader: deps.grafanaTimestampHeader,
+	});
+	switch (mode) {
+		case "github":
+			return acceptGitHubIncident(deps, request, context);
+		case "sentry":
+		case "grafana":
+		case "pagerduty":
+			return acceptAdapterIncident(deps, request, context, mode);
+		default:
+			return acceptGenericIncident(deps, request, context);
+	}
 }
 
 /** Factory form used by the route composition root. */

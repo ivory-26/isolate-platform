@@ -8,16 +8,19 @@ import {
 } from "../server/webhook-signature.server";
 
 /**
- * Signed-webhook receiver (H12-4, wave 13).
+ * Signed-webhook receiver (H12-4, wave 13; adapter modes wave 17).
  *
  * `server.handlers` only: no component, no client code, no secret in the
- * bundle. Mode selection (`x-github-event` → GitHub, otherwise generic),
- * verification, normalization, trigger policy, dedupe, the per-org cap and
- * submission all happen in `incident-intake.server`; this route only maps a
- * bounded result to a status. An accepted delivery is 202 with the task and
- * job ids; a replay is 202 `{deduped: true}`; a non-triggering event is 202
- * `{accepted: false}` and a capped one 202 `{accepted: false, throttled: true}`.
- * Nothing from the payload, the signature or the secret is echoed.
+ * bundle. Mode selection (`x-github-event` → GitHub, Sentry/Grafana/PagerDuty
+ * header sets → their adapter, otherwise generic), verification,
+ * normalization, trigger policy, dedupe, the per-org cap and submission all
+ * happen in `incident-intake.server`; this route only maps a bounded result to
+ * a status. An accepted delivery is 202 with the task and job ids; a replay is
+ * 202 `{deduped: true}`; an adapter delivery that is not an incident (resolved,
+ * non-production, wrong action) is 202 `{ignored: true}`; a non-triggering
+ * GitHub event is 202 `{accepted: false}` and a capped one 202
+ * `{accepted: false, throttled: true}`. Nothing from the payload, the signature
+ * or the secret is echoed.
  */
 export const Route = createFileRoute("/api/webhooks/$")({
 	server: {
@@ -91,6 +94,13 @@ async function handleWebhookRequest(request: Request): Promise<Response> {
 		return reject("UNAVAILABLE");
 	}
 	if (!result.ok) return reject(result.code);
+	// An adapter classified the delivery as "not an incident": no task exists.
+	if ("accepted" in result && result.ignored === true) {
+		return Response.json(
+			{ ignored: true },
+			{ status: 202, headers: { "cache-control": "no-store" } },
+		);
+	}
 	// A non-triggering, duplicate or throttled delivery creates nothing; only a
 	// created (or live-replayed) task carries an id.
 	if (!("taskId" in result)) {

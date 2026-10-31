@@ -1,5 +1,6 @@
 import "@tanstack/react-start/server-only";
-import { createDb, type PgSql } from "@isolate/db";
+import { createDb, type PgSql, PostgresIncidentRepository } from "@isolate/db";
+import { GITHUB_WEBHOOK_MIN_SECRET_LENGTH } from "@isolate/integrations";
 import { asOrganizationId, asUserId } from "@isolate/shared";
 import { z } from "zod";
 import { submitTaskSchema } from "../features/tasks/contracts";
@@ -21,8 +22,11 @@ import { WEBHOOK_MIN_SECRET_LENGTH } from "./webhook-signature.server";
  * request body. The binding names exactly one organization and one repository;
  * a delivery whose service does not match is treated as unmapped.
  *
- * All identifiers are inert configuration. The only secret is
- * `WEBHOOK_SIGNING_SECRET`, and it never leaves this process.
+ * All identifiers are inert configuration. The only secrets are
+ * `WEBHOOK_SIGNING_SECRET` (generic mode) and `WEBHOOK_GITHUB_SECRET` (GitHub
+ * mode, `x-github-event` present), and they never leave this process. Either
+ * secret may be configured alone; a delivery whose mode has no secret is
+ * refused with 503 rather than downgraded to the other verifier.
  */
 export class IncidentIntakeNotConfiguredError extends Error {
 	constructor() {
@@ -32,6 +36,7 @@ export class IncidentIntakeNotConfiguredError extends Error {
 }
 
 export const WEBHOOK_SIGNING_SECRET_VARIABLE = "WEBHOOK_SIGNING_SECRET";
+export const WEBHOOK_GITHUB_SECRET_VARIABLE = "WEBHOOK_GITHUB_SECRET";
 export const WEBHOOK_ORGANIZATION_ID_VARIABLE = "WEBHOOK_ORGANIZATION_ID";
 export const WEBHOOK_ACTOR_ID_VARIABLE = "WEBHOOK_ACTOR_ID";
 export const WEBHOOK_ACTOR_ROLE_VARIABLE = "WEBHOOK_ACTOR_ROLE";
@@ -45,7 +50,10 @@ export const WEBHOOK_FILE_OWNERSHIP_VARIABLE = "WEBHOOK_FILE_OWNERSHIP";
 export const WEBHOOK_SERVICE_VARIABLE = "WEBHOOK_SERVICE";
 
 export type IncidentIntakeSettings = {
-	signingSecret: string;
+	/** Generic-mode HMAC secret; absent means generic deliveries get 503. */
+	signingSecret?: string;
+	/** GitHub-mode webhook secret; absent means GitHub deliveries get 503. */
+	githubSecret?: string;
 	binding: WebhookRouteBinding;
 	repositoryId: string;
 	branch: string;
@@ -56,7 +64,8 @@ export type IncidentIntakeSettings = {
 };
 
 const settingsSchema = z.strictObject({
-	signingSecret: z.string().min(WEBHOOK_MIN_SECRET_LENGTH),
+	signingSecret: z.string().min(WEBHOOK_MIN_SECRET_LENGTH).optional(),
+	githubSecret: z.string().min(GITHUB_WEBHOOK_MIN_SECRET_LENGTH).optional(),
 	organizationId: z.uuid(),
 	actorId: z.uuid(),
 	actorRole: z.enum(["owner", "admin", "member"]).default("member"),
@@ -77,12 +86,28 @@ function fileOwnershipFrom(env: Record<string, string | undefined>): string[] {
 		.filter((entry) => entry.length > 0);
 }
 
+/**
+ * An empty or whitespace secret is "not configured", not a zero-length key:
+ * CI passes unset variables as empty strings. Each mode then fails closed on
+ * its own instead of disabling the other mode's secret.
+ */
+function secretFrom(
+	env: Record<string, string | undefined>,
+	name: string,
+): string | undefined {
+	const value = env[name];
+	return value === undefined || value.trim().length === 0 ? undefined : value;
+}
+
 /** Returns null when any required binding value is absent or invalid. */
 export function readIncidentIntakeSettings(
 	env: Record<string, string | undefined>,
 ): IncidentIntakeSettings | null {
+	const signingSecret = secretFrom(env, WEBHOOK_SIGNING_SECRET_VARIABLE);
+	const githubSecret = secretFrom(env, WEBHOOK_GITHUB_SECRET_VARIABLE);
 	const parsed = settingsSchema.safeParse({
-		signingSecret: env[WEBHOOK_SIGNING_SECRET_VARIABLE],
+		...(signingSecret === undefined ? {} : { signingSecret }),
+		...(githubSecret === undefined ? {} : { githubSecret }),
 		organizationId: env[WEBHOOK_ORGANIZATION_ID_VARIABLE],
 		actorId: env[WEBHOOK_ACTOR_ID_VARIABLE],
 		actorRole: env[WEBHOOK_ACTOR_ROLE_VARIABLE] ?? "member",
@@ -101,7 +126,12 @@ export function readIncidentIntakeSettings(
 	if (!parsed.success) return null;
 	const service = parsed.data.service;
 	return {
-		signingSecret: parsed.data.signingSecret,
+		...(parsed.data.signingSecret === undefined
+			? {}
+			: { signingSecret: parsed.data.signingSecret }),
+		...(parsed.data.githubSecret === undefined
+			? {}
+			: { githubSecret: parsed.data.githubSecret }),
 		binding: {
 			organizationId: asOrganizationId(
 				parsed.data.organizationId.toLowerCase(),
@@ -121,6 +151,7 @@ export function readIncidentIntakeSettings(
 let sql: PgSql | undefined;
 let sqlUrl: string | undefined;
 let store: ReturnType<typeof createPostgresStore> | undefined;
+let incidentRepository: PostgresIncidentRepository | undefined;
 let intake: ReturnType<typeof createIncidentIntake> | undefined;
 /**
  * Process-local dedupe for the single-process deployment. A multi-instance
@@ -128,12 +159,24 @@ let intake: ReturnType<typeof createIncidentIntake> | undefined;
  */
 const dedupe = createInMemoryIncidentDedupeStore();
 
-function getStore(databaseUrl: string): ReturnType<typeof createPostgresStore> {
-	if (store !== undefined && sqlUrl === databaseUrl) return store;
+type PostgresBundle = {
+	store: ReturnType<typeof createPostgresStore>;
+	incidentRepository: PostgresIncidentRepository;
+};
+
+function getStore(databaseUrl: string): PostgresBundle {
+	if (
+		store !== undefined &&
+		incidentRepository !== undefined &&
+		sqlUrl === databaseUrl
+	)
+		return { store, incidentRepository };
 	sql = createDb(databaseUrl);
 	sqlUrl = databaseUrl;
 	store = createPostgresStore(sql);
-	return store;
+	// Signal dedupe and the per-org incident cap share the same connection pool.
+	incidentRepository = new PostgresIncidentRepository(sql);
+	return { store, incidentRepository };
 }
 
 export function incidentRepositoryRoute(
@@ -165,21 +208,30 @@ export function getIncidentIntake(
 	const databaseUrl = env.DATABASE_URL;
 	if (
 		settings === null ||
+		(settings.signingSecret === undefined &&
+			settings.githubSecret === undefined) ||
 		databaseUrl === undefined ||
 		databaseUrl.length === 0
 	)
 		throw new IncidentIntakeNotConfiguredError();
-	const taskStore = getStore(databaseUrl);
+	const { store: taskStore, incidentRepository: signals } =
+		getStore(databaseUrl);
 	const service = createTaskService({
 		// The verified route binding is the caller identity for this path.
 		resolveScope: async () => settings.binding,
 		getStore: async () => taskStore,
 	});
 	intake = createIncidentIntake({
-		signingSecret: settings.signingSecret,
+		// Explicit null means "generic mode is not configured"; a missing secret
+		// is refused per mode rather than silently downgraded.
+		signingSecret: settings.signingSecret ?? null,
+		...(settings.githubSecret === undefined
+			? {}
+			: { githubSecret: settings.githubSecret }),
 		binding: settings.binding,
 		resolveRepository: async (input) =>
 			incidentRepositoryRoute(settings, input),
+		incidentRepository: signals,
 		dedupe,
 		submitTask: (input) => service.submit(input),
 	});

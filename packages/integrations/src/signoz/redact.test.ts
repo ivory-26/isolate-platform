@@ -5,6 +5,13 @@ import {
 	redactSignozText,
 } from "./redact";
 
+function fakeJwt(): string {
+	const encode = (value: object): string =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ sub: "fixture" })}.fixture-signature`;
+}
+const JWT = fakeJwt();
+
 describe("redactSignozText", () => {
 	test("redacts the SigNoz API key header and Basic credentials", () => {
 		expect(redactSignozText("SIGNOZ-API-KEY: signoz-secret-value-123")).toBe(
@@ -25,11 +32,7 @@ describe("redactSignozText", () => {
 		expect(redactSignozText("api-key-line")).toBe(
 			"api_key: [auth-redacted]",
 		);
-		expect(
-			redactSignozText(
-				"<jwt-redacted>",
-			),
-		).toBe("[token-redacted]");
+		expect(redactSignozText(JWT)).toBe("[token-redacted]");
 		expect(
 			redactSignozText("https://user:pass@signoz.example.com/alerts"),
 		).toBe("https://[redacted]@signoz.example.com/alerts");

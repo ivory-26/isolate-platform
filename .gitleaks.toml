@@ -14,6 +14,13 @@ description = "PEM markers in unit tests (keys generated at runtime)"
 paths = ['''apps/worker/src/runtime-composition\.test\.ts''', '''packages/integrations/src/github/auth\.test\.ts''']
 regexes = ['''-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----''']
 
+# Explicit JWT rule: a static three-segment JWT is never accepted in the tree.
+# Tests must construct one at runtime so no signature-like literal is committed.
+[[rules]]
+id = "static-jwt-fixture"
+description = "Static JWT-shaped value in the repository"
+regex = '''eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}'''
+
 # The single historical finding on the wave-7 branch; the file no longer
 # contains any key material beyond the same markers.
 [[allowlists]]

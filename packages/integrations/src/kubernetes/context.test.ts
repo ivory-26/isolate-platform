@@ -21,8 +21,12 @@ const NAMESPACE = "payments";
 const POD = "api-7c9f-abc";
 const DEPLOYMENT = "api";
 const NOW = Date.parse("2026-10-31T00:00:00.000Z");
-const TOKEN =
-	"<jwt-redacted>";
+function fakeJwt(): string {
+	const encode = (value: object): string =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ sub: "fixture" })}.fixture-signature`;
+}
+const TOKEN = fakeJwt();
 
 type Call = {
 	method: "get" | "getText";

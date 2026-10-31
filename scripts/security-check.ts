@@ -58,6 +58,26 @@ const forbidden: Array<{ label: string; pattern: RegExp }> = [
 	},
 ];
 
+/**
+ * Static JWT-shaped fixtures are forbidden even in tests: scanners (and
+ * reviewers) cannot distinguish a synthetic signature from a leaked token.
+ * Tests must build a JWT at runtime instead.
+ */
+const staticJwtPattern =
+	/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/;
+for (const file of tracked) {
+	if (!/\.(test|spec)\.(ts|tsx)$/.test(file)) continue;
+	let text: string;
+	try {
+		text = readFileSync(file, "utf8");
+	} catch {
+		continue;
+	}
+	if (staticJwtPattern.test(text)) {
+		findings.push(`${file}: static JWT-shaped test fixture`);
+	}
+}
+
 for (const file of sourceFiles) {
 	let text: string;
 	try {

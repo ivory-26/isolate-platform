@@ -56,7 +56,7 @@ describe("kubernetes connector configuration", () => {
 	test("rejects a kubeconfig or an inline token instead of ignoring it", () => {
 		for (const extra of [
 			{ kubeconfig: "/home/agent/.kube/config" },
-			{ token: "<jwt-redacted>" },
+			{ token: "inline-service-account-token" },
 			{ KUBECONFIG: "/home/agent/.kube/config" },
 			{ apiUrl: "https://kubernetes.default.svc", unknownKey: true },
 		]) {

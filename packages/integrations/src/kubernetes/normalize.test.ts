@@ -10,6 +10,13 @@ const NAMESPACE = "payments";
 const POD = "api-7c9f-abc";
 const RECEIVED_AT = "2026-10-31T00:00:00.000Z";
 
+function fakeJwt(): string {
+	const encode = (value: object): string =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ sub: "fixture" })}.fixture-signature`;
+}
+const JWT = fakeJwt();
+
 type EventOverrides = {
 	reason?: string;
 	type?: string;
@@ -171,8 +178,7 @@ describe("normalizeKubernetesEvent", () => {
 	test("redacts tokens, passwords, JWTs and emails before summarising", () => {
 		const signal = normalizeKubernetesEvent(
 			event({
-				message:
-					"Authorization: Bearer ghs_secretvalue123 password=hunter2 ops@example.com <jwt-redacted>",
+				message: `Authorization: Bearer ghs_secretvalue123 password=hunter2 ops@example.com ${JWT}`,
 			}),
 			BASE_OPTIONS,
 		);
@@ -180,9 +186,7 @@ describe("normalizeKubernetesEvent", () => {
 		expect(summary).not.toContain("ghs_secretvalue123");
 		expect(summary).not.toContain("hunter2");
 		expect(summary).not.toContain("ops@example.com");
-		expect(summary).not.toContain(
-			"<jwt-redacted>",
-		);
+		expect(summary).not.toContain(JWT);
 		expect(summary.length).toBeLessThanOrEqual(2000);
 		expect(signal?.title.length).toBeLessThanOrEqual(200);
 	});

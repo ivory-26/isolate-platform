@@ -38,7 +38,7 @@ jobs:
   secret-scan:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
-    continue-on-error: true # advisory until .env.example patterns are verified clean
+    # Blocking: a secret-shaped value must fail the build, not advise.
     steps:
       - uses: actions/checkout@v4
         with:

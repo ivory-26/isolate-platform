@@ -303,6 +303,24 @@ export function buildIncidentGoal(signal: IncidentSignal): string {
 }
 
 /**
+ * Incident goal plus the concrete deliverable for the owned path. Without one,
+ * an incident task only describes the failure and the agent has no reason to
+ * write anything, so the diff gate can never pass. The line is added only when
+ * an owned path exists and only while the goal stays bounded.
+ */
+export function buildIncidentGoalFor(
+	signal: IncidentSignal,
+	fileOwnership: readonly string[],
+): string {
+	const base = buildIncidentGoal(signal);
+	const target = fileOwnership[0];
+	if (target === undefined || target.length === 0) return base;
+	const deliverable = `\n\nDeliverable: write a short incident report to ${target} and commit it with git.commit_local. Do not modify any other file.`;
+	if (base.length + deliverable.length > MAX_INCIDENT_GOAL_CHARS) return base;
+	return `${base}${deliverable}`;
+}
+
+/**
  * Mode selection is a header decision, never a body or query decision: a
  * GitHub delivery always carries `x-github-event`, so a generic sender cannot
  * opt into GitHub normalization (or its secret) by shaping its payload.
@@ -468,7 +486,7 @@ async function createTaskForSignal(
 			signal.fingerprint,
 			nowMs,
 		),
-		goal: buildIncidentGoal(signal),
+		goal: buildIncidentGoalFor(signal, route.data.fileOwnership),
 		acceptanceCriteria: [],
 		acceptanceChecks: [],
 		fileOwnership: [...route.data.fileOwnership],

@@ -48,6 +48,8 @@ export const WEBHOOK_WORKFLOW_VERSION_VARIABLE = "WEBHOOK_WORKFLOW_VERSION";
 export const WEBHOOK_FILE_OWNERSHIP_VARIABLE = "WEBHOOK_FILE_OWNERSHIP";
 /** Optional service filter; absent means any service routes to the repository. */
 export const WEBHOOK_SERVICE_VARIABLE = "WEBHOOK_SERVICE";
+/** Optional per-incident agent-turn budget; omitted keeps the submission default. */
+export const WEBHOOK_MAX_AGENT_TURNS_VARIABLE = "WEBHOOK_MAX_AGENT_TURNS";
 
 export type IncidentIntakeSettings = {
 	/** Generic-mode HMAC secret; absent means generic deliveries get 503. */
@@ -61,6 +63,8 @@ export type IncidentIntakeSettings = {
 	workflowVersion: number;
 	fileOwnership: readonly string[];
 	service?: string;
+	/** Bounds how long an incident task may loop before the diff gate decides. */
+	maxAgentTurns?: number;
 };
 
 const settingsSchema = z.strictObject({
@@ -75,6 +79,7 @@ const settingsSchema = z.strictObject({
 	workflowVersion: z.number().int().min(1).max(2147483647),
 	fileOwnership: submitTaskSchema.shape.fileOwnership,
 	service: z.string().trim().min(1).max(128).optional(),
+	maxAgentTurns: z.number().int().min(1).max(50).optional(),
 });
 
 function fileOwnershipFrom(env: Record<string, string | undefined>): string[] {
@@ -122,6 +127,10 @@ export function readIncidentIntakeSettings(
 		...(env[WEBHOOK_SERVICE_VARIABLE] === undefined
 			? {}
 			: { service: env[WEBHOOK_SERVICE_VARIABLE] }),
+		maxAgentTurns:
+			env[WEBHOOK_MAX_AGENT_TURNS_VARIABLE] === undefined
+				? undefined
+				: Number(env[WEBHOOK_MAX_AGENT_TURNS_VARIABLE]),
 	});
 	if (!parsed.success) return null;
 	const service = parsed.data.service;
@@ -145,6 +154,9 @@ export function readIncidentIntakeSettings(
 		workflowVersion: parsed.data.workflowVersion,
 		fileOwnership: parsed.data.fileOwnership,
 		...(service === undefined ? {} : { service }),
+		...(parsed.data.maxAgentTurns === undefined
+			? {}
+			: { maxAgentTurns: parsed.data.maxAgentTurns }),
 	};
 }
 
@@ -193,6 +205,9 @@ export function incidentRepositoryRoute(
 		workflowDefinitionId: settings.workflowDefinitionId,
 		workflowVersion: settings.workflowVersion,
 		fileOwnership: settings.fileOwnership,
+		...(settings.maxAgentTurns === undefined
+			? {}
+			: { budget: { maxAgentTurns: settings.maxAgentTurns } }),
 	};
 }
 

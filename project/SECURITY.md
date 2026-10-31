@@ -20,14 +20,14 @@
 
 | # | Severity | Finding | Disposition |
 |---|---|---|---|
-| 1 | HIGH | Secret-shaped values could be persisted in call `params`/`result` and credential `metadata` (shallow, top-level checks only) | **Fix in flight** (`task/w17-secfix`): recursive credential-material scan at every boundary, applied to enqueue, result, `credentialRef`, `metadata`, scopes and worker args; metadata capped |
-| 2 | MEDIUM | Sentry replay window is not authenticated (timestamp outside the MAC) | Mitigated by durable fingerprint dedupe; the timestamp is advisory. Documented; not a standalone control |
-| 3 | MEDIUM | PagerDuty acknowledge/resolve admitted without a write scope | **Fix in flight**: require `connector:write` or `<connector>:write` in credential scopes before enqueue |
-| 4 | MEDIUM | `awaitResult` read not scoped by org/device | **Fix in flight**: optional `{organizationId, deviceId}` scope; worker passes the resolved ids |
-| 5 | MEDIUM | Provider responses buffered before the byte cap; redirects followed | **Fix in flight**: `redirect: "error"` on every adapter request; streaming byte caps tracked as follow-up |
-| 6 | LOW | Redaction after truncation in a few context builders | Tracked; adapters mostly redact before truncation; fix in a follow-up |
-| 7 | LOW | Device tokens never expire; no rate limit on auth/claim | Tracked; revocation works immediately. Add token expiry/rotation and bounded auth rate limiting |
-| 8 | MEDIUM | Composite tenant constraints absent (separate FKs only) | Tracked; gateway rejects cross-tenant rows, but DB-level composite constraints need a migration |
+| 1 | HIGH | Secret-shaped values could be persisted in call `params`/`result` and credential `metadata` (shallow, top-level checks only) | **FIXED** (`3305bff`): recursive credential-material scan at enqueue, result read/write, `credentialRef`, `displayName`, `metadata`, scopes and worker args; metadata capped at 16 KiB |
+| 2 | MEDIUM | Sentry replay window is not authenticated (timestamp outside the MAC) | **MITIGATED**: durable fingerprint dedupe is the control; the timestamp is advisory and documented as such |
+| 3 | MEDIUM | PagerDuty acknowledge/resolve admitted without a write scope | **FIXED**: `connector:write` or `<connector>:write` required before enqueue; denied with `POLICY_DENIED` |
+| 4 | MEDIUM | `awaitResult` read not scoped by org/device | **FIXED**: optional `{organizationId, deviceId}` scope; worker passes both; foreign scope returns `null` |
+| 5 | MEDIUM | Provider responses buffered before the byte cap; redirects followed | **PARTIAL**: `redirect: "error"` on all ten adapter request paths; streaming byte caps remain a follow-up |
+| 6 | LOW | Redaction after truncation in a few context builders | Tracked; adapters mostly redact before truncation; follow-up |
+| 7 | LOW | Device tokens never expire; no rate limit on auth/claim | Tracked; revocation is immediate. Add token expiry/rotation and bounded auth rate limiting |
+| 8 | MEDIUM | Composite tenant constraints absent (separate FKs only) | Tracked; gateway rejects cross-tenant rows; DB-level composite constraints need a migration |
 
 ## 3. Verified safe
 

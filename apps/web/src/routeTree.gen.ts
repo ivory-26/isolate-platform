@@ -18,6 +18,9 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
 import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiConnectorsConnectRouteImport } from './routes/api.connectors.connect'
+import { Route as ApiConnectorsListRouteImport } from './routes/api.connectors.list'
+import { Route as ApiConnectorsRevokeRouteImport } from './routes/api.connectors.revoke'
 import { Route as ApiDeviceClaimRouteImport } from './routes/api.device.claim'
 import { Route as ApiDeviceHeartbeatRouteImport } from './routes/api.device.heartbeat'
 import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
@@ -71,6 +74,21 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiConnectorsConnectRoute = ApiConnectorsConnectRouteImport.update({
+  id: '/api/connectors/connect',
+  path: '/api/connectors/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiConnectorsListRoute = ApiConnectorsListRouteImport.update({
+  id: '/api/connectors/list',
+  path: '/api/connectors/list',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiConnectorsRevokeRoute = ApiConnectorsRevokeRouteImport.update({
+  id: '/api/connectors/revoke',
+  path: '/api/connectors/revoke',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiDeviceClaimRoute = ApiDeviceClaimRouteImport.update({
   id: '/api/device/claim',
   path: '/api/device/claim',
@@ -117,6 +135,9 @@ export interface FileRoutesByFullPath {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/connectors/connect': typeof ApiConnectorsConnectRoute
+  '/api/connectors/list': typeof ApiConnectorsListRoute
+  '/api/connectors/revoke': typeof ApiConnectorsRevokeRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
@@ -134,6 +155,9 @@ export interface FileRoutesByTo {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/connectors/connect': typeof ApiConnectorsConnectRoute
+  '/api/connectors/list': typeof ApiConnectorsListRoute
+  '/api/connectors/revoke': typeof ApiConnectorsRevokeRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
@@ -153,6 +177,9 @@ export interface FileRoutesById {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/connectors/connect': typeof ApiConnectorsConnectRoute
+  '/api/connectors/list': typeof ApiConnectorsListRoute
+  '/api/connectors/revoke': typeof ApiConnectorsRevokeRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
@@ -173,6 +200,9 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
+    | '/api/connectors/connect'
+    | '/api/connectors/list'
+    | '/api/connectors/revoke'
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
@@ -190,6 +220,9 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations'
     | '/api/auth/$'
+    | '/api/connectors/connect'
+    | '/api/connectors/list'
+    | '/api/connectors/revoke'
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
@@ -208,6 +241,9 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
+    | '/api/connectors/connect'
+    | '/api/connectors/list'
+    | '/api/connectors/revoke'
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
@@ -225,6 +261,9 @@ export interface RootRouteChildren {
   SignupRoute: typeof SignupRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiConnectorsConnectRoute: typeof ApiConnectorsConnectRoute
+  ApiConnectorsListRoute: typeof ApiConnectorsListRoute
+  ApiConnectorsRevokeRoute: typeof ApiConnectorsRevokeRoute
   ApiDeviceClaimRoute: typeof ApiDeviceClaimRoute
   ApiDeviceHeartbeatRoute: typeof ApiDeviceHeartbeatRoute
   ApiDeviceListRoute: typeof ApiDeviceListRoute
@@ -297,6 +336,27 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/connectors/connect': {
+      id: '/api/connectors/connect'
+      path: '/api/connectors/connect'
+      fullPath: '/api/connectors/connect'
+      preLoaderRoute: typeof ApiConnectorsConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/connectors/list': {
+      id: '/api/connectors/list'
+      path: '/api/connectors/list'
+      fullPath: '/api/connectors/list'
+      preLoaderRoute: typeof ApiConnectorsListRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/connectors/revoke': {
+      id: '/api/connectors/revoke'
+      path: '/api/connectors/revoke'
+      fullPath: '/api/connectors/revoke'
+      preLoaderRoute: typeof ApiConnectorsRevokeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/device/claim': {
@@ -372,6 +432,9 @@ const rootRouteChildren: RootRouteChildren = {
   SignupRoute: SignupRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiConnectorsConnectRoute: ApiConnectorsConnectRoute,
+  ApiConnectorsListRoute: ApiConnectorsListRoute,
+  ApiConnectorsRevokeRoute: ApiConnectorsRevokeRoute,
   ApiDeviceClaimRoute: ApiDeviceClaimRoute,
   ApiDeviceHeartbeatRoute: ApiDeviceHeartbeatRoute,
   ApiDeviceListRoute: ApiDeviceListRoute,

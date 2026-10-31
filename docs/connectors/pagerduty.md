@@ -2,132 +2,250 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design only — no connector code exists in this repository** |
-| Design reference | [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.2 (P2 alternative) |
-| Trigger | PagerDuty v3 webhook (`incident.triggered`) |
-| Context | Incident metadata, bounded timeline, service |
-| Writes | None in scope (ack/resolve/escalate are a later, approval-gated wave) |
+| Status | **Design-only — no code in this repo** |
+| Module | `packages/integrations/src/pagerduty/` (proposed; does not exist) |
+| Free tier verified | 2026-10-31 — free plan still exists, 5 users |
+| Auth | Account API key, read-only, `Authorization: Token token=<key>` [S2] |
+| Inbound | V3 webhook, `X-PagerDuty-Signature: v1=<hex>` [S4] |
+| Read | Incident, bounded log entries, service, escalation policy name [S9–S14] |
+| Writes | Not in scope; ack/resolve/snooze designed as approval-gated [S11][S12] |
 
-Nothing below is implemented.
+Nothing below is implemented. `pagerduty` is already a value in
+`INCIDENT_SOURCES` (`packages/shared/src/types/incident.ts`), but there is no
+verifier, normalizer, reader or route mode. The existing receiver selects only
+`github` or `generic`; a PagerDuty delivery would be parsed as generic and
+rejected.
 
 ## 1. Role in the agent
 
-PagerDuty is the system of record for **human-declared** incidents and on-call escalation. It supplies lifecycle and severity, not code location: an incident names a service and a title, and the agent must join that service to a repository and then get code context from GitHub (and metrics from Grafana or Datadog).
+PagerDuty is the system of record for human-declared incidents and escalation.
+It answers "who is paged, how severe, and what changed" — not "where is the
+defect"; pair it with GitHub and Sentry. The trigger is the primary value, the
+reader is supporting evidence.
 
-Choose PagerDuty when it is what actually pages humans and Sentry is absent; choose Sentry when the trigger is an error group with a stack trace (survey §5.3).
+**Kinds and policy.** `incident.triggered` creates a task. `resolved` and
+`acknowledged` update an existing incident and never create a second one;
+`escalated`, `reassigned` and `priority_updated` are lifecycle changes;
+`service.updated` is ignored.
 
-## 2. Auth model
+**Severity mapping.** PagerDuty has both `urgency` (`high`/`low`) and an
+optional `priority` object.
 
-| Item | Design |
+| Signal | `IncidentSeverity` |
 |---|---|
-| Header | `Authorization: Token token=<API_KEY>` on REST API v2 [S25] |
-| Key type | **Read-only account API key** [S25] |
-| Avoid | User API keys (act as the user and need Advanced Permissions); full-access account keys [S25] |
-| Alternative | Private App with scoped OAuth (app and/or user token); verified read scopes are `incidents.read` and `services.read` [S26] |
-| Storage | Server-only, encrypted at rest, one credential per `(organization, connector)` |
+| `priority.name` P1 or `urgency=high` | `critical` |
+| `priority.name` P2 | `high` |
+| `priority.name` P3 or `urgency=low` | `medium` |
+| P4 / P5 | `low` |
+| no priority, no urgency | `medium` |
 
-## 3. Minimal scopes
+The final mapping is an open question; the trigger policy must reject anything
+below the configured floor. `evaluateIncidentTrigger` is GitHub-shaped and
+cannot be reused unchanged.
 
-| Scope | Needed for |
+**Fingerprint.** `pagerduty:<service-id>:<incident-id>`; `X-Webhook-Id` and
+`event.id` are traceability only. **Evidence added:** title, status, urgency,
+priority, service name/id, timestamps and bounded lifecycle log entries.
+
+## 2. Free tier and quotas
+
+| Limit | Free plan | Notes |
+|---|---|---|
+| Price | $0 per year | "A single team trying on-call and incident response" [S1] |
+| Users | 5 | Hard seat limit [S1] |
+| On-call schedules | 1 | [S1] |
+| Escalation policies | 1 | Confirmed by product docs [S14] |
+| Notifications | 100 SMS/phone per month | Chat, email and push are basic [S1] |
+| Status pages / AIOps | Not included | No status page; no advanced analytics [S1] |
+| API access | Included | REST API v2 is usable on the free plan [S1] |
+| Retention | Not stated | **UNVERIFIED**; audit records are 12 months, incident history is not documented [S16] |
+| Trial | Paid plans are available for evaluation | No separate free trial length extracted — **UNVERIFIED** |
+
+The free plan fits a one-service pilot; a real rotation needs a paid tier, and
+the single escalation policy is a hard design limit. REST API limit is 960
+requests/minute per key [S7]; a five-call bundle is far below it. The real risk
+is a flapping monitor, already bounded by fingerprint dedupe and the two-active-
+task cap.
+
+## 3. Auth and least privilege
+
+| Item | Value |
 |---|---|
-| `incidents.read` | Incident metadata and timeline [S26] |
-| `services.read` | Service metadata used to map to a repository [S26] |
+| Header | `Authorization: Token token=<API_KEY>` [S2] |
+| Key type | Account API key, **read-only** [S2] |
+| Avoid | User API keys (act as the user, need Advanced Permissions) and full-access account keys [S2] |
+| Scoped alternative | Private App with scoped OAuth; read scopes below [S3][S15] |
+| Storage | Server-only, encrypted at rest, keyed by `(organization, connector)` |
+| Rotation | One active key; create the replacement, deploy, verify one read, revoke the old key |
 
-Write scopes (acknowledge, resolve, note) were not extracted from the official reference — **UNVERIFIED**. A write credential must be separate from the read credential when that work starts.
+| Scope | Needed for | Source |
+|---|---|---|
+| `incidents.read` | Incidents and incident log entries | [S10][S15] |
+| `services.read` | Service metadata and service-to-repository mapping | [S15] |
+| `oncalls.read` | On-call lookup (not fetched by default; responder data is PII) | [S15] |
+| `escalation_policies.read` | Policy name/id context only | [S15] |
+| `schedules.read` | Optional; schedule names only | [S15] |
+| `incidents.write` | Ack/resolve/snooze — **separate credential, later wave** | [S11][S12] |
 
-## 4. Inbound webhook
+A read-only account key cannot write by construction. Writes need a separate
+token with `incidents.write` plus a `From` header naming a valid user; store
+that address server-side, never in a prompt.
+
+## 4. Inbound trigger
 
 | Property | Value |
 |---|---|
-| Signature header | `X-PagerDuty-Signature: v1=<hex>` [S27] |
-| Algorithm | HMAC-SHA256 over the payload body **only** [S27] |
-| Rotation | Multiple `v1=` signatures may be present; accept any that matches an active secret [S27] |
-| Signed timestamp | **None** |
-| Dedupe key | `X-Webhook-Id`, unique per webhook request [S28] |
-| Staleness | No signed timestamp; compare the event's creation time to receipt time and reject stale events |
-| Retries | Up to 48 hours; delivery is dropped after 3 consecutive failures over 24 hours; response timeout 5 s (16 s for custom actions); events are delivered in generation order [S28] |
+| Proposed endpoint | `POST /api/webhooks/pagerduty` |
+| Signature header | `X-PagerDuty-Signature: v1=<hex>` [S4] |
+| Algorithm and signed string | HMAC-SHA256 over the exact raw request body bytes; the body only, no timestamp [S4] |
+| Rotation | The header may contain several comma-separated `v1=` values; accept any that matches an active secret [S4] |
+| Signed timestamp | **No**; `event.occurred_at` is unsigned payload data |
+| Replay window | None vendor-side; enforce a ±300 s freshness check on `event.occurred_at` and reject stale events |
+| Dedupe key | Source fingerprint; `X-Webhook-Id` is the documented idempotency header and is traceability only [S5] |
+| Body cap | 64 KiB platform cap; PagerDuty guarantees 55 KB and drops above 256 KB [S5] |
+| Retries | Up to 48 hours; 5 s response timeout; subscription disabled after 3 consecutive dropped deliveries; order preserved [S5] |
 
-Event types: `incident.triggered`, `incident.acknowledged`, `incident.resolved` [S29]. Payload carries `event.id`, `event.event_type`, `incident.id`, `incident.title`, `incident.urgency`, `incident.service` [S29].
+Because the signature covers the body only, a captured delivery can be replayed
+unless the receiver rejects stale `occurred_at`; the signature proves authorship,
+not freshness. Event types: `incident.triggered`, `incident.resolved`,
+`incident.acknowledged`, `incident.escalated`, `incident.reassigned`,
+`incident.priority_updated`, `service.updated` [S6]. Payload fields include
+`event.id`, `event.event_type`, `event.occurred_at`, `incident.id`,
+`incident.title`, `incident.urgency`, `incident.priority`, `incident.service`,
+`incident.html_url` [S6]. Verification is constant-time and fail closed; an
+accepted delivery returns `202` before any model or provider fetch.
 
-Policy: only `incident.triggered` creates a task by default; acknowledged/resolved update an existing incident rather than opening a second one. Acknowledge/resolve are not task triggers — a human action is not new evidence.
+## 5. Read-only context
 
-Because there is no signed timestamp, the receiver must use `X-Webhook-Id` plus a source-stable fingerprint (`pagerduty:<service>:<incident id>`) and never treat an old delivery as fresh.
+Base host: `https://api.pagerduty.com`. The plan is fixed in code; the model
+cannot author a query.
 
-## 5. Read endpoints for a ContextBundle
+| # | Need | Endpoint | Params and notes |
+|---|---|---|---|
+| 1 | Incident | `GET /incidents/{id}` | `include[]=services,priorities`; allowlist `id`, `incident_number`, `title`, `status`, `urgency`, `priority`, `service`, `created_at`, `html_url` [S9] |
+| 2 | Log entries | `GET /incidents/{id}/log_entries` | `limit`, `offset`, `since`, `until`, `is_overview`; scope `incidents.read`; first and last page only [S10] |
+| 3 | Service | `GET /services/{id}` | `id`, `name`, `html_url`, `escalation_policy`; used to resolve the repository [S13] |
+| 4 | Escalation policy | `GET /escalation_policies/{id}` | `id`, `name` only; never responders or schedules [S14] |
 
-Base host: `https://api.pagerduty.com`. Endpoints below are quoted from the survey; several exact paths could not be extracted from the JS-rendered API reference.
+Never call `/incidents/{id}/alerts`, `/notes`, `include[]=channels` or
+`first_trigger_log_entries`: alert payloads and notes are free text with
+monitoring labels, URLs and customer identifiers, and the last two recover the
+original alert. A future note excerpt needs its own approval.
 
-| Need | Endpoint | Notes |
+Caps: at most 4 calls, one page each, 10 s timeout, 256 KiB response cap. The
+bundle obeys 100 items / 4,000 chars / 256 KiB; the timeline is 25 entries,
+each a one-line action + actor role (no names), and the excerpt 2,000 chars.
+Pagination: `limit` default 25, max 100; `offset` + `limit` <= 10,000; `more`
+flag [S8]. The reader stops at page one.
+
+## 6. Framework fit
+
+| Item | Proposal |
+|---|---|
+| Module | `packages/integrations/src/pagerduty/{auth,webhook,incidents,context,redact}.ts` |
+| Source enum | `pagerduty` already exists; no contract change for the enum |
+| Contract change required first | New vendor route mode + a PagerDuty trigger rule; both are shared transport changes |
+| Inbound | `verifyPagerDutyWebhook(rawBody, headers, secrets[])` → closed reason union; accepts multiple `v1=` values |
+| Normalize | `normalizePagerDutyIncident(payload)` → strict `IncidentSignal`; triggered only |
+| Reader | `fetchPagerDutyIncidentContext(deps, input)` → `ContextBundle` |
+
+**Agent tools** (server-side only):
+
+| Tool | Risk band | Notes |
 |---|---|---|
-| Incident metadata | `GET /incidents/{id}` (id or number) | `include[]=channels` can recover the trigger payload via `first_trigger_log_entry`; allowlist fields, never take the whole payload [S31] |
-| Timeline | `GET /incidents/{id}/log_entries` | First/last N entries only; redact free text [S31] |
-| Alerts | `GET /incidents/{id}/alerts` | Mentioned in navigation only — **UNVERIFIED** |
-| Notes | `GET /incidents/{id}/notes` | Mentioned in navigation only — **UNVERIFIED** |
-| Polling fallback | Incidents list endpoint | Exact list path not extractable — **UNVERIFIED** |
-| Service metadata | `GET /services/{id}` with `services.read` | Exact path not extracted — **UNVERIFIED** |
-| Deploy history / metrics / checks | Not PagerDuty's role | Use GitHub / Grafana / Datadog |
-| Runbook | No standard field | Look for a runbook URL in incident notes/alert details; otherwise the repository runbook by service name |
+| `pagerduty.fetch_incident_context` | `read_only` | Fixed call plan; audited |
+| `pagerduty.acknowledge_incident` | `sensitive` | Approval bound to `{incidentId, action}` |
+| `pagerduty.resolve_incident` | `sensitive` | Resolution is an incident-owner decision, never a test outcome |
+| `pagerduty.snooze_incident` | `sensitive` | Approval bound to `{incidentId, durationSeconds}` |
 
-Planned sequence: incident (2 calls at most), then service metadata only if the service name is ambiguous. No timeline pagination beyond one page of 25.
+Write API: `PUT /incidents` with a one-element `incidents` array (`status`) or
+`POST /incidents/{id}/snooze` (`duration` 1-604800); needs `incidents.write` and `From` [S11][S12].
 
-## 6. Rate limits, pagination, retention
+Under `createRiskTablePolicy`, `sensitive` returns `APPROVAL_REQUIRED` and the
+worker pauses for a persisted approval; there is no auto-ack or auto-resolve.
+If these were ever classified `scoped_write` they would execute without a
+second approval, which is unacceptable for paging state.
 
-| Constraint | Value | Handling |
-|---|---|---|
-| API limit | 960 requests/minute per account API key and per user [S30] | Per-connector token bucket; an incident bundle uses at most 3 calls |
-| Over limit | `429`; the documented reset header is `ratelimit-reset` (the page does not document `Retry-After`) [S30] | Wait until reset; no retry storm |
-| Pagination | `limit`/`offset` with a `more` flag; exact defaults not extracted — **UNVERIFIED** | Cap at one page of 25 |
-| Retention | Incident/history retention is plan-dependent and not stated on the retrieved pages — **UNVERIFIED** | Do not build a historical corpus |
+**Sandbox implications.** Tools run in the worker, not the Modal sandbox. The
+sandbox has egress denied and never sees `PAGERDUTY_API_KEY`,
+`PAGERDUTY_WEBHOOK_SECRET` or the `From` address. Results are bounded and
+redacted; every call appends `audit_events` with `tool.execute`, risk, outcome
+and target id — never the token, note body or responder data.
 
-## 7. What must never enter model context
+**Tests.** Fake fetch only: multi-signature rotation, tampered body, stale
+`occurred_at`, triggered vs resolved, severity table, responder fields absent,
+cap/truncated, `429`, foreign `NOT_FOUND`, approval payload mismatch.
 
-- Responder PII: names, emails, phone numbers, notification targets, on-call schedules.
-- Full alert payloads; they can carry monitoring labels, URLs with tokens and customer identifiers.
-- Raw log entries or arbitrary note bodies; only a redacted excerpt.
-- API keys, OAuth tokens, webhook signing secrets.
-- Full escalation policies; not needed to fix code.
+## 7. Operator setup checklist
 
-## 8. Data retention notes
+1. Decide whether PagerDuty owns the trigger or mirrors Sentry/GitHub.
+2. Confirm the plan. The free plan allows 5 users, one schedule and one
+   escalation policy; verify that is enough for the pilot.
+3. Create a read-only account API key (or a Private App with the read scopes in
+   §3). Record the account subdomain and API base.
+4. Add a v3 webhook pointed at `https://<host>/api/webhooks/pagerduty`;
+   subscribe to the incident events in §4. Copy the signing secret once.
+   Enable only after the shared route mode ships.
+5. Map each in-scope PagerDuty service id to one repository binding. The
+   service name is not unique; bind by id.
+6. Decide the severity floor and which services may create tasks.
+7. For writes, create a second credential and a `From` user; do not enable
+   until offline tests and one approval-bound acceptance pass.
+8. Rotate by adding a second secret, accepting both `v1=` values, then removing
+   the old one.
 
-- Vendor retention is plan-dependent and undocumented on the pages retrieved — **UNVERIFIED**; assume incident history may disappear or change.
-- Store only a bounded, redacted excerpt plus a hash; TTL 30 days in the survey design.
-- On-call and responder data is personal data: do not store it at all, not even redacted.
-- Deletion by organization and a DSAR path are requirements for stored excerpts.
-- Region/residency depends on the PagerDuty plan and the inference provider; see open questions.
+```dotenv
+PAGERDUTY_API_KEY=
+PAGERDUTY_BASE_URL=
+PAGERDUTY_WEBHOOK_SECRET=
+PAGERDUTY_FROM_EMAIL=
+```
 
-## 9. Phased implementation checklist
+## 8. Acceptance checklist
 
-1. **Decide** whether PagerDuty or Sentry owns the trigger; confirm the account plan and read-only key.
-2. **Contract**: map `incident.triggered` to `IncidentSignal` with severity from urgency (`high` → `critical`/`high`, `low` → `medium`; final mapping is an open question). Service = PagerDuty service name; this is the key used to resolve the repository.
-3. **Transport**: `verifyPagerDutyWebhook` accepting one or more `v1=` signatures, HMAC over raw body, 64 KiB cap, constant-time compare; dedupe by `X-Webhook-Id` and fingerprint; no freshness claim beyond event time.
-4. **Reader**: fixed ≤3-call plan (incident, optional timeline, optional service), allowlisted fields, redaction of free text.
-5. **Tests**: fake fetch; multi-signature rotation case; stale event; `429`; foreign-tenant read returns `NOT_FOUND`.
-6. **Offline gates** twice with providers disabled; no keys.
-7. **Live acceptance** only with explicit authorization: one signed fixture or one read of a named incident, bounded, no retries, spend recorded.
-8. **Writes** (ack/resolve/note) are a separate wave with their own credential and approval payload.
+Offline, providers disabled:
 
-## 10. Open questions for the user
+- [ ] `verifyPagerDutyWebhook` accepts either of two active signatures during
+      rotation; rejects tampered bodies, missing headers and oversize bodies.
+- [ ] `normalizePagerDutyIncident` creates only on `incident.triggered`;
+      resolved/acknowledged update and never duplicate.
+- [ ] Reader caps at 4 calls / 25 log entries / 2,000 chars, redacts actor
+      names and free text, sets `truncated`; writes resolve `APPROVAL_REQUIRED`
+      with a payload hash bound to the incident id and action.
+- [ ] Foreign-tenant read returns `NOT_FOUND`; `429` fails closed.
 
-1. Which PagerDuty plan, and is a read-only account API key or a scoped OAuth app allowed?
-2. Is PagerDuty the authoritative trigger, or only a lifecycle mirror of a Sentry/GitHub incident?
-3. How is urgency mapped to severity, and does `low` urgency ever create a task?
-4. Which services are in scope, and where does the service → repository mapping live?
-5. Should acknowledged/resolved events update a task, and who owns that state transition?
-6. Are responder names and on-call data ever needed, or always excluded?
-7. May redacted incident text leave the region to the inference provider?
-8. Is any write (acknowledge, resolve, note) ever allowed, and who approves it?
+One bounded live read after explicit authorization: one named incident, one
+log-entry page, one service. No retries. PagerDuty is not credit-funded.
 
-## 11. Sources
+## 9. Risks / never in model context
 
-All accessed 2026-10-30; copied from [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §9.
+- Responder PII: names, emails, phone numbers, notification targets, on-call
+  schedules and escalation-policy membership.
+- Full alert payloads: monitoring labels, dashboard URLs with tokens, customer
+  identifiers; raw log-entry bodies and arbitrary note text.
+- API keys, OAuth tokens, webhook signing secrets and the `From` address.
+- Escalation policy structure beyond id and name. Free-text titles can carry
+  customer names; they pass the shared redactor and 200-character cap.
+
+## 10. Sources
+
+All accessed 2026-10-31.
 
 | ID | Source |
 |---|---|
-| S25 | [Authentication](https://docs.pagerduty.com/developer/authentication) |
-| S26 | [Private Apps / scoped OAuth](https://docs.pagerduty.com/developer/private-apps) |
-| S27 | [Verifying webhook signatures](https://docs.pagerduty.com/developer/verifying-webhook-signatures) |
-| S28 | [Webhook behavior](https://docs.pagerduty.com/developer/webhook-behavior) |
-| S29 | [Webhooks overview](https://docs.pagerduty.com/developer/webhooks-overview) |
-| S30 | [REST API rate limits](https://docs.pagerduty.com/developer/rest-api-rate-limits) |
-| S31 | [Retrieving incident details](https://docs.pagerduty.com/developer/retrieve-incident-details) |
-| S32 | [REST API reference](https://docs.pagerduty.com/developer/api/reference/rest) |
+| S1 | [Plans and pricing](https://www.pagerduty.com/pricing/) |
+| S2 | [Authentication](https://docs.pagerduty.com/developer/authentication) |
+| S3 | [Private Apps / scoped OAuth](https://docs.pagerduty.com/developer/private-apps) |
+| S4 | [Verifying webhook signatures](https://docs.pagerduty.com/developer/verifying-webhook-signatures) |
+| S5 | [Webhook behavior](https://docs.pagerduty.com/developer/webhook-behavior) |
+| S6 | [Webhooks overview](https://docs.pagerduty.com/developer/webhooks-overview) |
+| S7 | [REST API rate limits](https://docs.pagerduty.com/developer/rest-api-rate-limits) |
+| S8 | [Pagination](https://docs.pagerduty.com/developer/pagination) |
+| S9 | [Get an incident](https://docs.pagerduty.com/developer/api/reference/rest/incidents/get-incident) |
+| S10 | [List log entries for an incident](https://docs.pagerduty.com/developer/api/reference/rest/incidents/list-incident-log-entries) |
+| S11 | [Manage incidents](https://docs.pagerduty.com/developer/api/reference/rest/incidents/update-incidents) |
+| S12 | [Snooze an incident](https://docs.pagerduty.com/developer/api/reference/rest/incidents/create-incident-snooze) |
+| S13 | [Get a service](https://docs.pagerduty.com/developer/api/reference/rest/services/get-service) |
+| S14 | [Escalation policy basics](https://docs.pagerduty.com/incident-management/schedules/escalation-policies) |
+| S15 | [Backstage integration guide (scope list)](https://docs.pagerduty.com/integrations/backstage-integration-guide) |
+| S16 | [Audit Records API](https://docs.pagerduty.com/developer/audit-records-api) |

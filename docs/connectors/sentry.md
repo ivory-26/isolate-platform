@@ -2,135 +2,248 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design only — no connector code exists in this repository** |
-| Design reference | [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.3 (P2 default incident source) |
-| Trigger | Sentry integration-platform webhook |
-| Context | Issue, latest event, bounded stack trace, release |
+| Status | **Design-only — no code in this repo** |
+| Module | `packages/integrations/src/sentry/` (proposed; does not exist) |
+| Free tier verified | 2026-10-31 — Developer plan, free forever |
+| Auth | Organization auth token, `Authorization: Bearer <token>` [S4] |
+| Inbound | Integration-platform webhook, `Sentry-Hook-Signature` [S6] |
+| Read | Issue, latest event and bounded stack trace, release, deploys [S8–S15] |
 | Writes | None in scope |
 
-Nothing below is implemented. It is the build plan and the verified vendor facts needed to implement it without guessing.
+Nothing below is implemented. `sentry` is already a value in `INCIDENT_SOURCES`
+(`packages/shared/src/types/incident.ts`), but there is no verifier, normalizer,
+reader or route mode for it. Today `detectIncidentIntakeMode` returns only
+`generic` or `github`, so a Sentry delivery would be parsed as a generic signal
+and rejected by the strict schema.
 
 ## 1. Role in the agent
 
-Sentry supplies the missing "where is the defect" half of an incident: an issue ties a stack trace and a release to a project, which is the input a code-fix loop needs. PagerDuty tells you a human is paged; Sentry tells you which frame threw.
+Sentry supplies the "where is the defect" half of an incident: an issue ties a
+stack trace and a release to a project, the latest event supplies the failing
+frame, and deploys correlate the error with a change. That is the input a
+code-fix loop needs (`docs/devsecops-connectors.md` §5.3). Use Sentry when the
+authoritative signal is an error group; use PagerDuty when it is a human-declared
+incident. The trigger is the primary value; the reader is the second.
 
-Default use: `issue` webhook creates one task for a new or regressed error group; the context reader then fetches the issue, one representative event and the release. If PagerDuty is the system that actually pages humans and Sentry is absent, swap the two (survey §5.3).
+**Kinds and policy.** Only `issue` webhooks with action `created` or
+`unresolved` may create a task. `resolved`, `assigned` and `archived` are
+lifecycle updates, not new evidence. A regression is a new `unresolved` event
+for an existing issue id and is deduplicated by fingerprint, not by delivery.
 
-## 2. Auth model
+**Severity mapping.** Sentry `level` is not a business severity.
 
-| Item | Design |
+| Sentry level | `IncidentSeverity` |
 |---|---|
-| Header | `Authorization: Bearer <TOKEN>` [S33] |
-| Token type | **Organization token** bound to the tenant's projects; avoid a personal user token for a service integration [S33] |
-| Storage | Server-only connector credential, encrypted at rest, keyed by `(organization_id, connector_id)`; resolved by a broker, never by the model |
-| Rotation | One active token per organization; rotate by creating a second org token, deploying it, then revoking the first |
+| `fatal` | `critical` |
+| `error` | `high` |
+| `warning` | `medium` |
+| `info` | `low` |
+| `debug` | `info` |
 
-## 3. Minimal scopes
+The platform trigger policy is GitHub-shaped (`evaluateIncidentTrigger`). It
+must gain a Sentry rule: an `environment=production` issue at `high` or above is
+accepted; feature-preview environments never create a task.
 
-| Scope | Needed for | Notes |
+**Fingerprint.** `sentry:<org-slug>:<project-id>:<issue-id>`, bounded to 128
+chars; delivery and event ids are traceability only. **Evidence added:** issue
+metadata, one event with a bounded stack trace, release and newest deploy.
+
+## 2. Free tier and quotas
+
+| Limit | Free Developer | Notes |
 |---|---|---|
-| `event:read` | Issues and events | Primary read scope [S34] |
-| `project:read` | Project metadata | [S34] |
-| `org:read` | Organization metadata | [S34] |
-| `member:read` | Assignee resolution only | Optional; not needed for a context bundle [S34] |
+| Price | $0 | Free forever [S1] |
+| Users | 1 | Organization token still usable by that owner [S1] |
+| Projects | Unlimited | [S1] |
+| Errors | 5,000 per month | Event-based; billed monthly [S1] |
+| Logs and application metrics | 5 GB each per month | [S1] |
+| Spans | 5 million per month | [S1] |
+| Replays | 50 per month | [S1] |
+| Uptime / cron monitors | 1 each | [S1] |
+| Retention | 30 days | Fixed at ingestion by the current plan [S3] |
+| Trial | 14 days of Business | New accounts, no card [S2] |
+| Overage | Not stated | **UNVERIFIED**; assume events beyond quota are dropped until reset |
 
-Release/deploy lookup may need an additional release permission; the exact scope string was not extracted — **UNVERIFIED**. Do not request write scopes (`event:write`, `project:write`, `member:write`) for this connector.
+The 30-day retention is the hard constraint: never build a historical corpus
+or promise evidence older than 30 days. Rate limits apply per unique caller and
+endpoint, with a requests-per-second window and a concurrency limit; no numeric
+ceiling is published [S16]. Treat `429` as a degraded bundle, never a retry loop.
 
-## 4. Inbound webhook
+## 3. Auth and least privilege
+
+| Item | Value |
+|---|---|
+| Token type | Organization auth token, bound to one organization [S4][S20] |
+| Header | `Authorization: Bearer <token>` [S4] |
+| Lifetime | No expiry documented for organization tokens; OAuth access tokens expire after 30 days [S4] |
+| Creation | Organization settings; only owners/managers can revoke [S20] |
+| Storage | Server-only, encrypted at rest, keyed by `(organization, connector)` |
+
+| Scope | Needed for | Source |
+|---|---|---|
+| `event:read` | Issues, events, stack traces | [S5] |
+| `project:read` | Project metadata used for the service name | [S5] |
+| `org:read` | Organization metadata and release lookup | [S5] |
+| `project:releases` | Releases and deploys | [S5] |
+| `member:read` | Optional; assignee display only | [S5] — omit by default because it exposes personal data |
+
+Never request `event:write`, `project:write`, `project:admin`, `org:admin` or
+`member:admin`. Rotation: create a second organization token with the same four
+read scopes, deploy, verify one read, then revoke the first. Organization tokens
+cannot be edited after creation, so a scope change is a new token [S20].
+
+## 4. Inbound trigger
 
 | Property | Value |
 |---|---|
-| Signature header | `Sentry-Hook-Signature` [S35] |
-| Algorithm | HMAC-SHA256 over the exact request body bytes [S35] |
-| Timestamp header | `Sentry-Hook-Timestamp` is sent [S35] |
-| Resource header | `Sentry-Hook-Resource` identifies the object type [S35] |
-| Replay window | Not documented by Sentry; enforce our own 5-minute window on `Sentry-Hook-Timestamp` and dedupe by resource + issue/event id — **UNVERIFIED** vendor behavior |
-| Retries | Not documented — **UNVERIFIED**; reconcile by polling issue state rather than assuming delivery |
+| Proposed endpoint | `POST /api/webhooks/sentry` |
+| Signature header | `Sentry-Hook-Signature` [S6] |
+| Algorithm and signed string | HMAC-SHA256 hex digest over the exact raw request body bytes, keyed by the integration Client Secret [S6] |
+| Timestamp | `Sentry-Hook-Timestamp` is sent but **not covered by the signature** [S6] |
+| Resource header | `Sentry-Hook-Resource` (`issue`, `event_alert`, `metric_alert`, …) [S6] |
+| Replay window | Enforce our own ±300 s window on `Sentry-Hook-Timestamp`; vendor behavior is not documented |
+| Retries | No retry documentation; response timeout is 1 second [S6] |
+| Dedupe key | `(organization, sentry, fingerprint)` for 30 minutes; delivery id is traceability only |
+| Body cap | 64 KiB platform cap; oversized deliveries are `413` |
+| Accepted actions | `created`, `unresolved` (payload actions: created, resolved, assigned, archived, unresolved) [S7] |
 
-Planned mapping: only a new or regressed issue creates a task; resolution and assignment update an existing task. The fingerprint must be source-stable (organization + project + issue id), not the delivery id. Confirm the exact webhook payload field names against the installed integration before coding; the survey did not extract them.
+The receiver must select this verifier from headers, never the body. The
+existing route chooses `github` when `x-github-event` is present and `generic`
+otherwise; adding Sentry requires a new mode (for example
+`Sentry-Hook-Resource` present) in the same commit as the verifier. A Sentry
+request must never fall through to the generic verifier and its secret.
 
-Transport rules (signature over raw bytes, 64 KiB body cap, constant-time compare, 202 before any model work, no payload echo) are shared with the implemented receiver — see [README.md](README.md) §3.
+Because the timestamp is not signed, a captured body can be replayed; the
+±300 s window bounds that, and the 30-minute fingerprint dedupe prevents a
+second task. A stale delivery is `202 {accepted:false}`. No response, log line
+or error may echo the body, signature, secret or provider text; accepted
+deliveries return `202` before any model or provider fetch.
 
-## 5. Read endpoints for a ContextBundle
+## 5. Read-only context
 
-Base host: `https://sentry.io` or the organization's region host. All paths below are from the official API reference as extracted in the survey.
+Base host is the organization's region host (`https://sentry.io` for US,
+`https://de.sentry.io` for EU). The plan is fixed in trusted code.
 
-| Need | Endpoint | Fields / notes |
+| # | Need | Endpoint | Fields and params |
+|---|---|---|---|
+| 1 | Issue metadata | `GET /api/0/organizations/{org}/issues/{issue_id}/` | `title`, `culprit`, `level`, `status`, `firstSeen`, `lastSeen`, `count`, `shortId`, `project`, `metadata`; `environment` [S8] |
+| 2 | Latest event | `GET /api/0/organizations/{org}/issues/{issue_id}/events/latest/` (or `events/{event_id}` with `latest`) | `eventID`, `message`, `culprit`, `tags` (allowlisted), `stacktrace.frames` [S10] |
+| 3 | Release | `GET /api/0/organizations/{org}/releases/{version}/` | `version`, `dateCreated`, `dateReleased`, `projects`, `lastEvent` [S13] |
+| 4 | Deploys | `GET /api/0/organizations/{org}/releases/{version}/deploys/` | `environment`, `dateStarted`, `dateFinished`, `name`, `url`; `cursor` [S14] |
+
+Fallback: `GET /api/0/projects/{org}/{project}/events/{event_id}/` when the
+issue is not the entry point [S11]. Caps: at most 4 calls, one page each, 10 s
+timeout, 256 KiB response cap. The bundle obeys 100 items / 4,000 chars per
+excerpt / 256 KiB total. The stack trace is cut to 3,000 chars after redaction,
+keeping the error message and the application frames nearest the throw. Never
+fetch full event JSON, attachments, breadcrumbs, request data or spans.
+Pagination is cursor-based via `Link`, at most two pages [S19]. `429`/`401`/
+transport fail the bundle; `404`/`403` on an optional resource sets
+`truncated: true` and keeps the rest.
+
+## 6. Framework fit
+
+| Item | Proposal |
+|---|---|
+| Module | `packages/integrations/src/sentry/{auth,webhook,incidents,context,redact}.ts` |
+| Source enum | `sentry` already exists in `INCIDENT_SOURCES`; no contract change for the enum |
+| Contract change required first | Add a vendor mode to `detectIncidentIntakeMode` and a Sentry trigger rule; both are shared transport changes, not adapter-local |
+| Inbound | `verifySentryWebhook(rawBody, headers, secret)` → closed reason union |
+| Normalize | `normalizeSentryIncident(payload)` → strict `IncidentSignal` |
+| Reader | `fetchSentryIncidentContext(deps, input)` → `ContextBundle` |
+
+**Agent tools** (registered server-side, never in the sandbox):
+
+| Tool | Risk band | Notes |
 |---|---|---|
-| Issue metadata | `GET /api/0/organizations/{org}/issues/{issue_id}/` | `title`, `culprit`, `firstSeen`, `lastSeen`, `count`, `metadata`, `assignedTo`, `status` [S36] |
-| Issue events | `GET /api/0/organizations/{org}/issues/{issue_id}/events/` | `full=false`; `sample=true` only for one representative event [S37] |
-| One event for an issue | `GET /api/0/organizations/{org}/issues/{issue_id}/events/{event_id}/` | Bounded stack trace; an `llmFormat` parameter exists but is not required [S38] |
-| One event for a project | `GET /api/0/projects/{org}/{project}/events/{event_id}/` | Use when the issue is not the entry point [S39] |
-| Releases | `GET /api/0/organizations/{org}/releases/` | `version`, `dateCreated`, `dateReleased`, `projects`, `lastEvent` [S40] |
-| Deploy records | Release deploys endpoint | Exact read path not extracted — **UNVERIFIED** |
-| Failing checks / metrics | Not Sentry's role | Use GitHub / Grafana / Datadog |
-| Runbook | No standard field | Use a `runbook` tag or metadata if the org sets one; otherwise the repository runbook by service |
+| `sentry.fetch_issue_context` | `read_only` | Fixed query plan; audited |
+| `sentry.resolve_issue` | `sensitive` | Out of scope; would require approval bound to `{issueId, action}` |
 
-Planned request sequence (fixed in code, not model-authored): issue → one event (`full=false`) → release by version. Cap at 4 calls, one page each, 2,000-character excerpt for the event and 1,500 for metadata.
+Under `createRiskTablePolicy`, `read_only` proceeds and is audited; `sensitive`
+returns `APPROVAL_REQUIRED`. No Sentry tool may resolve an issue because a
+validation command passed.
 
-## 6. Rate limits, pagination, retention
+**Sandbox implications.** Tools execute in the worker, not the Modal sandbox.
+The sandbox keeps egress denied and never sees `SENTRY_API_KEY`,
+`SENTRY_WEBHOOK_SECRET` or an `Authorization` header. Results are bounded,
+redacted and typed. Every call appends `audit_events` with `tool.execute`, the
+tool name, risk, outcome and bounded target ids; never the token or provider
+text.
 
-| Constraint | Value | Handling |
-|---|---|---|
-| Rate limit | Applied per unique caller + endpoint; no single global number published [S42] | Per-connector token bucket; bounded calls; back off on `429` |
-| `429` headers | `X-Sentry-Rate-Limit` / `Retry-After` are commonly returned but were not enumerated on the retrieved page — **UNVERIFIED** | Read `Retry-After` when present; one retry, then degrade |
-| Pagination | Cursor-based `Link` header, cursor `id:offset:is_prev`, 100 events per page [S41] | At most 2 pages; stop at the item cap |
-| Event retention | Developer 30 days; Team 90 days; Business/Enterprise 90 days; fixed at ingestion by plan [S43] | Prefer the latest event; never build a historical corpus |
+**Tests.** Fake fetch and fixtures only: valid/tampered HMAC, missing
+timestamp, unknown resource, `created` vs `resolved`, severity and fingerprint
+tables, redaction seeds, cap/`truncated`, `429`/timeout, foreign `NOT_FOUND`.
 
-## 7. What must never enter model context
+## 7. Operator setup checklist
 
-- Full event JSON. Sentry events can contain request headers, cookies, query strings, user context, breadcrumbs, stack locals, transaction names, HTTP spans and attributes [S44].
-- PII in tags or user context: email, IP address, user id, names, session ids.
-- Attachment contents.
-- Auth tokens, DSNs (a DSN can ingest events), source-map credentials, organization/project keys.
-- Full issue comment threads and raw event payloads; only allowlisted fields and a bounded stack trace.
+1. Choose the Sentry organization; confirm region (US or EU) and the plan.
+2. Create one organization auth token with `event:read`, `project:read`,
+   `org:read` and `project:releases`; omit `member:read`.
+3. Create an internal integration with an issue webhook at
+   `https://<host>/api/webhooks/sentry`; subscribe to `issue` only; copy the
+   Client Secret once.
+4. Record the org slug, project slug and region host; the signal service is the
+   project slug, so the repository binding must map it.
+5. Ship the shared Sentry mode and trigger policy first, then verify one test
+   delivery creates one signal row, one task and a context section. Rotate by
+   replacing the token and revoking the old one.
 
-Structural redaction planned before truncation: drop `request.headers`, `request.cookies`, `request.query_string`, `user`, `breadcrumbs[].data`, span attributes, and any field outside the allowlist. Count redactions per item.
+```dotenv
+SENTRY_API_KEY=
+SENTRY_BASE_URL=
+SENTRY_ORG_ID=
+SENTRY_WEBHOOK_SECRET=
+```
 
-## 8. Data retention notes
+## 8. Acceptance checklist
 
-- Provider retention is 30 or 90 days by plan [S43]; the connector must not assume older events exist.
-- Store only derived, redacted excerpts with a hash; no raw event JSON. Excerpt TTL is 30 days in the survey design (`CONTEXT_ITEM_TTL_DAYS`).
-- A model provider receives only the bounded excerpt. Region and cross-border transfer are open questions (§10).
-- Deletion must cascade by organization; a DSAR path for stored excerpts is a requirement, not a nicety.
+Offline, with providers disabled:
 
-## 9. Phased implementation checklist
+- [ ] `verifySentryWebhook` accepts a valid HMAC and rejects a tampered body,
+      missing headers, unknown resource and oversize body without echoing a
+      secret.
+- [ ] `normalizeSentryIncident` creates signals only for `created`/`unresolved`
+      and maps levels per §1.
+- [ ] `fetchSentryIncidentContext` uses at most 4 calls, enforces 100 items /
+      4,000 chars / 256 KiB, redacts before truncation, sets `truncated`, and
+      returns `NOT_FOUND` for a foreign tenant; `429` fails closed.
 
-1. **Decide** plan, region host and token type (organization token). Confirm which projects are in scope.
-2. **Contract**: map the webhook payload to `IncidentSignal` (source `sentry`, kind `issue` or `incident_triggered`, severity from Sentry level, service = project slug). Add a strict Zod schema for the payload subset; no raw body retention.
-3. **Transport**: add `verifySentryWebhook` with HMAC over raw bytes, `Sentry-Hook-Timestamp` window, 64 KiB cap and constant-time compare; route it through the existing intake pipeline rather than a second receiver.
-4. **Reader**: `fetchSentryIncidentContext` with a fixed 3-call plan, allowlisted fields, structural PII drops, bounded stack trace, `truncated` on any omission.
-5. **Tests**: fake fetch and fixtures only; same-org/different-org isolation; redaction tests with seeded headers and emails; `429` and timeout paths.
-6. **Offline gates** twice, with providers disabled. No keys.
-7. **Live acceptance** only after explicit user authorization: one signed fixture delivery or one read against a named issue, bounded, no retries, spend recorded.
-8. **Writes**: out of scope. Resolve/assign/comment would be separate approval-gated tools.
+One bounded live call, only after explicit authorization and key insertion:
+fetch one named issue, latest event and release once; record item count, bytes
+and any `truncated` flag. No retries. This vendor is not credit-funded.
 
-## 10. Open questions for the user
+## 9. Risks / never in model context
 
-1. Which Sentry plan (30 vs 90-day retention) and which region host?
-2. Is an organization token available, or must this use OAuth?
-3. Which projects/environments may create tasks, and at which severity threshold?
-4. Should a regression create a new task or update the prior one?
-5. Is `member:read` acceptable for assignee context, or should assignees be omitted?
-6. May redacted stack traces leave the region to the inference provider?
-7. What is the retention requirement for stored excerpts, and is a per-organization delete workflow required?
-8. Is Sentry the authoritative trigger, or PagerDuty?
+- Full event JSON: request headers, cookies, query strings, `user`, breadcrumbs,
+  stack locals, transaction names, span attributes and tags [S18].
+- PII (email, IP, user id, names, session ids), attachments and binary blobs.
+  The 1 MB event limit [S17] is not a licence to send the event.
+- Auth tokens, DSNs (a DSN can ingest events), source-map credentials,
+  organization/project keys, webhook Client Secret. Full issue threads and
+  arbitrary issue text are excluded; only allowlisted fields and a bounded
+  stack trace. A stack trace is untrusted text and is rendered under the
+  prompt's untrusted-data heading with `trustLevel: "untrusted"`.
 
-## 11. Sources
+## 10. Sources
 
-All accessed 2026-10-30; copied from [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §9.
+All accessed 2026-10-31.
 
 | ID | Source |
 |---|---|
-| S33 | [API authentication](https://docs.sentry.io/api/auth/) |
-| S34 | [API permissions](https://docs.sentry.io/api/permissions/) |
-| S35 | [Integration platform webhooks](https://docs.sentry.io/organization/integrations/integration-platform/webhooks/) |
-| S36 | [Retrieve an issue](https://docs.sentry.io/api/events/retrieve-an-issue/) |
-| S37 | [List an issue's events](https://docs.sentry.io/api/events/list-an-issues-events/) |
-| S38 | [Retrieve an issue event](https://docs.sentry.io/api/events/retrieve-an-issue-event/) |
-| S39 | [Retrieve an event for a project](https://docs.sentry.io/api/events/retrieve-an-event-for-a-project/) |
-| S40 | [List an organization's releases](https://docs.sentry.io/api/releases/list-an-organizations-releases/) |
-| S41 | [Pagination](https://docs.sentry.io/api/pagination/) |
-| S42 | [Rate limits](https://docs.sentry.io/api/ratelimits/) |
-| S43 | [Data retention periods](https://docs.sentry.io/security-legal-pii/security/data-retention-periods/) |
-| S44 | [Sensitive data](https://docs.sentry.io/platforms/javascript/data-management/sensitive-data/) |
+| S1 | [Sentry pricing](https://sentry.io/pricing/) |
+| S2 | [Pricing and billing](https://docs.sentry.io/pricing/) |
+| S3 | [Data retention periods](https://docs.sentry.io/security-legal-pii/security/data-retention-periods/) |
+| S4 | [API authentication](https://docs.sentry.io/api/auth/) |
+| S5 | [API permissions](https://docs.sentry.io/api/permissions/) |
+| S6 | [Integration platform webhooks](https://docs.sentry.io/integrations/integration-platform/webhooks/) |
+| S7 | [Issue webhooks](https://docs.sentry.io/integrations/integration-platform/webhooks/issues/) |
+| S8 | [Retrieve an issue](https://docs.sentry.io/api/events/retrieve-an-issue/) |
+| S10 | [Retrieve an issue event](https://docs.sentry.io/api/events/retrieve-an-issue-event/) |
+| S11 | [Retrieve an event for a project](https://docs.sentry.io/api/events/retrieve-an-event-for-a-project/) |
+| S13 | [Retrieve an organization's release](https://docs.sentry.io/api/releases/retrieve-an-organizations-release/) |
+| S14 | [List a release's deploys](https://docs.sentry.io/api/releases/list-a-releases-deploys/) |
+| S16 | [Rate limits](https://docs.sentry.io/api/ratelimits/) |
+| S17 | [Size limits](https://docs.sentry.io/concepts/data-management/size-limits/) |
+| S18 | [Sensitive data](https://docs.sentry.io/platforms/javascript/data-management/sensitive-data/) |
+| S19 | [Pagination](https://docs.sentry.io/api/pagination/) |
+| S20 | [Auth tokens](https://docs.sentry.io/account/auth-tokens/) |

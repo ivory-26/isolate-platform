@@ -1,5 +1,6 @@
 export * from "./access-fakes";
 export * from "./blob-store-fakes";
+export * from "./connector-calls-fake";
 export * from "./connector-credentials-fake";
 export * from "./connector-devices-fake";
 export * from "./connector-usage-ledger-fake";

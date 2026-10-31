@@ -16,6 +16,22 @@ const READ_ONLY = [
 	"k8s.get_pod",
 	"k8s.get_deployment",
 	"k8s.logs_tail",
+	"datadog.query_metrics",
+	"datadog.search_logs",
+	"datadog.get_incident",
+	"datadog.get_monitor",
+	"axiom.query_apl",
+	"axiom.get_monitor",
+	"axiom.list_datasets",
+	"signoz.query_range",
+	"signoz.get_rule",
+	"signoz.list_rules",
+	"newrelic.run_nrql",
+	"newrelic.get_entity",
+	"newrelic.list_alert_policies",
+	"honeycomb.run_query",
+	"honeycomb.get_trigger",
+	"honeycomb.list_slos",
 ] as const;
 
 describe("connector tool risk bands", () => {
@@ -25,7 +41,7 @@ describe("connector tool risk bands", () => {
 		}
 		expect(CONNECTOR_TOOL_RISKS["pagerduty.acknowledge"]).toBe("scoped_write");
 		expect(CONNECTOR_TOOL_RISKS["pagerduty.resolve"]).toBe("scoped_write");
-		expect(CONNECTOR_TOOL_NAMES).toHaveLength(15);
+		expect(CONNECTOR_TOOL_NAMES).toHaveLength(31);
 	});
 
 	test("no connector tool is sensitive or destructive", () => {

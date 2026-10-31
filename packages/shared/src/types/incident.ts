@@ -21,6 +21,10 @@ export const INCIDENT_SOURCES = [
 	"datadog",
 	"grafana",
 	"kubernetes",
+	"newrelic",
+	"honeycomb",
+	"axiom",
+	"signoz",
 	"generic",
 ] as const;
 export const incidentSourceSchema = z.enum(INCIDENT_SOURCES);

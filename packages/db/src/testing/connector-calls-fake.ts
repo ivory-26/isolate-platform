@@ -4,6 +4,7 @@ import {
 	type ConnectorCallOutcome,
 	type ConnectorCallRecord,
 	type ConnectorCallRepository,
+	type ConnectorCallScope,
 	type ConnectorCallWriteResult,
 	clampConnectorCallAwaitOptions,
 	connectorCallOutcome,
@@ -192,6 +193,7 @@ export class InMemoryConnectorCallRepository
 		callId: string,
 		timeoutMs: number,
 		pollMs: number,
+		scope?: ConnectorCallScope,
 	): Promise<ConnectorCallOutcome | null> {
 		if (typeof callId !== "string" || callId.trim().length === 0) {
 			throw new PlatformError("VALIDATION_FAILED", "callId is required");
@@ -200,6 +202,16 @@ export class InMemoryConnectorCallRepository
 		const deadline = Date.now() + bounded.timeoutMs;
 		for (;;) {
 			const row = this.rows.get(callId);
+			if (
+				scope !== undefined &&
+				(row === undefined ||
+					row.organizationId !== scope.organizationId ||
+					row.deviceId !== scope.deviceId)
+			) {
+				// Same contract as the Postgres scoped SELECT: a foreign row is
+				// indistinguishable from a missing one.
+				return null;
+			}
 			if (row !== undefined) {
 				const outcome = connectorCallOutcome(row);
 				if (outcome !== null) return outcome;

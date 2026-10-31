@@ -1,4 +1,5 @@
 import {
+	assertNoCredentialMaterial,
 	connectorIdSchema,
 	type OrganizationId,
 	PlatformError,
@@ -24,7 +25,9 @@ import { parseJsonbColumn } from "../client";
  *   A replay of an already terminal call is an idempotent success, so a device
  *   that lost the response does not have to guess.
  * - `expireStale` moves queued/claimed rows past `expires_at` to `expired`.
- * - `awaitResult` polls a bounded number of times; it never waits forever.
+ * - `awaitResult` polls a bounded number of times; it never waits forever. A
+ *   caller that passes a tenant scope only ever reads a row owned by that
+ *   organization and device.
  */
 
 export const CONNECTOR_CALL_MAX_PARAMS_BYTES = 64 * 1024;
@@ -45,18 +48,6 @@ const MAX_JSON_DEPTH = 8;
 const MAX_JSON_KEYS = 128;
 const MAX_JSON_ARRAY_ITEMS = 1_024;
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
-/**
- * Credential-shaped strings are refused in both directions. A provider key must
- * never be pasted into tool arguments or smuggled back in a result.
- */
-const CREDENTIAL_MATERIAL_PATTERNS: readonly RegExp[] = [
-	/\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
-	/\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
-	/\bglpat-[A-Za-z0-9_-]{20,}\b/,
-	/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
-	/-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-];
 
 export type ConnectorCallStatus =
 	| "queued"
@@ -105,6 +96,16 @@ export type ConnectorCallOutcome =
 	| { ok: true; data: Record<string, unknown> }
 	| { ok: false; errorCode: string };
 
+/**
+ * Tenant scope for a result read. When supplied, `awaitResult` only ever sees
+ * a call owned by this organization and device; a foreign scope is
+ * indistinguishable from a missing row and yields `null`.
+ */
+export type ConnectorCallScope = {
+	organizationId: OrganizationId;
+	deviceId: string;
+};
+
 export interface ConnectorCallRepository {
 	enqueue(input: EnqueueConnectorCallInput): Promise<ConnectorCallRecord>;
 	claimNext(deviceId: string): Promise<ConnectorCallRecord | null>;
@@ -123,6 +124,7 @@ export interface ConnectorCallRepository {
 		callId: string,
 		timeoutMs: number,
 		pollMs: number,
+		scope?: ConnectorCallScope,
 	): Promise<ConnectorCallOutcome | null>;
 }
 
@@ -195,34 +197,11 @@ function assertJsonValue(value: unknown, depth: number, label: string): void {
 	throw validationError(`${label} must be JSON`);
 }
 
-function assertNoCredentialMaterial(value: unknown, label: string): void {
-	if (typeof value === "string") {
-		for (const pattern of CREDENTIAL_MATERIAL_PATTERNS) {
-			if (pattern.test(value)) {
-				throw validationError(`${label} contains credential material`);
-			}
-		}
-		return;
-	}
-	if (Array.isArray(value)) {
-		for (const item of value) assertNoCredentialMaterial(item, label);
-		return;
-	}
-	if (isPlainObject(value)) {
-		for (const [key, item] of Object.entries(value)) {
-			for (const pattern of CREDENTIAL_MATERIAL_PATTERNS) {
-				if (pattern.test(key)) {
-					throw validationError(`${label} contains credential material`);
-				}
-			}
-			assertNoCredentialMaterial(item, label);
-		}
-	}
-}
-
 /**
  * Validates an untrusted JSON object, refuses credential-shaped text and
- * returns a detached clone. Failures carry fixed text, never a value.
+ * returns a detached clone. Failures carry fixed text, never a value. The
+ * credential scan is recursive (shared `assertNoCredentialMaterial`), so a
+ * nested `{ headers: { authorization: ... } }` is refused too.
  */
 export function normalizeBoundedConnectorJsonObject(
 	value: unknown,
@@ -233,7 +212,8 @@ export function normalizeBoundedConnectorJsonObject(
 		throw validationError(`${label} must be a JSON object`);
 	}
 	assertJsonValue(value, 1, label);
-	assertNoCredentialMaterial(value, label);
+	// Scan as deep as the queue's own JSON cap (8), never just the default 6.
+	assertNoCredentialMaterial(value, { maxDepth: MAX_JSON_DEPTH });
 	const text = JSON.stringify(value);
 	if (text === undefined || byteLength(text) > maxBytes) {
 		throw validationError(`${label} exceeds ${maxBytes} bytes`);
@@ -457,6 +437,11 @@ const STMT = {
 		RETURNING id`,
 	awaitResult: `SELECT status, result, error_code, expires_at
 		FROM connector_calls WHERE id = $1`,
+	// Tenant-scoped variant: the row must belong to the caller's organization
+	// and device, so a leaked call id alone cannot read another tenant's result.
+	awaitResultScoped: `SELECT status, result, error_code, expires_at
+		FROM connector_calls
+		WHERE id = $1 AND organization_id = $2 AND device_id = $3`,
 } as const;
 
 export function clampConnectorCallAwaitOptions(
@@ -492,9 +477,31 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeAwaitScope(scope: ConnectorCallScope): ConnectorCallScope {
+	if (scope === null || typeof scope !== "object") {
+		throw validationError("scope is invalid");
+	}
+	return {
+		organizationId: requireBoundedId(
+			scope.organizationId,
+			"scope organizationId",
+			CONNECTOR_CALL_MAX_ID_CHARS,
+		) as OrganizationId,
+		deviceId: requireBoundedId(
+			scope.deviceId,
+			"scope deviceId",
+			CONNECTOR_CALL_MAX_ID_CHARS,
+		),
+	};
+}
+
 /**
  * Terminal-state lookup shared by the Postgres poll loop and the fake. A
  * queued/claimed row returns null; a completed row returns its data.
+ *
+ * A stored result is scanned again on read: even if a row predates the write
+ * check (or was written out of band), credential material never leaves the
+ * database through a connector call.
  */
 export function connectorCallOutcome(row: {
 	status: ConnectorCallStatus;
@@ -502,9 +509,9 @@ export function connectorCallOutcome(row: {
 	errorCode: string | null;
 }): ConnectorCallOutcome | null {
 	if (row.status === "completed") {
-		return row.result === null
-			? { ok: false, errorCode: "INTERNAL" }
-			: { ok: true, data: row.result };
+		if (row.result === null) return { ok: false, errorCode: "INTERNAL" };
+		assertNoCredentialMaterial(row.result);
+		return { ok: true, data: row.result };
 	}
 	if (row.status === "failed") {
 		return { ok: false, errorCode: row.errorCode ?? "INTERNAL" };
@@ -635,15 +642,25 @@ export class PostgresConnectorCallRepository
 		callId: string,
 		timeoutMs: number,
 		pollMs: number,
+		scope?: ConnectorCallScope,
 	): Promise<ConnectorCallOutcome | null> {
 		const id = requireBoundedId(callId, "callId", CONNECTOR_CALL_MAX_ID_CHARS);
 		const bounded = clampConnectorCallAwaitOptions(timeoutMs, pollMs);
+		const scoped = scope === undefined ? null : normalizeAwaitScope(scope);
 		const deadline = Date.now() + bounded.timeoutMs;
 		for (;;) {
-			const rows = (await this.sql.unsafe(STMT.awaitResult, [
-				id,
-			])) as unknown as Record<string, unknown>[];
-			if (rows.length > 0) {
+			const rows = (scoped === null
+				? await this.sql.unsafe(STMT.awaitResult, [id])
+				: await this.sql.unsafe(STMT.awaitResultScoped, [
+						id,
+						scoped.organizationId,
+						scoped.deviceId,
+					])) as unknown as Record<string, unknown>[];
+			if (rows.length === 0) {
+				// A call id is unique, so a scoped miss can never become a hit by
+				// polling: report it as absent instead of waiting out the timeout.
+				if (scoped !== null) return null;
+			} else {
 				const outcome = connectorCallOutcome({
 					status: rows[0].status as ConnectorCallStatus,
 					result:

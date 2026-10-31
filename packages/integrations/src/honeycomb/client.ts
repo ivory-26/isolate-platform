@@ -137,6 +137,8 @@ export function createHoneycombHttpClient(
 					method: call.method,
 					headers,
 					body: call.body === undefined ? undefined : JSON.stringify(call.body),
+					// Refuse redirects: a provider hop must not forward the key.
+					redirect: "error",
 					signal: AbortSignal.timeout(timeoutMs),
 				});
 			} catch {

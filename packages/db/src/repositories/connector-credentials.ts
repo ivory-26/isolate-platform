@@ -1,4 +1,5 @@
 import {
+	assertNoCredentialMaterial,
 	type ConnectorAuthKind,
 	type ConnectorCredentialStatus,
 	type ConnectorCredentialSummary,
@@ -11,6 +12,8 @@ import {
 	emptyFreeTierProfile,
 	type FreeTierProfile,
 	freeTierProfileSchema,
+	MAX_CONNECTOR_SCOPES,
+	MAX_CREDENTIAL_SCAN_DEPTH,
 	type OrganizationId,
 	PlatformError,
 	zodIssueSummary,
@@ -29,7 +32,14 @@ import { parseJsonbColumn } from "../client";
  * Every read carries `organization_id`; a foreign id is indistinguishable from
  * a missing one. The pure normalizers and row mapper below are shared with the
  * in-memory fake so the DB CHECKs and the fake cannot drift.
+ *
+ * `displayName`, `credentialRef` and `metadata` are scanned recursively for
+ * credential material before the row exists: a device that accidentally
+ * reports its keychain item's *value* instead of its name is refused.
  */
+
+/** Metadata is descriptive only; anything larger is a key-smuggling attempt. */
+export const CONNECTOR_CREDENTIAL_METADATA_MAX_BYTES = 16 * 1024;
 
 export type CreateConnectorCredentialInput = {
 	organizationId: OrganizationId;
@@ -132,6 +142,36 @@ function readProfileNumber(value: unknown): number | null {
 		: null;
 }
 
+function byteLength(text: string): number {
+	return new TextEncoder().encode(text).byteLength;
+}
+
+/**
+ * Metadata is bounded, JSON-only and credential-free. The returned object is a
+ * detached clone so a caller cannot mutate a stored row through its input.
+ */
+function normalizeCredentialMetadata(value: unknown): Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		throw validationError("metadata must be an object");
+	}
+	let text: string;
+	try {
+		text = JSON.stringify(value) ?? "{}";
+	} catch {
+		throw validationError("metadata must be JSON");
+	}
+	if (byteLength(text) > CONNECTOR_CREDENTIAL_METADATA_MAX_BYTES) {
+		throw validationError(
+			`metadata exceeds ${CONNECTOR_CREDENTIAL_METADATA_MAX_BYTES} bytes`,
+		);
+	}
+	assertNoCredentialMaterial(value, {
+		// Metadata is not depth-capped by a schema; scan to the hard ceiling.
+		maxDepth: MAX_CREDENTIAL_SCAN_DEPTH * 2,
+	});
+	return JSON.parse(text) as Record<string, unknown>;
+}
+
 /**
  * Picks the four verified free-tier numbers out of a stored profile. Catalog
  * profiles legitimately carry extra fields (availability, source, ...); those
@@ -178,6 +218,8 @@ export function normalizeConnectorCredentialCreate(
 	if (!connectorId.success) throw validationError("connectorId is invalid");
 	const displayName = connectorDisplayNameSchema.safeParse(input.displayName);
 	if (!displayName.success) throw validationError("displayName is invalid");
+	// A name is metadata, but it must never be a pasted secret.
+	assertNoCredentialMaterial(displayName.data);
 	const authKind = connectorAuthKindSchema.safeParse(input.authKind);
 	if (!authKind.success) throw validationError("authKind is invalid");
 	const credentialRef = connectorCredentialRefSchema.safeParse(
@@ -188,6 +230,8 @@ export function normalizeConnectorCredentialCreate(
 			`credentialRef is invalid: ${zodIssueSummary(credentialRef.error)}`,
 		);
 	}
+	// The ref names a keychain item; a token-shaped ref is a leaked secret.
+	assertNoCredentialMaterial(credentialRef.data);
 	const status = connectorCredentialStatusSchema.safeParse(
 		input.status ?? "pending_validation",
 	);
@@ -202,6 +246,11 @@ export function normalizeConnectorCredentialCreate(
 			`scopes are invalid: ${zodIssueSummary(scopes.error)}`,
 		);
 	}
+	// Zod caps the array at MAX_CONNECTOR_SCOPES; keep the count check explicit
+	// so the cap survives a future schema change.
+	if (scopes.data.length > MAX_CONNECTOR_SCOPES) {
+		throw validationError(`scopes exceed ${MAX_CONNECTOR_SCOPES} entries`);
+	}
 	const profile = freeTierProfileSchema.safeParse(
 		input.freeTierProfile ?? emptyFreeTierProfile(),
 	);
@@ -210,14 +259,7 @@ export function normalizeConnectorCredentialCreate(
 			`freeTierProfile is invalid: ${zodIssueSummary(profile.error)}`,
 		);
 	}
-	const metadata = input.metadata ?? {};
-	if (
-		metadata === null ||
-		typeof metadata !== "object" ||
-		Array.isArray(metadata)
-	) {
-		throw validationError("metadata must be an object");
-	}
+	const metadata = normalizeCredentialMetadata(input.metadata ?? {});
 	return {
 		organizationId,
 		deviceId,
@@ -228,7 +270,7 @@ export function normalizeConnectorCredentialCreate(
 		scopes: [...scopes.data],
 		status: status.data,
 		freeTierProfile: profile.data,
-		metadata: { ...metadata },
+		metadata,
 		createdBy:
 			input.createdBy === undefined || input.createdBy === null
 				? null

@@ -267,6 +267,8 @@ function createClient(config: Config): HttpClient {
 						"API-Key": config.apiKey,
 					},
 					body: JSON.stringify({ query, variables }),
+					// Refuse redirects: a provider hop must not forward the key.
+					redirect: "error",
 					signal: AbortSignal.timeout(config.timeoutMs),
 				});
 			} catch {

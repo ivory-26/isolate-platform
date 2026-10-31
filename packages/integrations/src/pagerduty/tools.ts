@@ -539,6 +539,8 @@ async function updateIncident(
 			body: JSON.stringify({
 				incidents: [{ id: incidentId, type: "incident_reference", status }],
 			}),
+			// Refuse redirects: a provider hop must not forward the write token.
+			redirect: "error",
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 	} catch {

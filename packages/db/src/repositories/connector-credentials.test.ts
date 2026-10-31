@@ -3,6 +3,7 @@ import { asOrganizationId, PlatformError } from "@isolate/shared";
 import type { PgSql } from "../client";
 import { InMemoryConnectorCredentialRepository } from "../testing/connector-credentials-fake";
 import {
+	CONNECTOR_CREDENTIAL_METADATA_MAX_BYTES,
 	type CreateConnectorCredentialInput,
 	mapConnectorCredentialRow,
 	normalizeFreeTierProfileValue,
@@ -166,6 +167,53 @@ describe("in-memory connector credential repository", () => {
 		]) {
 			await expect(repo.create(invalid)).rejects.toBeInstanceOf(PlatformError);
 		}
+	});
+
+	test("rejects credential material in ref, name and nested metadata", async () => {
+		const repo = new InMemoryConnectorCredentialRepository();
+		const githubToken = `ghp_${"a".repeat(30)}`;
+		const openAiKey = `sk-proj-${"A".repeat(32)}`;
+		const cases = [
+			createInput({ credentialRef: `keychain:${githubToken}` }),
+			createInput({ displayName: `Team ${openAiKey}` }),
+			createInput({
+				metadata: { headers: { authorization: `Bearer ${"x".repeat(20)}` } },
+			}),
+			createInput({ metadata: { note: openAiKey } }),
+			createInput({ metadata: { nested: { apiKey: "value" } } }),
+		];
+		for (const input of cases) {
+			const error = await repo.create(input).then(
+				() => null,
+				(thrown: unknown) => thrown,
+			);
+			expect(error).toBeInstanceOf(PlatformError);
+			expect((error as PlatformError).code).toBe("VALIDATION_FAILED");
+			expect((error as PlatformError).message).toBe(
+				"credential material is not allowed",
+			);
+		}
+		expect(repo.rowCount).toBe(0);
+	});
+
+	test("caps metadata at 16 KiB and allows token-budget metadata", async () => {
+		const repo = new InMemoryConnectorCredentialRepository();
+		await expect(
+			repo.create(
+				createInput({
+					metadata: {
+						blob: "a".repeat(CONNECTOR_CREDENTIAL_METADATA_MAX_BYTES),
+					},
+				}),
+			),
+		).rejects.toBeInstanceOf(PlatformError);
+		expect(repo.rowCount).toBe(0);
+
+		const created = await repo.create(
+			createInput({ metadata: { tokenBudget: 1_000, tokenCount: 3 } }),
+		);
+		expect(created.metadata).toEqual({ tokenBudget: 1_000, tokenCount: 3 });
+		expect(created.credentialRef).toBe("keychain:isolate/sentry/team");
 	});
 
 	test("free-tier profile mapping ignores catalog-only fields", () => {

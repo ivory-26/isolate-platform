@@ -16,6 +16,7 @@ import { NullProvider } from "@isolate/sandbox";
 import type { Logger, OrganizationId, TaskId } from "@isolate/shared";
 import { workerConfigSchema } from "./config";
 import {
+	createConfiguredConnectorTools,
 	createConfiguredWorkerComposition,
 	createIncidentContextBundleLoader,
 	createRunSummaryReader,
@@ -202,6 +203,25 @@ describe("configured composition", () => {
 		expect(typeof composition.overrides.acquireBranchLock).toBe("function");
 		expect(composition.overrides.pullRequest).toBeUndefined();
 		expect(composition.githubAuth).toBe(false);
+	});
+
+	test("connector tools bind only with the device queue enabled", () => {
+		const sql = {} as PgSql;
+		expect(createConfiguredConnectorTools(sql, {})).toBeNull();
+		expect(
+			createConfiguredConnectorTools(sql, { DEVICE_GATEWAY_ENABLED: "false" }),
+		).toBeNull();
+		expect(
+			createConfiguredConnectorTools(sql, { DEVICE_GATEWAY_ENABLED: "1" }),
+		).toBeNull();
+
+		const binding = createConfiguredConnectorTools(sql, {
+			DEVICE_GATEWAY_ENABLED: " true ",
+		});
+		expect(binding).not.toBeNull();
+		expect(Object.keys(binding?.implementations ?? {})).toHaveLength(31);
+		expect(binding?.riskFor["sentry.list_issues"]).toBe("read_only");
+		expect(binding?.riskFor["pagerduty.acknowledge"]).toBe("scoped_write");
 	});
 
 	test("the tool audit writer stores only the argument digest", async () => {

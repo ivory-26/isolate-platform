@@ -17,9 +17,10 @@ import type {
  *
  * For `(organizationId, connectorId)` it requires an active device and an
  * active credential row on that device, then asks the injected factory for the
- * transport. It returns only `{ credentialRef, scopes, metadata, proxy }`; the
- * secret is never fetched, decrypted or serialized here because the server
- * does not have it.
+ * transport. It returns only `{ deviceId, credentialId, credentialRef, scopes,
+ * metadata, proxy }`; the secret is never fetched, decrypted or serialized
+ * here because the server does not have it. `deviceId`/`credentialId` are the
+ * queue routing identities; they are opaque and never a secret.
  *
  * `allowEnvFallback` is opt-in and single-tenant only: a caller-supplied lookup
  * may name a `credential_ref` for a bridge deployment, but it can never supply
@@ -58,6 +59,14 @@ export type ConnectorDeviceBrokerOptions = {
 };
 
 export type ResolvedConnectorDevice = {
+	/**
+	 * Device that owns the credential and polls the call queue. `null` only for
+	 * the single-tenant env fallback, which has no device row and therefore no
+	 * poll queue: a queue-backed caller must fail closed.
+	 */
+	readonly deviceId: string | null;
+	/** Credential row identity used by the device to select its keychain item. */
+	readonly credentialId: string | null;
 	/** Opaque device-side keychain item name, never a secret. */
 	readonly credentialRef: string;
 	readonly scopes: readonly string[];
@@ -182,6 +191,8 @@ export function createConnectorDeviceBroker(
 			credentialRef: parsed.data,
 		});
 		return {
+			deviceId: null,
+			credentialId: null,
 			credentialRef: parsed.data,
 			scopes: [],
 			metadata: {},
@@ -225,6 +236,8 @@ export function createConnectorDeviceBroker(
 				credentialRef: selected.credentialRef,
 			});
 			return {
+				deviceId: selected.deviceId,
+				credentialId: selected.id,
 				credentialRef: selected.credentialRef,
 				scopes: [...selected.scopes],
 				metadata: { ...selected.metadata },

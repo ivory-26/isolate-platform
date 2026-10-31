@@ -35,6 +35,7 @@ Notes:
 - Worker tool binding is merged: the 31 connector tools are registered only when `DEVICE_GATEWAY_ENABLED=true` and a daemon is polling; otherwise they stay denied. The daemon client itself is still landing.
 - No SaaS vendor except GitHub has been exercised live. Every SaaS adapter is fake-tested.
 - **Kubernetes has a local live proof:** `kind` cluster `isolate-demo`, namespaced read-only ServiceAccount, failing demo pod; `bun run acceptance:k8s-local` returned 2 bounded items (warning events + pod) and `truncated: true`. No kubeconfig or token enters the sandbox.
+- **End-to-end device proof:** a seeded device + Kubernetes credential, the web gateway and `apps/device-daemon` ran together; `k8s.list_events` call `538a0a2a-…` was claimed, executed on the device and completed with a 903-byte result. The usage ledger recorded one request.
 
 ## 2. How credentials are held
 

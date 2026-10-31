@@ -45,9 +45,11 @@ User decisions: keys stay on the user's device (device daemon polls the server);
 | W17-SECDOCS | `9aaf964` → merged | **done** — device-model docs, no server secrets |
 | W17-TOOLBIND | `d580108` → merged | **done** — 31 tools enqueue/await over the device queue; registry + policy merged |
 | W17-LEDGER | `557a644` | **done** — 80%-style daily free-tier guard on claim; `RATE_LIMITED` on exhaustion |
-| W17-DEVICEREG | in flight | user device register/list/revoke endpoints (token shown once, hash stored) |
-| W17-DAEMON | in flight | `apps/device-daemon`: local keys, poll, dispatch all 31 tools, post results |
-| W17-CONNECT | in flight | connector metadata connect/list/revoke (opaque ref, secret-shaped values rejected) |
+| W17-DEVICEREG | `eeb54aa` → merged | **done** — register/list/revoke; token shown once, hash stored |
+| W17-DAEMON | `fb900ea` → merged | **done** — poll loop, complete 31-tool dispatch, local K8s client |
+| W17-CONNECT | `fd65563` → merged | **done** — metadata connect/list/revoke, secret-shape rejection |
+| W17-SECFIX | in flight | recursive secret scan, write-scope check, scoped result reads, redirect policy |
+| W17-E2E | local proof | **PASS** — device daemon ↔ gateway ↔ kind cluster; call `538a0a2a-…` completed, 903-byte result, ledger +1 |
 
 Coordinator: `0473367` (31 tool names/risk bands, enums, barrels, `security:check`), `ad675eb` (literal device routes + regenerated route tree), `b9a7e86` (0011 applied record). Migrations applied: `0010` and `0011`, both verified.
 

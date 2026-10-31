@@ -144,9 +144,14 @@ bun test --no-env-file apps/web/src/server apps/worker/src packages/db/src/repos
 # local Kubernetes read (kind, gated by K8S_ACCEPTANCE=1)
 bun run acceptance:k8s-local
 
-# local device loop (daemon + fake provider; lands with the daemon lane)
-bun run acceptance:device-local
+# local device loop: enqueue a call and wait for the running daemon
+LIVE_DEVICE=1 bun --env-file .env scripts/acceptance-device-local.ts
 ```
+
+Local proof (2026-10-31): a seeded device + Kubernetes credential, the web gateway and
+`apps/device-daemon` ran together; call `538a0a2a-…` (`k8s.list_events`) was claimed,
+executed against the local kind cluster and completed with a 903-byte result. The usage
+ledger recorded one request. The provider token existed only in the daemon's environment.
 
 Every accepted call must leave one `connector_calls` row ending `completed` or `failed`, and
 one `tool_invocations` row in the worker. No test may read a provider key from the server.

@@ -107,6 +107,7 @@ Cross-cutting documents:
 - [connector-onboarding.md](../connector-onboarding.md) — how a user connects an account, how credentials are stored/rotated, how the sandbox agent gets tool access, and the free-tier guardrails.
 - [connector-usage.md](../connector-usage.md) — adapter contract, device credential broker, multi-connector routing and implementation order.
 - [free-tier-catalog.md](free-tier-catalog.md) — verified free/paid matrix and recommended defaults.
+- [SETUP.md](SETUP.md) — operator setup for the ten implemented connectors: device-held credentials, key creation paths and bounded verification.
 - [env-reference.md](env-reference.md) — every connector env name, grouped (names only; values blank).
 - [_template.md](_template.md) — checklist for the next connector.
 

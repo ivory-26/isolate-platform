@@ -46,11 +46,11 @@ export const workerConfigSchema = z.object({
 		.number()
 		.int()
 		.min(1_000)
-		// Raised on 2026-10-31 per operator request. The USD cap
-		// (maxCostUsdPerTask) remains the real spend guard; this bound only
-		// stops a pathological loop.
+		// Operator setting (2026-10-31): 1M tokens per task by default, with
+		// 200M kept as the schema ceiling. The USD cap (maxCostUsdPerTask)
+		// remains the real spend guard; this bound only stops a runaway loop.
 		.max(200_000_000)
-		.default(200_000),
+		.default(1_000_000),
 	maxSandboxSeconds: z.coerce.number().int().min(60).max(3600).default(900),
 	// USD; zero is allowed (spend disabled) but never negative or non-finite.
 	maxCostUsdPerTask: z.coerce.number().min(0).max(100).default(1),

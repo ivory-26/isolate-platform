@@ -104,7 +104,7 @@ describe("worker config — task execution caps", () => {
 	test("defaults are bounded and deterministic", () => {
 		const config = workerConfigSchema.parse({});
 		expect(config.maxOutputTokensPerTurn).toBe(1024);
-		expect(config.maxTokensPerTask).toBe(200_000);
+		expect(config.maxTokensPerTask).toBe(1_000_000);
 		expect(config.maxSandboxSeconds).toBe(900);
 		expect(config.maxCostUsdPerTask).toBe(1);
 		expect(config.maxAgentSteps).toBe(12);

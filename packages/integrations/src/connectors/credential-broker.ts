@@ -1,10 +1,11 @@
-import { type OrganizationId, PlatformError } from "@isolate/shared";
-import { z } from "zod";
 import {
 	type ConnectorCredentialSummary,
 	connectorIdSchema,
 	connectorScopesSchema,
-} from "../../../shared/src/types/connector";
+	type OrganizationId,
+	PlatformError,
+} from "@isolate/shared";
+import { z } from "zod";
 import {
 	type ConnectorCredentialCrypto,
 	unpackConnectorCredentialEnvelope,

@@ -1,8 +1,8 @@
-import { type OrganizationId, PlatformError } from "@isolate/shared";
 import type {
 	ConnectorCredentialStatus,
 	ConnectorCredentialSummary,
-} from "../../../shared/src/types/connector";
+} from "@isolate/shared";
+import { type OrganizationId, PlatformError } from "@isolate/shared";
 import {
 	type ConnectorCredentialCiphertext,
 	type ConnectorCredentialRecord,

@@ -3,6 +3,8 @@
  * contracts are exported here; credentials always stay server-side.
  */
 
+export * from "./connectors/credential-broker";
+export * from "./connectors/credential-crypto";
 export * from "./github/auth";
 export * from "./github/context";
 export * from "./github/incidents";

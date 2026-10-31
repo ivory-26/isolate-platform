@@ -1,9 +1,4 @@
 import {
-	type OrganizationId,
-	PlatformError,
-	zodIssueSummary,
-} from "@isolate/shared";
-import {
 	type ConnectorAuthKind,
 	type ConnectorCredentialStatus,
 	type ConnectorCredentialSummary,
@@ -15,7 +10,10 @@ import {
 	emptyFreeTierProfile,
 	type FreeTierProfile,
 	freeTierProfileSchema,
-} from "../../../shared/src/types/connector";
+	type OrganizationId,
+	PlatformError,
+	zodIssueSummary,
+} from "@isolate/shared";
 import type { PgSql } from "../client";
 import { parseJsonbColumn } from "../client";
 

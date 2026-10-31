@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { ConnectorCredentialSummary } from "@isolate/shared";
 import {
 	asOrganizationId,
 	type ErrorCode,
 	PlatformError,
 } from "@isolate/shared";
-import type { ConnectorCredentialSummary } from "../../../shared/src/types/connector";
 import {
 	type ConnectorCredentialBroker,
 	type ConnectorCredentialReader,

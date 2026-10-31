@@ -8,7 +8,7 @@ import { handleDeviceClaimRoute } from "../server/device-gateway.server";
  * then the unregistered literal is widened so this file type-checks on its own.
  * Server-only: no component, no client import, no token handling in the bundle.
  */
-export const Route = createFileRoute("/api/device/claim" as never)({
+export const Route = createFileRoute("/api/device/claim")({
 	server: {
 		handlers: {
 			POST: ({ request }) => handleDeviceClaimRoute(request),

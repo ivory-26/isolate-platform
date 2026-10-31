@@ -18,7 +18,10 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
 import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiDeviceClaimRouteImport } from './routes/api.device.claim'
+import { Route as ApiDeviceHeartbeatRouteImport } from './routes/api.device.heartbeat'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
+import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -65,9 +68,24 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDeviceClaimRoute = ApiDeviceClaimRouteImport.update({
+  id: '/api/device/claim',
+  path: '/api/device/claim',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceHeartbeatRoute = ApiDeviceHeartbeatRouteImport.update({
+  id: '/api/device/heartbeat',
+  path: '/api/device/heartbeat',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWebhooksSplatRoute = ApiWebhooksSplatRouteImport.update({
   id: '/api/webhooks/$',
   path: '/api/webhooks/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceCallsIdResultRoute = ApiDeviceCallsIdResultRouteImport.update({
+  id: '/api/device/calls/$id/result',
+  path: '/api/device/calls/$id/result',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -81,7 +99,10 @@ export interface FileRoutesByFullPath {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/device/claim': typeof ApiDeviceClaimRoute
+  '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -92,7 +113,10 @@ export interface FileRoutesByTo {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/device/claim': typeof ApiDeviceClaimRoute
+  '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -105,7 +129,10 @@ export interface FileRoutesById {
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/device/claim': typeof ApiDeviceClaimRoute
+  '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -119,7 +146,10 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
+    | '/api/device/claim'
+    | '/api/device/heartbeat'
     | '/api/webhooks/$'
+    | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -130,7 +160,10 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations'
     | '/api/auth/$'
+    | '/api/device/claim'
+    | '/api/device/heartbeat'
     | '/api/webhooks/$'
+    | '/api/device/calls/$id/result'
   id:
     | '__root__'
     | '/'
@@ -142,7 +175,10 @@ export interface FileRouteTypes {
     | '/organizations/new'
     | '/organizations/'
     | '/api/auth/$'
+    | '/api/device/claim'
+    | '/api/device/heartbeat'
     | '/api/webhooks/$'
+    | '/api/device/calls/$id/result'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -153,7 +189,10 @@ export interface RootRouteChildren {
   SignupRoute: typeof SignupRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiDeviceClaimRoute: typeof ApiDeviceClaimRoute
+  ApiDeviceHeartbeatRoute: typeof ApiDeviceHeartbeatRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
+  ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -221,11 +260,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/device/claim': {
+      id: '/api/device/claim'
+      path: '/api/device/claim'
+      fullPath: '/api/device/claim'
+      preLoaderRoute: typeof ApiDeviceClaimRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/heartbeat': {
+      id: '/api/device/heartbeat'
+      path: '/api/device/heartbeat'
+      fullPath: '/api/device/heartbeat'
+      preLoaderRoute: typeof ApiDeviceHeartbeatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/webhooks/$': {
       id: '/api/webhooks/$'
       path: '/api/webhooks/$'
       fullPath: '/api/webhooks/$'
       preLoaderRoute: typeof ApiWebhooksSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/calls/$id/result': {
+      id: '/api/device/calls/$id/result'
+      path: '/api/device/calls/$id/result'
+      fullPath: '/api/device/calls/$id/result'
+      preLoaderRoute: typeof ApiDeviceCallsIdResultRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -252,7 +312,10 @@ const rootRouteChildren: RootRouteChildren = {
   SignupRoute: SignupRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiDeviceClaimRoute: ApiDeviceClaimRoute,
+  ApiDeviceHeartbeatRoute: ApiDeviceHeartbeatRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
+  ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

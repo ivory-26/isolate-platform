@@ -20,6 +20,9 @@ import { Route as OrganizationsNewRouteImport } from './routes/organizations/new
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiDeviceClaimRouteImport } from './routes/api.device.claim'
 import { Route as ApiDeviceHeartbeatRouteImport } from './routes/api.device.heartbeat'
+import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
+import { Route as ApiDeviceRegisterRouteImport } from './routes/api.device.register'
+import { Route as ApiDeviceRevokeRouteImport } from './routes/api.device.revoke'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
@@ -78,6 +81,21 @@ const ApiDeviceHeartbeatRoute = ApiDeviceHeartbeatRouteImport.update({
   path: '/api/device/heartbeat',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDeviceListRoute = ApiDeviceListRouteImport.update({
+  id: '/api/device/list',
+  path: '/api/device/list',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceRegisterRoute = ApiDeviceRegisterRouteImport.update({
+  id: '/api/device/register',
+  path: '/api/device/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceRevokeRoute = ApiDeviceRevokeRouteImport.update({
+  id: '/api/device/revoke',
+  path: '/api/device/revoke',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWebhooksSplatRoute = ApiWebhooksSplatRouteImport.update({
   id: '/api/webhooks/$',
   path: '/api/webhooks/$',
@@ -101,6 +119,9 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
+  '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/register': typeof ApiDeviceRegisterRoute
+  '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -115,6 +136,9 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
+  '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/register': typeof ApiDeviceRegisterRoute
+  '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -131,6 +155,9 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
+  '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/register': typeof ApiDeviceRegisterRoute
+  '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -148,6 +175,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/device/claim'
     | '/api/device/heartbeat'
+    | '/api/device/list'
+    | '/api/device/register'
+    | '/api/device/revoke'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
@@ -162,6 +192,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/device/claim'
     | '/api/device/heartbeat'
+    | '/api/device/list'
+    | '/api/device/register'
+    | '/api/device/revoke'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   id:
@@ -177,6 +210,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/device/claim'
     | '/api/device/heartbeat'
+    | '/api/device/list'
+    | '/api/device/register'
+    | '/api/device/revoke'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesById: FileRoutesById
@@ -191,6 +227,9 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiDeviceClaimRoute: typeof ApiDeviceClaimRoute
   ApiDeviceHeartbeatRoute: typeof ApiDeviceHeartbeatRoute
+  ApiDeviceListRoute: typeof ApiDeviceListRoute
+  ApiDeviceRegisterRoute: typeof ApiDeviceRegisterRoute
+  ApiDeviceRevokeRoute: typeof ApiDeviceRevokeRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
   ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
 }
@@ -274,6 +313,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDeviceHeartbeatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/device/list': {
+      id: '/api/device/list'
+      path: '/api/device/list'
+      fullPath: '/api/device/list'
+      preLoaderRoute: typeof ApiDeviceListRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/register': {
+      id: '/api/device/register'
+      path: '/api/device/register'
+      fullPath: '/api/device/register'
+      preLoaderRoute: typeof ApiDeviceRegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/revoke': {
+      id: '/api/device/revoke'
+      path: '/api/device/revoke'
+      fullPath: '/api/device/revoke'
+      preLoaderRoute: typeof ApiDeviceRevokeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/webhooks/$': {
       id: '/api/webhooks/$'
       path: '/api/webhooks/$'
@@ -314,6 +374,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiDeviceClaimRoute: ApiDeviceClaimRoute,
   ApiDeviceHeartbeatRoute: ApiDeviceHeartbeatRoute,
+  ApiDeviceListRoute: ApiDeviceListRoute,
+  ApiDeviceRegisterRoute: ApiDeviceRegisterRoute,
+  ApiDeviceRevokeRoute: ApiDeviceRevokeRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
   ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,
 }

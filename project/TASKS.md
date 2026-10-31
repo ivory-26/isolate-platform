@@ -27,6 +27,20 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 - Incident end-to-end: **PASS on the approved 1M-budget retry**. Task `2a6d6902-…` → `review_ready`; 12 Meta calls, **170,818 prompt / 13,101 completion**; one Modal sandbox **244 s**; diff artifact 1 file / 26 insertions; push disabled. The earlier 50k run is retained as cap-enforcement evidence.
 - No cost was priced (`cost_usd` null for the Meta contributor model and for Modal without a price table); no GitHub write occurred in the incident run.
 
+## Wave 18 — connector hardening: limits, validation, batching, chunking (2026-11-01)
+
+User request: full security audit plus rate limiting, throttling, validation, Neon Auth verification, load balancing, chunking and batching.
+
+| Lane | Branch | Status |
+|---|---|---|
+| W18-AUDIT | read-only | in flight — full connector/binding audit |
+| W18-PROTECT | `task/w18-rate` | in flight — migration `0012_rate_limits`, DB limiter, gateway/user/intake/worker limits, batch claim, daemon batching |
+| W18-VALID | `task/w18-batch` | in flight — per-tool Zod schemas in the worker, same-origin/JSON request guard module |
+| W18-STREAM | `task/w18-stream` | in flight — bounded chunked provider response reader across the ten adapters |
+| W18-DOCS | `main` `5ec2ee7` | **done** — `docs/connectors/SCALING.md` |
+
+Rules: migration `0012` is created by the lane and applied by the coordinator with approval; no provider keys; no live calls.
+
 ## Wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
 
 User decisions: keys stay on the user's device (device daemon polls the server); implement at most **10** connectors, document the rest; maintain a setup guide; run validation and security loops.

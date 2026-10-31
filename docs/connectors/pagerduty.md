@@ -2,15 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
-| Module | `packages/integrations/src/pagerduty/` (proposed; does not exist) |
+| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Module | `packages/integrations/src/pagerduty/` (implemented; fake-fetch tested) |
 | Free tier verified | 2026-10-31 — free plan still exists, 5 users |
 | Auth | Account API key, read-only, `Authorization: Token token=<key>` [S2] |
 | Inbound | V3 webhook, `X-PagerDuty-Signature: v1=<hex>` [S4] |
 | Read | Incident, bounded log entries, service, escalation policy name [S9–S14] |
 | Writes | Not in scope; ack/resolve/snooze designed as approval-gated [S11][S12] |
 
-Nothing below is implemented. `pagerduty` is already a value in
+Wave 16 implemented this module (v3 webhook, normalizer, bounded context, read tools, audited acknowledge/resolve) with fake-fetch tests; its tools are not wired into the tool registry yet, so the agent cannot call them. `pagerduty` is already a value in
 `INCIDENT_SOURCES` (`packages/shared/src/types/incident.ts`), but there is no
 verifier, normalizer, reader or route mode. The existing receiver selects only
 `github` or `generic`; a PagerDuty delivery would be parsed as generic and

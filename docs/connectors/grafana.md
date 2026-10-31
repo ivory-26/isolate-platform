@@ -2,15 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
-| Code | none — no connector code exists in this repository |
+| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Code | `packages/integrations/src/grafana/` (implemented; fake-fetch tested) |
 | Free tier verified | 2026-10-31 |
 | Auth model | Service-account Bearer token; Viewer plus fixed read roles |
 | Inbound trigger | Grafana Alerting webhook, HMAC-SHA256 (native signature available) |
 | Read context | `POST /api/ds/query`; alert-rule, annotation and data-source reads |
 | Writes | None in scope (silences, annotations, alert-rule changes are a later wave) |
 
-Nothing below is implemented. `INCIDENT_SOURCES` already contains `grafana`, but no adapter, verifier or reader exists.
+Wave 16 implemented this module (optional-HMAC webhook, normalizer, bounded context, three read tools) with fake-fetch tests; its tools are not wired into the tool registry yet, so the agent cannot call them. `INCIDENT_SOURCES` already contains `grafana`.
 
 ## 1. Role in the agent
 

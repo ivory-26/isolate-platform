@@ -2,15 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
-| Module | `packages/integrations/src/sentry/` (proposed; does not exist) |
+| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Module | `packages/integrations/src/sentry/` (implemented; fake-fetch tested) |
 | Free tier verified | 2026-10-31 — Developer plan, free forever |
 | Auth | Organization auth token, `Authorization: Bearer <token>` [S4] |
 | Inbound | Integration-platform webhook, `Sentry-Hook-Signature` [S6] |
 | Read | Issue, latest event and bounded stack trace, release, deploys [S8–S15] |
 | Writes | None in scope |
 
-Nothing below is implemented. `sentry` is already a value in `INCIDENT_SOURCES`
+Wave 16 implemented this module (webhook, normalizer, context, three read tools) with fake-fetch tests; its tools are not wired into the tool registry yet, so the agent cannot call them. `sentry` is already a value in `INCIDENT_SOURCES`
 (`packages/shared/src/types/incident.ts`), but there is no verifier, normalizer,
 reader or route mode for it. Today `detectIncidentIntakeMode` returns only
 `generic` or `github`, so a Sentry delivery would be parsed as a generic signal

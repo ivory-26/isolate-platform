@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Research summary; **no connector in this table is implemented except GitHub and the generic webhook** |
+| Status | Research summary; **GitHub and the generic webhook are fully implemented; Sentry, Grafana, PagerDuty and Kubernetes have adapter modules (fake-tested, not agent-callable)** |
 | Date | 2026-10-31 |
 | Basis | Each row is taken from that page's verified header and §2 free-tier section; unverified points are carried as **UNVERIFIED**, not filled in |
 | Scope | What a user can connect for free (free plan or self-hosted), and what the platform should refuse to default |

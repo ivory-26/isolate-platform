@@ -2,15 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
-| Code | none — no connector code exists in this repository |
+| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Code | `packages/integrations/src/kubernetes/` (implemented; fake-client tested) |
 | Free tier verified | 2026-10-31 (no SaaS free tier; OSS is Apache 2.0) |
 | Auth model | Dedicated ServiceAccount, namespaced Role + RoleBinding, short-lived bound token |
 | Inbound trigger | None native; Alertmanager or an event watcher through the generic bridge |
 | Read context | Events, pod status, bounded pod logs, Deployment/ReplicaSet status |
 | Writes | Deploy/rollback `sensitive`; delete `destructive` (none in scope) |
 
-Nothing below is implemented. The connector reads one namespace with a read-only ServiceAccount; it never receives a kubeconfig in the agent sandbox.
+Wave 16 implemented this module (normalizer, bounded context, four read tools) with fake-client tests; its tools are not wired into the tool registry yet, so the agent cannot call them. The connector reads one namespace with a read-only ServiceAccount; it never receives a kubeconfig in the agent sandbox.
 
 ## 1. Role in the agent
 

@@ -27,17 +27,25 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 - Incident end-to-end: **PASS on the approved 1M-budget retry**. Task `2a6d6902-…` → `review_ready`; 12 Meta calls, **170,818 prompt / 13,101 completion**; one Modal sandbox **244 s**; diff artifact 1 file / 26 insertions; push disabled. The earlier 50k run is retained as cap-enforcement evidence.
 - No cost was priced (`cost_usd` null for the Meta contributor model and for Modal without a price table); no GitHub write occurred in the incident run.
 
-## Wave 16 — first connector adapters + credential store (2026-10-31)
+## Wave 16 — first connector adapters + credential store (2026-10-31 → merged 2026-11-01)
 
 User direction: start the real adapters in separate worktree/subagent lanes. First batch: the four offered connectors plus the shared credential foundation.
 
-- **W16-CRED** — `packages/db` migration `0010_connectors.sql` (encrypted `connector_credentials`, `connector_usage_ledger`), repositories + fakes, AES-256-GCM broker in `packages/integrations/src/connectors/`, shared credential types. Env fallback for single-tenant only; `CONNECTOR_CREDENTIAL_KEY` required for the store.
-- **W16-SENTRY** — `packages/integrations/src/sentry/`: signed webhook, normalizer, bounded context reader, read-only tools. Fake-fetch tests only.
-- **W16-GRAFANA** — `packages/integrations/src/grafana/`: alert webhook (optional HMAC), normalizer, datasource query reader (metrics/logs/traces), read-only tools.
-- **W16-PAGERDUTY** — `packages/integrations/src/pagerduty/`: v3 signed webhook, normalizer, incident/log-entry/service reader, read-only + ack/resolve scoped-write design.
-- **W16-KUBERNETES** — `packages/integrations/src/kubernetes/`: read-only in-cluster client (events/pods/logs tail), normalizer, tools; no kubeconfig in the sandbox.
+| Lane | Branch | Commit | Merge | Deliverable |
+|---|---|---|---|---|
+| W16-CRED | `task/w16-cred` | `f30f952` | `2368530` | migration `0010` (unapplied), credential + usage-ledger repos/fakes, AES-256-GCM envelope, broker |
+| W16-SENTRY | `task/w16-sentry` | `5cd1324` | `3d106f7` | webhook, normalize, context, 3 read tools |
+| W16-PAGERDUTY | `task/w16-pagerduty` | `c92378b` | `411c807` | v3 webhook, normalize, context, 3 read tools + audited ack/resolve |
+| W16-KUBERNETES | `task/w16-kubernetes` | `02cbf6f` | `484b473` | read-only client/context/tools, no kubeconfig |
+| W16-GRAFANA | `task/w16-grafana` | `f48fb8b` | `b4330ad` | optional-HMAC webhook, normalize, context, 3 read tools |
 
-Rules: one owner per file group; adapters never edit `packages/integrations/src/index.ts` (coordinator integrates); no live calls, credentials, or `.env` access; scoped gates ×2; commit on `task/w16-*`; never push.
+Coordinator integration `fa04c5e` + `709590c`: shared/db/integrations barrel exports and import sorting. Gates on `main`: biome 0 errors · typecheck 8/8 · **1928 pass / 0 fail / 10 skip** (1938 total) ×2 · offline acceptance 7/7.
+
+Rules held: one owner per file group; adapters never edited the barrel; no live calls, credentials or `.env` access; commits on `task/w16-*`; never pushed.
+
+### W16-BIND — next (not started)
+- Apply `0010` with approval; bind broker → per-task tool registry and webhook/context routing per source; build the web connect flow; enforce the 80% free-tier guard; one bounded live acceptance per adapter.
+- Tool functions are exported but not registered in the Mastra tool registry, so the agent cannot call them yet.
 
 ## Wave 14 — scoped GitHub write live + connector docs (2026-10-31)
 

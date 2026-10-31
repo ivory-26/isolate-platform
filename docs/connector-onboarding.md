@@ -8,7 +8,7 @@
 | Architecture of record | [`docs/connector-usage.md`](connector-usage.md) — this page builds on it and does not replace it |
 | Security boundaries | [`ARCHITECTURE.md`](../ARCHITECTURE.md) §7–§11 |
 | Vendor facts | Per-connector pages under [`docs/connectors/`](connectors/); free-tier matrix in [`free-tier-catalog.md`](connectors/free-tier-catalog.md) |
-| Implemented today | Generic signed webhook intake; GitHub trigger, read-only context and two scoped-write functions (not agent-callable). No credential table, no broker, no connector tool |
+| Implemented today | Generic signed webhook intake; GitHub trigger, read-only context and two scoped-write functions (not agent-callable). Wave 16 added the credential store migration (unapplied), repository/fakes, crypto envelope and broker, plus Sentry/Grafana/PagerDuty/Kubernetes adapter modules (not agent-callable) |
 
 ## 0. The product rule this page exists to enforce
 

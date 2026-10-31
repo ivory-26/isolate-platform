@@ -36,7 +36,7 @@ Implemented today: **GitHub** (App auth, incident context, signed intake, two sc
 | Notification | [Slack](slack.md) | Free workspace | Design-only |
 | Transport | [Generic signed webhook](generic-webhook.md) | Platform | **Implemented** |
 
-"Design-only" means there is no connector code in this repository. Those pages describe a proposal with verified vendor facts; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
+"Design-only" describes the intake/agent surface. Wave 16 added adapter modules under `packages/integrations/src/{sentry,grafana,pagerduty,kubernetes}/` (fake-tested, not yet registered as agent tools); the remaining vendors have no code. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
 
 Both GitHub scoped writes are live-proven on 2026-10-31: `github.rerun_workflow` (run `41085679072`, attempt 2, audit row `b0bd5386…`) and `github.comment` (comment `6547408811` on PR #2, audit row `bed3a504…`, after adding `pull_requests:write`). They are still not registered as agent tools; see [github.md](github.md) §8.3.
 

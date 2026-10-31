@@ -1,8 +1,26 @@
 # Status
 
-Last updated: 2026-10-31 (wave 15: 45-page user-connectable connector catalog with verified free tiers; comment live call hit a 403 and was not retried; incident live run awaits explicit approval)
+Last updated: 2026-11-01 (wave 16: credential foundation + Sentry/Grafana/PagerDuty/Kubernetes adapters merged; wave 15 live paths both passed)
 
-## Current: wave 15 — user-connectable connectors + verified free tiers (2026-10-31)
+## Current: wave 16 — credential foundation + first four adapters (2026-11-01)
+
+- **Credential foundation** (`f30f952`, merge `2368530`): shared connector types; migration `0010_connectors.sql` (**not applied**); tenant-scoped `ConnectorCredentialRepository` with ciphertext only via `getSecret` and revoke zeroing both bytea columns; atomic `connector_usage_ledger.consume` (parallel tests stop at the limit); AES-256-GCM KEK/DEK envelope with AAD binding and fixed errors; `ConnectorCredentialBroker` with active-only resolution, callback-only material, and opt-in single-tenant env fallback.
+- **Adapters** (all fake-fetch tested, zero live calls):
+  - Sentry `5cd1324` / merge `3d106f7` — raw-body HMAC + replay window, created/unresolved normalization, four-call context (issue → latest event → release → deploy), three read-only tools.
+  - PagerDuty `c92378b` / merge `411c807` — v3 `v1=` HMAC, freshness check, incident/log/service/escalation context, three read-only tools + audited acknowledge/resolve.
+  - Kubernetes `02cbf6f` / merge `484b473` — injected HTTPS client, read-only RBAC profile (no kubeconfig, secrets/configmaps/exec blocked), events/pod/log tail/deployment context, four read-only tools.
+  - Grafana `f48fb8b` / merge `b4330ad` — optional `<timestamp>:<body>` HMAC, production-only severity selection, bounded metric/log/rule context, three read-only tools.
+- **Integration**: barrel exports wired (`fa04c5e`, `709590c`); typecheck 8/8. Tool functions are exported but **not registered** in the tool registry yet, so the agent cannot call them — the same gap as `github.comment` / `github.rerun_workflow`.
+- **Gates on main**: biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · **1928 pass / 0 fail / 10 skip** offline (1938 total) ×2 · offline acceptance 7/7.
+- **Not done**: migration `0010` application (needs approval); credential broker → per-task tool registry binding; webhook routing for sentry/grafana/pagerduty; worker context-loader wiring; web connect/rotate/revoke actions; per-adapter bounded live acceptance with user keys; free-tier ledger enforcement in the tool path.
+
+### Wave 16 open items
+1. Apply `0010_connectors.sql` with user approval and verify both tables.
+2. Bind the broker and adapters into the worker tool registry and per-source intake/context loader (W16-BIND).
+3. Build the web connect flow (`docs/connector-onboarding.md` §1–§3) and the 80% free-tier guard in the tool path.
+4. One bounded live acceptance per adapter once a user account/credential exists.
+
+## Previous: wave 15 — user-connectable connectors + verified free tiers (2026-10-31)
 
 **Scope correction (user):** the connectors are for **users to connect their own free or self-hosted accounts**; the sandbox agent uses them through trusted server-side tools. The platform ships no vendor credentials and must stay at zero platform cost.
 

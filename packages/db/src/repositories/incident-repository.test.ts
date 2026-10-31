@@ -187,6 +187,43 @@ test("countActiveIncidentTasks respects window, sources, tenant and fingerprint"
 	).toBe(0);
 });
 
+test("finished incidents do not consume the concurrency cap", async () => {
+	const tasks = tasksRepo();
+	const repo = new InMemoryIncidentRepository(tasks);
+	const first = await createTask(tasks, {
+		idempotencyKey: "inc-a",
+		incidentSource: "github",
+		incidentFingerprint: "fp-a",
+	});
+	await createTask(tasks, {
+		idempotencyKey: "inc-b",
+		incidentSource: "github",
+		incidentFingerprint: "fp-b",
+	});
+	const since = new Date(Date.now() - 60 * 60 * 1000);
+	expect(
+		await repo.countActiveIncidentTasks({
+			organizationId: ORG_A,
+			since,
+			sources: ["github"],
+		}),
+	).toBe(2);
+
+	const failed = await tasks.transition({
+		taskId: first.id,
+		to: "failed",
+		expectedStatus: "queued",
+	});
+	expect(failed.ok).toBe(true);
+	expect(
+		await repo.countActiveIncidentTasks({
+			organizationId: ORG_A,
+			since,
+			sources: ["github"],
+		}),
+	).toBe(1);
+});
+
 test("normalizeIncidentSignalInput rejects oversize and empty fields", () => {
 	expect(() =>
 		normalizeIncidentSignalInput(signal({ source: "x".repeat(33) })),

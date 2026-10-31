@@ -22,8 +22,10 @@ import type { PgSql } from "../client";
  *   indistinguishable from a missing one.
  *
  * `countActiveIncidentTasks` backs the max-2 concurrent incident tasks cap:
- * it counts tasks in the requested window that carry an incident fingerprint
- * and came from one of the requested sources.
+ * it counts **non-terminal** tasks in the requested window that carry an
+ * incident fingerprint and came from one of the requested sources. A failed or
+ * completed incident must not consume the cap — otherwise two finished
+ * incidents would block every new one until the window rolls over.
  */
 
 export const INCIDENT_DEDUPE_WINDOW_SECONDS = 1800;
@@ -244,7 +246,8 @@ const STMT = {
 		WHERE organization_id = $1
 		  AND incident_fingerprint IS NOT NULL
 		  AND incident_source = ANY($2::text[])
-		  AND created_at >= $3::timestamptz`,
+		  AND created_at >= $3::timestamptz
+		  AND status NOT IN ('completed', 'failed', 'cancelled', 'blocked')`,
 } as const;
 
 export class PostgresIncidentRepository implements IncidentRepository {

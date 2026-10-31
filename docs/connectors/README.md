@@ -20,17 +20,23 @@ An inbound webhook is a **task source, not an execution path**: it can create a 
 
 ## 2. Status matrix
 
-| Connector | Trigger (inbound) | Context (read) | Writes | Status | Page |
-|---|---|---|---|---|---|
-| GitHub | Implemented: `x-hub-signature-256` | Implemented: `fetchGitHubIncidentContext` | Implemented as integration functions, not exposed as agent tools | **Implemented** | [github.md](github.md) |
-| Generic signed webhook | Implemented: `X-Isolate-Signature` | None (no read API) | None | **Implemented** | [generic-webhook.md](generic-webhook.md) |
-| Sentry | Design only | Design only | None | **Design-only** | [sentry.md](sentry.md) |
-| PagerDuty | Design only | Design only | None | **Design-only** | [pagerduty.md](pagerduty.md) |
-| Datadog | Design only | Design only | None | **Design-only** | [datadog.md](datadog.md) |
-| Grafana | Design only | Design only | None | **Design-only** | [grafana.md](grafana.md) |
-| Slack | Not applicable (outbound only) | None | Design only (notify) | **Design-only** | [slack.md](slack.md) |
+Implemented today: **GitHub** (App auth, incident context, signed intake, two scoped write functions) and the **generic signed webhook**. Every other connector below is design-only with verified free-tier and API facts. Users are expected to connect their **own** accounts; the platform never ships vendor credentials. See [connector-onboarding.md](../connector-onboarding.md) for the per-organization connect flow and [free-tier-catalog.md](free-tier-catalog.md) for the verified free/paid matrix.
 
-"Design-only" means there is no connector code in this repository. Those pages describe a proposal with verified vendor facts; they must not be read as implemented behavior.
+| Group | Connectors | Free path | Status |
+|---|---|---|---|
+| Source control / CI | [GitHub](github.md), [GitHub security alerts](github-security.md) | GitHub App; Dependabot free; code/secret scanning free on public repos, paid on private | GitHub implemented; security alerts design-only |
+| Incidents | [Sentry](sentry.md), [PagerDuty](pagerduty.md), [Rollbar](rollbar.md), [Better Stack](betterstack.md), [incident.io](incident-io.md), [Rootly](rootly.md) | Sentry Developer, PagerDuty free (5 users), Rollbar (5k occurrences), Better Stack free; incident.io free excludes API/webhooks; Rootly trial-only | Design-only |
+| Metrics / APM | [Grafana](grafana.md), [Datadog](datadog.md), [New Relic](newrelic.md), [Honeycomb](honeycomb.md), [SigNoz](signoz.md), [Axiom](axiom.md), [Elastic](elastic.md), [Splunk](splunk.md) | Grafana Cloud free, Datadog/New Relic/Honeycomb/Axiom free tiers; SigNoz CE and Elastic self-host free; Splunk Free cannot alert | Design-only |
+| Logs / traces | [Loki and Tempo](loki-tempo.md), [Prometheus](prometheus.md) | OSS self-host free; Grafana Cloud allowances | Design-only |
+| Kubernetes / deploy | [Kubernetes](kubernetes.md), [Argo CD](argocd.md) | OSS self-host free | Design-only |
+| Cloud monitoring | [CloudWatch](cloudwatch.md), [Azure Monitor](azure-monitor.md), [GCP Monitoring](gcp-monitoring.md) | Limited always-free allowances; alert webhooks are unsigned (bridge required) | Design-only |
+| Uptime | [UptimeRobot](uptimerobot.md), [Uptime Kuma](uptime-kuma.md) | UptimeRobot free (50 monitors); Kuma OSS self-host | Design-only |
+| Security scanners | [Snyk](snyk.md), [Semgrep](semgrep.md), [Socket](socket.md), [GitGuardian](gitguardian.md), [Trivy](trivy.md), [OSV-Scanner](osv-scanner.md), [Dependency-Track](dependency-track.md), [DefectDojo](defectdojo.md), [Wazuh](wazuh.md), [Falco](falco.md), [CrowdSec](crowdsec.md), [ZAP](zap.md), [Scorecard](scorecard.md) | OSS free; SaaS free tiers vary; Snyk REST API is Enterprise-only | Design-only |
+| Streaming | [Kafka](kafka.md), [Confluent](confluent.md), [Redpanda](redpanda.md), [Aiven Kafka](aiven-kafka.md), [Upstash Kafka](upstash-kafka.md) | Apache Kafka and Aiven free; Confluent/Redpanda trial-only; Upstash discontinued | Design-only |
+| Notification | [Slack](slack.md) | Free workspace | Design-only |
+| Transport | [Generic signed webhook](generic-webhook.md) | Platform | **Implemented** |
+
+"Design-only" means there is no connector code in this repository. Those pages describe a proposal with verified vendor facts; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
 
 The GitHub scoped writes were proven live once on 2026-10-31 (one authorized `github.rerun_workflow` call, audit row persisted, run attempt incremented). They are still not registered as agent tools; see [github.md](github.md) §8.3.
 
@@ -96,10 +102,28 @@ Binding rules are in `apps/web/src/server/incident-intake-runtime.server.ts`. Th
 
 ## 6. Pages
 
+Cross-cutting documents:
+
+- [connector-onboarding.md](../connector-onboarding.md) — how a user connects an account, how credentials are stored/rotated, how the sandbox agent gets tool access, and the free-tier guardrails.
+- [connector-usage.md](../connector-usage.md) — adapter contract, credential broker, multi-connector routing and implementation order.
+- [free-tier-catalog.md](free-tier-catalog.md) — verified free/paid matrix and recommended defaults.
+- [env-reference.md](env-reference.md) — every connector env name, grouped (names only; values blank).
+- [_template.md](_template.md) — checklist for the next connector.
+
+Implemented:
+
 - [github.md](github.md) — App auth, read-only context reader, signed intake, `github.comment` / `github.rerun_workflow`.
 - [generic-webhook.md](generic-webhook.md) — signed transport for any system without a native connector.
-- [sentry.md](sentry.md), [pagerduty.md](pagerduty.md), [datadog.md](datadog.md), [grafana.md](grafana.md), [slack.md](slack.md) — design-only.
-- [_template.md](_template.md) — checklist for the next connector.
+
+Design-only, by group:
+
+- Incidents: [sentry.md](sentry.md), [pagerduty.md](pagerduty.md), [rollbar.md](rollbar.md), [betterstack.md](betterstack.md), [incident-io.md](incident-io.md), [rootly.md](rootly.md), [slack.md](slack.md).
+- Metrics and APM: [grafana.md](grafana.md), [prometheus.md](prometheus.md), [datadog.md](datadog.md), [newrelic.md](newrelic.md), [honeycomb.md](honeycomb.md), [signoz.md](signoz.md), [axiom.md](axiom.md), [elastic.md](elastic.md), [splunk.md](splunk.md).
+- Logs and traces: [loki-tempo.md](loki-tempo.md).
+- Kubernetes and deploy: [kubernetes.md](kubernetes.md), [argocd.md](argocd.md).
+- Cloud monitoring and uptime: [cloudwatch.md](cloudwatch.md), [azure-monitor.md](azure-monitor.md), [gcp-monitoring.md](gcp-monitoring.md), [uptimerobot.md](uptimerobot.md), [uptime-kuma.md](uptime-kuma.md).
+- Security: [github-security.md](github-security.md), [snyk.md](snyk.md), [semgrep.md](semgrep.md), [socket.md](socket.md), [gitguardian.md](gitguardian.md), [trivy.md](trivy.md), [osv-scanner.md](osv-scanner.md), [dependency-track.md](dependency-track.md), [defectdojo.md](defectdojo.md), [wazuh.md](wazuh.md), [falco.md](falco.md), [crowdsec.md](crowdsec.md), [zap.md](zap.md), [scorecard.md](scorecard.md).
+- Streaming: [kafka.md](kafka.md), [confluent.md](confluent.md), [redpanda.md](redpanda.md), [aiven-kafka.md](aiven-kafka.md), [upstash-kafka.md](upstash-kafka.md).
 
 ## 7. Non-negotiable operator rules
 

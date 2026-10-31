@@ -92,6 +92,25 @@ Wave 13 (2026-10-31, one bounded run): a signed GitHub `workflow_run` failure cr
 
 Wave 14 (2026-10-31, one bounded call): the scoped-write path was exercised once through `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`). A preflight read showed run `41085679072` on `ivory-26/agent-bank` as `completed`/`failure` (attempt 1); `github.rerun_workflow` was accepted and GitHub reports **`run_attempt: 2`**. Exactly one audit row was written: `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df`, target `repo:ivory-26/agent-bank:run:41085679072`, `details.outcome = SUCCEEDED`, `details.idempotencyKey = live-rerun-41085679072`. No retry was made. The **`github.comment` path remains fake-tested only** (the one-call budget went to the more sensitive `actions:write` path); the same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval. The live call used the integration function directly — the tool-registry gap above is unchanged.
 
+### 1.4 Connector catalog verified in wave 15
+
+The wave-15 survey widened the candidate set to 40+ connectors and verified each vendor's free path, auth model, trigger scheme and read/write surface. The full per-connector runbooks live in [`docs/connectors/`](connectors/README.md); the free/paid matrix is in [`docs/connectors/free-tier-catalog.md`](connectors/free-tier-catalog.md), and the user-connect/credential-broker design is in [`docs/connector-onboarding.md`](connector-onboarding.md).
+
+| Group | Connectors | Free path (verified 2026-10-31) | Trigger |
+|---|---|---|---|
+| Source control / CI | GitHub, GitHub security alerts | App; public-repo scanning free | `x-hub-signature-256` (raw body) |
+| Incidents | Sentry, PagerDuty, Rollbar, Better Stack, incident.io, Rootly | Free tiers for Sentry/PagerDuty/Rollbar/Better Stack; incident.io free excludes API; Rootly trial | Sentry/PagerDuty signed; others bridge |
+| Metrics / APM | Grafana, Datadog, New Relic, Honeycomb, SigNoz, Axiom, Elastic, Splunk | Free tiers except SigNoz Cloud/Elastic Cloud (trial) and Splunk Free (no alerting) | Grafana optional HMAC; others unsigned → bridge |
+| Logs / traces | Prometheus, Loki, Tempo | OSS self-host free | Alertmanager/generic bridge |
+| Kubernetes / deploy | Kubernetes, Argo CD | OSS self-host free | Notifications webhook (unsigned) |
+| Cloud monitoring | CloudWatch, Azure Monitor, GCP Monitoring | Limited always-free allowances | Unsigned → bridge |
+| Uptime | UptimeRobot, Uptime Kuma | Free / OSS | Unsigned → bridge |
+| Security | Snyk, Semgrep, Socket, GitGuardian, Trivy, OSV-Scanner, Dependency-Track, DefectDojo, Wazuh, Falco, CrowdSec, ZAP, Scorecard | OSS free; SaaS free tiers vary; Snyk API Enterprise-only | Mixed; several signed, several bridge-only |
+| Streaming | Kafka, Confluent, Redpanda, Aiven Kafka, Upstash Kafka | Kafka/Aiven free; Confluent/Redpanda trial; Upstash discontinued | No native webhook — consumer bridge |
+| Notification | Slack | Free workspace | Outbound only |
+
+Two conclusions matter for the product: (1) **users connect their own accounts**, so credentials belong in a per-organization encrypted store rather than deployment env; (2) **most observability vendors do not sign webhooks**, so the generic signed bridge or a canonical re-fetch is mandatory before trusting a payload. Both are specified in the cross-cutting documents above.
+
 ---
 
 ## 2. Shared connector boundary

@@ -78,6 +78,44 @@ describe("toTaskContext", () => {
 		).toBeUndefined();
 	});
 
+	test("forwards a bounded incident fingerprint when the row exposes one", () => {
+		const withFingerprint = row() as TaskContextSourceRow & {
+			incidentFingerprint?: string;
+		};
+		withFingerprint.incidentFingerprint = "github:acme/platform:ci:main";
+		expect(
+			toTaskContext(withFingerprint, {
+				organizationId: ORG,
+				taskId: TASK,
+			}).incidentFingerprint,
+		).toBe("github:acme/platform:ci:main");
+
+		// Bounded to the shared contract; blank values are treated as absent.
+		const oversized = row() as TaskContextSourceRow & {
+			incidentFingerprint?: string;
+		};
+		oversized.incidentFingerprint = "f".repeat(200);
+		expect(
+			toTaskContext(oversized, {
+				organizationId: ORG,
+				taskId: TASK,
+			}).incidentFingerprint?.length,
+		).toBe(128);
+		const blank = row() as TaskContextSourceRow & {
+			incidentFingerprint?: string;
+		};
+		blank.incidentFingerprint = "   ";
+		expect(
+			toTaskContext(blank, { organizationId: ORG, taskId: TASK })
+				.incidentFingerprint,
+		).toBeUndefined();
+		// Ordinary tasks carry no fingerprint and never request incident reads.
+		expect(
+			toTaskContext(row(), { organizationId: ORG, taskId: TASK })
+				.incidentFingerprint,
+		).toBeUndefined();
+	});
+
 	test("rejects a mismatched organization", () => {
 		expect(() =>
 			toTaskContext(row(), {

@@ -1,4 +1,4 @@
-import { PlatformError } from "@isolate/shared";
+import { type ContextItem, PlatformError } from "@isolate/shared";
 import { Agent, type ToolsInput } from "@mastra/core/agent";
 import type { ToolDecisionRecord } from "../tools/registry";
 import type { SandboxToolBackend } from "../tools/sandbox-backend";
@@ -33,6 +33,19 @@ export type TaskContext = {
 	 * worker falls back to `repoUrl` (same string for every job on one repo).
 	 */
 	repositoryId?: string;
+	/** Wave 13: set for incident-triggered tasks; enables context loading. */
+	incidentFingerprint?: string;
+	/**
+	 * Wave 13: bounded, cited, untrusted incident evidence appended to the
+	 * prompt. Every item is data, never an instruction or an authorization.
+	 */
+	contextBundle?: ContextItem[];
+	/**
+	 * Wave 13: `ContextBundle.truncated`. The items array alone cannot carry
+	 * the flag, so the loader result records it here and the prompt renders
+	 * `(truncated)` when evidence was dropped or capped.
+	 */
+	contextBundleTruncated?: boolean;
 	limits: TaskLimits;
 };
 

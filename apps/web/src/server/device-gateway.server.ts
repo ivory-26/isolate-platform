@@ -1,0 +1,507 @@
+import "@tanstack/react-start/server-only";
+import {
+	CONNECTOR_CALL_MAX_PARAMS_BYTES,
+	CONNECTOR_CALL_MAX_RESULT_BYTES,
+	type ConnectorCallRecord,
+	type ConnectorCallRepository,
+	type ConnectorCredentialRepository,
+	type ConnectorDeviceRepository,
+	createDb,
+	normalizeBoundedConnectorJsonObject,
+	type PgSql,
+	PostgresConnectorCallRepository,
+	PostgresConnectorCredentialRepository,
+	PostgresConnectorDeviceRepository,
+} from "@isolate/db";
+import {
+	DEVICE_PROXY_ERROR_CODES,
+	hashConnectorDeviceToken,
+} from "@isolate/integrations";
+import {
+	type ConnectorDeviceSummary,
+	connectorCredentialRefSchema,
+	connectorIdSchema,
+	type OrganizationId,
+	PlatformError,
+} from "@isolate/shared";
+
+/**
+ * Device daemon poll transport.
+ *
+ * The worker enqueues a typed connector call; the user's device polls
+ * `/api/device/claim`, executes against the provider locally (its own keychain
+ * item, its own network egress) and posts a bounded result. The server never
+ * receives a provider key: it stores only the sha256 device token hash, opaque
+ * credential metadata and bounded tool arguments.
+ *
+ * Authentication is `Authorization: Bearer <device token>`. The presented token
+ * is hashed, resolved to a tenant through an index lookup and then re-verified
+ * in constant time by `ConnectorDeviceRepository.verifyByTokenHash`. Missing,
+ * malformed, unknown, pending and revoked tokens are all a generic 401; no
+ * response ever echoes the token, the body or a database value.
+ *
+ * `DEVICE_GATEWAY_ENABLED` must be exactly `true` (after trim) or the runtime
+ * refuses to build. Failure is a 503, never an open endpoint.
+ */
+
+export const DEVICE_GATEWAY_ENABLED_VARIABLE = "DEVICE_GATEWAY_ENABLED";
+export const DEVICE_GATEWAY_MAX_RESULT_BODY_BYTES = 256 * 1024;
+export const DEVICE_GATEWAY_MAX_CLAIM_PARAMS_BYTES =
+	CONNECTOR_CALL_MAX_PARAMS_BYTES;
+
+const BEARER_PATTERN = /^Bearer ([^\s]+)$/i;
+const UUID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
+const DEVICE_RESULT_ERROR_CODES: ReadonlySet<string> = new Set(
+	DEVICE_PROXY_ERROR_CODES,
+);
+const NO_STORE = { "cache-control": "no-store" } as const;
+
+export class DeviceGatewayNotConfiguredError extends Error {
+	constructor() {
+		super("device gateway is not configured");
+		this.name = "DeviceGatewayNotConfiguredError";
+	}
+}
+
+export class DeviceGatewayBodyTooLargeError extends Error {
+	constructor() {
+		super("device request body is too large");
+		this.name = "DeviceGatewayBodyTooLargeError";
+	}
+}
+
+/** Test/ops visibility only; never true by default. */
+export function isDeviceGatewayEnabled(
+	env: Record<string, string | undefined>,
+): boolean {
+	const value = env[DEVICE_GATEWAY_ENABLED_VARIABLE];
+	return value !== undefined && value.trim().toLowerCase() === "true";
+}
+
+/**
+ * Index lookup from token hash to the owning tenant. The authoritative check is
+ * still `verifyByTokenHash`; this only avoids a cross-tenant table scan.
+ */
+export type DeviceTokenHashLookup = (
+	tokenHash: string,
+) => Promise<{ organizationId: OrganizationId } | null>;
+
+export type DeviceGatewayDependencies = {
+	devices: ConnectorDeviceRepository;
+	credentials: ConnectorCredentialRepository;
+	calls: ConnectorCallRepository;
+	lookupTokenHash: DeviceTokenHashLookup;
+	now?: () => Date;
+};
+
+export type DeviceGateway = {
+	handleClaim(request: Request): Promise<Response>;
+	handleResult(request: Request): Promise<Response>;
+	handleHeartbeat(request: Request): Promise<Response>;
+};
+
+type AuthenticatedDevice = {
+	device: ConnectorDeviceSummary;
+	organizationId: OrganizationId;
+};
+
+function response(status: number, body: unknown): Response {
+	return Response.json(body, {
+		status,
+		headers: NO_STORE,
+	});
+}
+
+function unauthorized(): Response {
+	return response(401, { error: "device authentication failed" });
+}
+
+function unavailable(): Response {
+	return response(503, { error: "device gateway is unavailable" });
+}
+
+function invalidRequest(): Response {
+	return response(400, { error: "device request is invalid" });
+}
+
+function tooLarge(): Response {
+	return response(413, { error: "device request is too large" });
+}
+
+function callNotFound(): Response {
+	return response(404, { error: "connector call not found" });
+}
+
+function callNotClaimed(): Response {
+	return response(409, { error: "connector call is not claimed" });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+function readBearerToken(headers: Headers): string | null {
+	const raw = headers.get("authorization");
+	if (raw === null) return null;
+	const match = BEARER_PATTERN.exec(raw.trim());
+	return match === null ? null : match[1];
+}
+
+/** Reads the body with both a declared-length and a streamed-bytes cap. */
+async function readBoundedBody(
+	request: Request,
+	maxBytes: number,
+): Promise<string> {
+	const declared = request.headers.get("content-length");
+	if (declared !== null) {
+		const length = Number(declared);
+		if (Number.isFinite(length) && length > maxBytes) {
+			throw new DeviceGatewayBodyTooLargeError();
+		}
+	}
+	if (request.body === null) return "";
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	let finished = false;
+	try {
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) {
+				finished = true;
+				break;
+			}
+			total += next.value.byteLength;
+			if (total > maxBytes) throw new DeviceGatewayBodyTooLargeError();
+			chunks.push(next.value);
+		}
+	} finally {
+		if (!finished) await reader.cancel().catch(() => undefined);
+	}
+	const body = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	try {
+		return new TextDecoder("utf-8", { fatal: true }).decode(body);
+	} catch {
+		throw new PlatformError("VALIDATION_FAILED", "body is not UTF-8");
+	}
+}
+
+/** `POST /api/device/calls/{id}/result` — id is the penultimate path segment. */
+export function readDeviceCallId(request: Request): string | null {
+	let segments: string[];
+	try {
+		segments = new URL(request.url).pathname.split("/").filter(Boolean);
+	} catch {
+		return null;
+	}
+	const index = segments.lastIndexOf("calls");
+	if (index < 0 || index + 2 >= segments.length) return null;
+	if (segments[index + 2] !== "result") return null;
+	const candidate = segments[index + 1];
+	if (candidate === undefined || !UUID_PATTERN.test(candidate)) return null;
+	return candidate.toLowerCase();
+}
+
+type ParsedResult =
+	| { ok: true; data: Record<string, unknown> }
+	| { ok: false; errorCode: string };
+
+/**
+ * Strict result envelope: `{ ok: true, data }` or `{ ok: false, errorCode }`.
+ * Extra keys, non-object data, unknown error codes and credential-shaped text
+ * are all rejected with fixed text.
+ */
+export function parseDeviceResultBody(text: string): ParsedResult {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new PlatformError("VALIDATION_FAILED", "result body is not JSON");
+	}
+	if (!isPlainObject(parsed)) {
+		throw new PlatformError("VALIDATION_FAILED", "result body is invalid");
+	}
+	const keys = Object.keys(parsed).sort();
+	if (
+		parsed.ok === true &&
+		keys.length === 2 &&
+		keys[0] === "data" &&
+		keys[1] === "ok"
+	) {
+		return {
+			ok: true,
+			data: normalizeBoundedConnectorJsonObject(
+				parsed.data,
+				"connector call result",
+				CONNECTOR_CALL_MAX_RESULT_BYTES,
+			),
+		};
+	}
+	if (
+		parsed.ok === false &&
+		keys.length === 2 &&
+		keys[0] === "errorCode" &&
+		keys[1] === "ok" &&
+		typeof parsed.errorCode === "string" &&
+		ERROR_CODE_PATTERN.test(parsed.errorCode) &&
+		DEVICE_RESULT_ERROR_CODES.has(parsed.errorCode)
+	) {
+		return { ok: false, errorCode: parsed.errorCode };
+	}
+	throw new PlatformError("VALIDATION_FAILED", "result body is invalid");
+}
+
+function claimPayload(call: ConnectorCallRecord, credentialRef: string) {
+	const params = normalizeBoundedConnectorJsonObject(
+		call.params,
+		"connector call params",
+		DEVICE_GATEWAY_MAX_CLAIM_PARAMS_BYTES,
+	);
+	const ref = connectorCredentialRefSchema.safeParse(credentialRef);
+	if (!ref.success || !connectorIdSchema.safeParse(call.connectorId).success) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			"connector call metadata is invalid",
+		);
+	}
+	return {
+		id: call.id,
+		connectorId: call.connectorId,
+		credentialRef: ref.data,
+		toolName: call.toolName,
+		params,
+		deadlineAt: call.expiresAt.toISOString(),
+	};
+}
+
+export function createDeviceGateway(
+	dependencies: DeviceGatewayDependencies,
+): DeviceGateway {
+	const now = dependencies.now ?? (() => new Date());
+
+	const authenticate = async (
+		request: Request,
+	): Promise<AuthenticatedDevice | null> => {
+		const token = readBearerToken(request.headers);
+		if (token === null) return null;
+		let tokenHash: string;
+		try {
+			tokenHash = hashConnectorDeviceToken(token);
+		} catch {
+			return null;
+		}
+		const owner = await dependencies.lookupTokenHash(tokenHash);
+		if (owner === null) return null;
+		const device = await dependencies.devices.verifyByTokenHash(
+			owner.organizationId,
+			tokenHash,
+		);
+		if (device === null || device.status !== "active") return null;
+		await dependencies.devices.touchSeen(
+			device.organizationId,
+			device.id,
+			now(),
+		);
+		return { device, organizationId: device.organizationId };
+	};
+
+	return {
+		async handleClaim(request) {
+			const auth = await authenticate(request);
+			if (auth === null) return unauthorized();
+			const call = await dependencies.calls.claimNext(auth.device.id);
+			if (call === null) return response(200, { call: null });
+			if (call.organizationId !== auth.organizationId) {
+				// Defense in depth: a cross-tenant row is never handed to a device.
+				await dependencies.calls.fail({
+					callId: call.id,
+					deviceId: auth.device.id,
+					errorCode: "VALIDATION_FAILED",
+				});
+				return response(200, { call: null });
+			}
+			const credential = await dependencies.credentials.get(
+				auth.organizationId,
+				call.credentialId,
+			);
+			let payload: ReturnType<typeof claimPayload>;
+			try {
+				if (
+					credential === null ||
+					credential.deviceId !== auth.device.id ||
+					credential.organizationId !== auth.organizationId ||
+					credential.status !== "active"
+				) {
+					throw new PlatformError(
+						"INTEGRATION_UNAVAILABLE",
+						"connector credential is unavailable",
+					);
+				}
+				payload = claimPayload(call, credential.credentialRef);
+			} catch (error) {
+				// The call cannot be executed without leaking or trusting bad data.
+				await dependencies.calls.fail({
+					callId: call.id,
+					deviceId: auth.device.id,
+					errorCode:
+						error instanceof PlatformError &&
+						error.code === "INTEGRATION_UNAVAILABLE"
+							? "INTEGRATION_UNAVAILABLE"
+							: "VALIDATION_FAILED",
+				});
+				return response(200, { call: null });
+			}
+			return response(200, { call: payload });
+		},
+
+		async handleResult(request) {
+			const auth = await authenticate(request);
+			if (auth === null) return unauthorized();
+			const callId = readDeviceCallId(request);
+			if (callId === null) return callNotFound();
+
+			let text: string;
+			try {
+				text = await readBoundedBody(
+					request,
+					DEVICE_GATEWAY_MAX_RESULT_BODY_BYTES,
+				);
+			} catch (error) {
+				if (error instanceof DeviceGatewayBodyTooLargeError) return tooLarge();
+				if (error instanceof PlatformError) return invalidRequest();
+				throw error;
+			}
+			let parsed: ParsedResult;
+			try {
+				parsed = parseDeviceResultBody(text);
+			} catch {
+				return invalidRequest();
+			}
+
+			const outcome = parsed.ok
+				? await dependencies.calls.complete({
+						callId,
+						deviceId: auth.device.id,
+						result: parsed.data,
+					})
+				: await dependencies.calls.fail({
+						callId,
+						deviceId: auth.device.id,
+						errorCode: parsed.errorCode,
+					});
+			if (outcome.ok) return response(200, { ok: true });
+			return outcome.code === "NOT_FOUND" ? callNotFound() : callNotClaimed();
+		},
+
+		async handleHeartbeat(request) {
+			const auth = await authenticate(request);
+			return auth === null ? unauthorized() : response(200, { ok: true });
+		},
+	};
+}
+
+let sql: PgSql | undefined;
+let sqlUrl: string | undefined;
+let gateway: DeviceGateway | undefined;
+
+function getDatabase(databaseUrl: string): {
+	devices: ConnectorDeviceRepository;
+	credentials: ConnectorCredentialRepository;
+	calls: ConnectorCallRepository;
+	lookupTokenHash: DeviceTokenHashLookup;
+} {
+	if (sql === undefined || sqlUrl !== databaseUrl) {
+		sql = createDb(databaseUrl);
+		sqlUrl = databaseUrl;
+	}
+	const database = sql;
+	return {
+		devices: new PostgresConnectorDeviceRepository(database),
+		credentials: new PostgresConnectorCredentialRepository(database),
+		calls: new PostgresConnectorCallRepository(database),
+		lookupTokenHash: async (tokenHash) => {
+			if (!/^[0-9a-f]{64}$/.test(tokenHash)) return null;
+			const rows = (await database.unsafe(
+				`SELECT organization_id FROM connector_devices WHERE token_hash = $1`,
+				[tokenHash],
+			)) as unknown as Record<string, unknown>[];
+			if (rows.length === 0) return null;
+			return {
+				organizationId: String(rows[0].organization_id) as OrganizationId,
+			};
+		},
+	};
+}
+
+/**
+ * Builds the route gateway from the environment. Disabled by default and
+ * missing `DATABASE_URL` both fail closed with 503 at the route boundary.
+ */
+export function getDeviceGateway(
+	env: Record<string, string | undefined> = process.env,
+): DeviceGateway {
+	if (!isDeviceGatewayEnabled(env)) {
+		throw new DeviceGatewayNotConfiguredError();
+	}
+	const databaseUrl = env.DATABASE_URL;
+	if (databaseUrl === undefined || databaseUrl.trim().length === 0) {
+		throw new DeviceGatewayNotConfiguredError();
+	}
+	if (gateway !== undefined && sqlUrl === databaseUrl) return gateway;
+	const database = getDatabase(databaseUrl);
+	gateway = createDeviceGateway(database);
+	return gateway;
+}
+
+/** Test-only seam: reset the process-local bundle. */
+export function resetDeviceGatewayForTests(): void {
+	gateway = undefined;
+	sql = undefined;
+	sqlUrl = undefined;
+}
+
+/*
+ * Route adapters. Every configuration or database failure collapses to a fixed
+ * 503 with no-store headers; the route modules stay one-liners.
+ */
+
+export async function handleDeviceClaimRoute(
+	request: Request,
+): Promise<Response> {
+	try {
+		return await getDeviceGateway().handleClaim(request);
+	} catch {
+		return unavailable();
+	}
+}
+
+export async function handleDeviceResultRoute(
+	request: Request,
+): Promise<Response> {
+	try {
+		return await getDeviceGateway().handleResult(request);
+	} catch {
+		return unavailable();
+	}
+}
+
+export async function handleDeviceHeartbeatRoute(
+	request: Request,
+): Promise<Response> {
+	try {
+		return await getDeviceGateway().handleHeartbeat(request);
+	} catch {
+		return unavailable();
+	}
+}

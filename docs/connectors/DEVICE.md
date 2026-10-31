@@ -43,8 +43,11 @@ first is in [`../connector-usage.md`](../connector-usage.md) §2.
 | `POST /api/device/calls/{id}/result` | device bearer token | post the bounded result | **implemented** |
 | `POST /api/device/heartbeat` | device bearer token | touch `last_seen_at` | **implemented** |
 
-Server env: `DEVICE_GATEWAY_ENABLED=true` is required; when it is absent every device route
-returns `503`. The gateway never reads a provider key.
+Server env: `DEVICE_GATEWAY_ENABLED=true` is required by both the web gateway and the worker
+(which registers connector tools only when it is set); when it is absent every device route
+returns `503` and connector tools stay denied. `CONNECTOR_FREE_DAILY_CALLS` (default 1000)
+is the platform guard when a credential has no `requestsPerDay`. The gateway never reads a
+provider key.
 
 ## 3. Device token lifecycle
 

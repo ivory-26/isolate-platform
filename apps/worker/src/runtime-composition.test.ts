@@ -17,6 +17,7 @@ import type { Logger, OrganizationId, TaskId } from "@isolate/shared";
 import { workerConfigSchema } from "./config";
 import {
 	createConfiguredWorkerComposition,
+	createIncidentContextBundleLoader,
 	createRunSummaryReader,
 	createSandboxEnvResolver,
 	createToolInvocationRecorder,
@@ -248,23 +249,23 @@ describe("configured composition", () => {
 	});
 });
 
-describe("GitHub App credential wiring", () => {
-	async function privateKeyPem(): Promise<string> {
-		const pair = await crypto.subtle.generateKey(
-			{
-				name: "RSASSA-PKCS1-v1_5",
-				modulusLength: 2048,
-				publicExponent: new Uint8Array([1, 0, 1]),
-				hash: "SHA-256",
-			},
-			true,
-			["sign", "verify"],
-		);
-		const der = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
-		const body = Buffer.from(der).toString("base64");
-		return `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
-	}
+async function privateKeyPem(): Promise<string> {
+	const pair = await crypto.subtle.generateKey(
+		{
+			name: "RSASSA-PKCS1-v1_5",
+			modulusLength: 2048,
+			publicExponent: new Uint8Array([1, 0, 1]),
+			hash: "SHA-256",
+		},
+		true,
+		["sign", "verify"],
+	);
+	const der = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
+	const body = Buffer.from(der).toString("base64");
+	return `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+}
 
+describe("GitHub App credential wiring", () => {
 	test("absent GitHub config yields no broker", () => {
 		expect(selectGitHubTokenProvider({})).toBeNull();
 	});
@@ -420,6 +421,105 @@ describe("GitHub App credential wiring", () => {
 		expect(typeof withSandbox.overrides.pullRequest?.createPullRequest).toBe(
 			"function",
 		);
+	});
+});
+
+describe("wave-13 incident context seam", () => {
+	const ORG = "11111111-1111-4111-8111-111111111111" as OrganizationId;
+	const OTHER_ORG = "22222222-2222-4222-8222-222222222222" as OrganizationId;
+	const TASK = "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f" as TaskId;
+
+	function incidentTask(
+		overrides: Record<string, unknown> = {},
+	): Pick<TaskRepository, "get"> {
+		return {
+			get: async () =>
+				({
+					id: TASK,
+					organization_id: ORG,
+					incident_fingerprint: "github:acme/widget:ci:main",
+					...overrides,
+				}) as unknown as TaskRow,
+		};
+	}
+
+	function countingTokenProvider(counter: { calls: number }) {
+		return {
+			getInstallationToken: async () => {
+				counter.calls += 1;
+				return { token: "test-token" };
+			},
+		} as unknown as Parameters<typeof createIncidentContextBundleLoader>[0];
+	}
+
+	test("ordinary, foreign and missing tasks never mint a token or read GitHub", async () => {
+		const counter = { calls: 0 };
+		const input = {
+			organizationId: ORG,
+			taskId: TASK,
+			repositoryFullName: "acme/widget",
+			ref: "task/x",
+		};
+
+		const ordinary = createIncidentContextBundleLoader(
+			countingTokenProvider(counter),
+			incidentTask({ incident_fingerprint: null }),
+		);
+		expect(await ordinary(input)).toBeNull();
+
+		const foreign = createIncidentContextBundleLoader(
+			countingTokenProvider(counter),
+			incidentTask(),
+		);
+		expect(await foreign({ ...input, organizationId: OTHER_ORG })).toBeNull();
+
+		const missing = createIncidentContextBundleLoader(
+			countingTokenProvider(counter),
+			{ get: async () => null },
+		);
+		expect(await missing(input)).toBeNull();
+		expect(counter.calls).toBe(0);
+	});
+
+	test("a fingerprint with a malformed repository fails before any token call", async () => {
+		const counter = { calls: 0 };
+		const loader = createIncidentContextBundleLoader(
+			countingTokenProvider(counter),
+			incidentTask(),
+		);
+		await expect(
+			loader({
+				organizationId: ORG,
+				taskId: TASK,
+				repositoryFullName: "not-a-repository",
+				ref: "task/x",
+			}),
+		).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+		expect(counter.calls).toBe(0);
+	});
+
+	test("the configured composition binds the seam only with a GitHub broker", async () => {
+		const withoutGitHub = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{},
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(withoutGitHub.overrides.loadContextBundle).toBeUndefined();
+
+		const withGitHub = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_INSTALLATION_ID: "2",
+				GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+			},
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(withoutGitHub.githubAuth).toBe(false);
+		expect(withGitHub.githubAuth).toBe(true);
+		expect(typeof withGitHub.overrides.loadContextBundle).toBe("function");
 	});
 });
 

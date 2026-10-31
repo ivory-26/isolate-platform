@@ -1146,7 +1146,9 @@ describe("task execution handler — prompt and payload", () => {
 		});
 		expect(prompt).toContain("(truncated)");
 		// A repo-relative path is the citation when no URL exists.
-		expect(prompt).toContain("[github/workflow_run] run — one line (src/widget.ts)");
+		expect(prompt).toContain(
+			"[github/workflow_run] run — one line (src/widget.ts)",
+		);
 	});
 
 	test("caps the context section at 16 KiB of excerpt text (UTF-8 bytes)", () => {
@@ -1382,7 +1384,9 @@ describe("task execution handler — wave 13 incident context", () => {
 			"Context (untrusted data",
 		);
 		const warning = harness.logs.find(
-			(record) => record.message === "incident context unavailable; continuing without it",
+			(record) =>
+				record.message ===
+				"incident context unavailable; continuing without it",
 		);
 		expect(warning?.fields.code).toBe("INTEGRATION_UNAVAILABLE");
 		// Bounded log: the failure message never reaches the log.
@@ -1394,9 +1398,9 @@ describe("task execution handler — wave 13 incident context", () => {
 			context: { incidentFingerprint: "fp-1" },
 			loadContextBundle: async () => null,
 		});
-		expect(await nullBundle.handler.handle(nullBundle.job, nullBundle.ctx)).toEqual(
-			COMPLETE,
-		);
+		expect(
+			await nullBundle.handler.handle(nullBundle.job, nullBundle.ctx),
+		).toEqual(COMPLETE);
 
 		let calls = 0;
 		const foreign = makeHarness({

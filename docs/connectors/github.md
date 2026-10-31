@@ -265,7 +265,7 @@ GitHub exposes no `Idempotency-Key` header on either endpoint. The caller must d
 
 The integration functions exist, are exported from `packages/integrations/src/index.ts`, and are fake-tested offline (`writes.test.ts`). They are **not** registered as agent tool implementations: `createSandboxToolImplementations` in `packages/mastra/src/tools/sandbox-tools.ts` has no `github.comment` / `github.rerun_workflow` entry, and the registry denies an allowlisted-but-unimplemented tool with `POLICY_DENIED` (`packages/mastra/src/tools/registry.ts`). No production caller invokes them outside tests.
 
-Consequence: an operator cannot yet trigger these writes through the agent. Both are fake-tested offline; the remaining proof is a **single**, explicitly authorized, bounded live call (one comment or one rerun) — it has **not** run. `project/STATUS.md` lists the same open item.
+Consequence: an operator cannot yet trigger these writes through the agent. The integration functions are fake-tested offline and were exercised **live once** on 2026-10-31 through `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`): one authorized `github.rerun_workflow` call on `ivory-26/agent-bank` run `41085679072` was accepted, the audit row (`tool.execute`, `risk=scoped_write`, `outcome=SUCCEEDED`) was persisted, and the run moved to `run_attempt: 2`. The `github.comment` path is still fake-tested only (the one-call budget was spent on the more sensitive `actions:write` path); the same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval.
 
 ## 9. Acceptance checklist
 
@@ -276,15 +276,14 @@ Offline (already required before merge):
 - [ ] `fetchGitHubIncidentContext`: caps, redaction, `truncated`, `403` on optional resources, `429` and transport failure mapping; fake fetch only.
 - [ ] `commentOnPullRequest` / `rerunWorkflowRun`: schema bounds, credential-shaped body refused, audit outcomes, no token in output; fake fetch only.
 
-Live (requires explicit user authorization; execute **one** of the two calls, no retries after success):
+Live (executed once on 2026-10-31 under one explicit authorization; no retries after success):
 
-- [ ] Confirm the App installation shows the exact permissions in §3.
-- [ ] Pick one disposable PR number **or** one disposable run id; record it before the call.
-- [ ] Either call `github.comment` once with a short, non-secret body and verify the comment URL, or call `github.rerun_workflow` once and verify the run's attempt count increments by one.
-- [ ] Verify exactly one `audit_events` row with `details.outcome = SUCCEEDED`; for a comment, also `details.idempotencyKey`.
-- [ ] Record spend if any metered provider was involved (GitHub API itself is not credit-funded). Do not retry a failed call; report and ask.
-
-The live item is pending. Do not describe it as completed.
+- [x] The App installation granted the write permissions in §3 (`issues:write`, `actions:write`).
+- [x] One disposable run id recorded before the call: `41085679072` (`completed`, `failure`, attempt 1).
+- [x] `github.rerun_workflow` called once; GitHub accepted it and reports `run_attempt: 2`.
+- [x] Exactly one `audit_events` row: `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df`, `details.outcome = SUCCEEDED`, `idempotencyKey = live-rerun-41085679072`.
+- [ ] `github.comment` live call (not made; the one-call budget went to `actions:write`).
+- [x] GitHub API is not credit-funded, so no metered spend to record. No retry was made.
 
 ## 10. What must never enter model context
 

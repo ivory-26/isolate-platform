@@ -32,6 +32,8 @@ An inbound webhook is a **task source, not an execution path**: it can create a 
 
 "Design-only" means there is no connector code in this repository. Those pages describe a proposal with verified vendor facts; they must not be read as implemented behavior.
 
+The GitHub scoped writes were proven live once on 2026-10-31 (one authorized `github.rerun_workflow` call, audit row persisted, run attempt incremented). They are still not registered as agent tools; see [github.md](github.md) §8.3.
+
 ## 3. Shared transport rules
 
 Both implemented modes terminate at `POST /api/webhooks/*` (`apps/web/src/routes/api.webhooks.$.tsx`). The mode is chosen from headers alone:

@@ -452,9 +452,9 @@ export function buildTaskPrompt(context: TaskContext): string {
 }
 
 /** Mirrors the shared context caps, enforced again at the prompt boundary. */
-const MAX_PROMPT_CONTEXT_ITEMS = 20;
-const MAX_PROMPT_CONTEXT_EXCERPT_CHARS = 2_000;
-const MAX_PROMPT_CONTEXT_EXCERPT_BYTES = 16 * 1024;
+const MAX_PROMPT_CONTEXT_ITEMS = 100;
+const MAX_PROMPT_CONTEXT_EXCERPT_CHARS = 4_000;
+const MAX_PROMPT_CONTEXT_EXCERPT_BYTES = 256 * 1024;
 const MAX_PROMPT_CONTEXT_TITLE_CHARS = 200;
 const MAX_PROMPT_CONTEXT_FIELD_CHARS = 64;
 

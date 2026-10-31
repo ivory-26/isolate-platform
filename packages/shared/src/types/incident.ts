@@ -91,13 +91,18 @@ export const incidentSignalSchema = z
 	.strict();
 export type IncidentSignal = z.infer<typeof incidentSignalSchema>;
 
-/** Context bundle caps (§4.2), enforced as characters/bytes, not estimates. */
-export const MAX_CONTEXT_ITEMS = 20;
+/**
+ * Context bundle caps (§4.2), enforced as characters/bytes, not estimates.
+ * Raised on 2026-10-31 to 100 items / 4,000 chars each / 256 KiB total: the
+ * model window is ~1M tokens, so the bundle is the binding limit, and the
+ * prompt remains bounded by these numbers rather than by the provider.
+ */
+export const MAX_CONTEXT_ITEMS = 100;
 export const MAX_CONTEXT_TITLE_CHARS = 200;
 export const MAX_CONTEXT_KIND_CHARS = 64;
-export const MAX_CONTEXT_EXCERPT_CHARS = 2000;
+export const MAX_CONTEXT_EXCERPT_CHARS = 4000;
 export const MAX_CONTEXT_PATH_CHARS = 300;
-export const MAX_CONTEXT_TOTAL_EXCERPT_BYTES = 16 * 1024;
+export const MAX_CONTEXT_TOTAL_EXCERPT_BYTES = 256 * 1024;
 export const CONTEXT_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 /** Provenance and handling, never authority. */

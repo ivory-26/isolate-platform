@@ -135,7 +135,7 @@ describe("contextItemSchema", () => {
 			contextItem({ url: undefined, path: "../outside.md" }),
 			contextItem({ url: undefined, path: "docs\\runbook.md" }),
 			contextItem({ extra: true }),
-			contextItem({ excerpt: "x".repeat(2001) }),
+			contextItem({ excerpt: "x".repeat(4001) }),
 			contextItem({ title: "t".repeat(201) }),
 			contextItem({ kind: "k".repeat(65) }),
 			contextItem({ sha256: "not-a-hash" }),
@@ -160,12 +160,12 @@ describe("contextBundleSchema", () => {
 		...overrides,
 	});
 
-	test("accepts exactly 20 items and exactly 16 KiB of excerpt", () => {
-		const sixteenKib = Array.from({ length: 16 }, () =>
-			contextItem({ excerpt: "x".repeat(1024) }),
+	test("accepts the item cap and a 256 KiB excerpt budget", () => {
+		const quarterMib = Array.from({ length: 64 }, () =>
+			contextItem({ excerpt: "x".repeat(4000) }),
 		);
-		expect(MAX_CONTEXT_TOTAL_EXCERPT_BYTES).toBe(16 * 1024);
-		expect(contextBundleSchema.safeParse(bundle(sixteenKib)).success).toBe(
+		expect(MAX_CONTEXT_TOTAL_EXCERPT_BYTES).toBe(256 * 1024);
+		expect(contextBundleSchema.safeParse(bundle(quarterMib)).success).toBe(
 			true,
 		);
 		expect(
@@ -175,17 +175,17 @@ describe("contextBundleSchema", () => {
 		).toBe(true);
 	});
 
-	test("rejects 21 items, excerpt overflow and unknown fields", () => {
+	test("rejects one item over the cap, excerpt overflow and unknown fields", () => {
 		expect(
 			contextBundleSchema.safeParse(
-				bundle(Array.from({ length: 21 }, () => contextItem())),
+				bundle(Array.from({ length: 101 }, () => contextItem())),
 			).success,
 		).toBe(false);
 		expect(
 			contextBundleSchema.safeParse(
 				bundle(
-					Array.from({ length: 17 }, () =>
-						contextItem({ excerpt: "x".repeat(1000) }),
+					Array.from({ length: 80 }, () =>
+						contextItem({ excerpt: "x".repeat(4000) }),
 					),
 				),
 			).success,

@@ -92,6 +92,9 @@ process.env.WEBHOOK_ACTOR_ID = userId;
 process.env.WEBHOOK_ACTOR_ROLE = "owner";
 process.env.WEBHOOK_REPOSITORY_ID = repositoryId;
 process.env.WEBHOOK_BRANCH = branch;
+// Incident tasks must declare at least one owned path to produce a diff.
+process.env.WEBHOOK_FILE_OWNERSHIP =
+	process.env.WEBHOOK_FILE_OWNERSHIP ?? "INCIDENT_REPORT.md";
 process.env.WEBHOOK_WORKFLOW_DEFINITION_ID = workflowDefinitionId;
 process.env.WEBHOOK_WORKFLOW_VERSION = String(workflowVersion);
 

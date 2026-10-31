@@ -386,6 +386,15 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		const seen = new Set<TaskId>();
 		let count = 0;
 		for (const status of TASK_STATUSES) {
+			// Terminal incidents do not consume the concurrent-task cap.
+			if (
+				status === "completed" ||
+				status === "failed" ||
+				status === "cancelled" ||
+				status === "blocked"
+			) {
+				continue;
+			}
 			for (const task of await this.tasks.listByStatus(status, 500)) {
 				if (seen.has(task.id)) continue;
 				seen.add(task.id);

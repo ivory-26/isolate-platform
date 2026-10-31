@@ -574,7 +574,9 @@ async function withIncidentContext(
 			organizationId: ids.organizationId,
 			taskId: ids.taskId,
 			repositoryFullName,
-			ref: context.isolatedBranch,
+			// The incident happened on the base branch; the isolated task branch
+			// does not exist on GitHub yet, so evidence must come from there.
+			ref: context.baseBranch,
 		});
 		if (bundle === null) return context;
 		return {

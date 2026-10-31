@@ -278,6 +278,8 @@ function createClient(config: Config): HttpClient {
 						[SIGNOZ_API_KEY_HEADER]: config.apiKey,
 						...(init.headers as Record<string, string> | undefined),
 					},
+					// Refuse redirects: a provider hop must not forward the key.
+					redirect: "error",
 					signal: AbortSignal.timeout(config.timeoutMs),
 				});
 			} catch {

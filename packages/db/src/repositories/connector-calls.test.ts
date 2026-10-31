@@ -103,6 +103,32 @@ describe("in-memory connector call repository", () => {
 		expect(repo.rowCount).toBe(0);
 	});
 
+	test("enqueue rejects credential material nested in params, but allows token metadata", async () => {
+		const repo = new InMemoryConnectorCallRepository();
+		const cases: Record<string, unknown>[] = [
+			{ headers: { authorization: `Bearer ${"x".repeat(20)}` } },
+			{ note: `sk-proj-${"A".repeat(32)}` },
+			{ nested: { apiKey: "value" } },
+			{ items: [{ ok: true }, { client_secret: "value" }] },
+		];
+		for (const params of cases) {
+			const error = await repo.enqueue(enqueueInput({ params })).then(
+				() => null,
+				(thrown: unknown) => thrown,
+			);
+			expectValidation(error);
+			expect((error as PlatformError).message).not.toContain("Bearer");
+			expect((error as PlatformError).message).not.toContain("sk-proj");
+		}
+		expect(repo.rowCount).toBe(0);
+
+		const allowed = await repo.enqueue(
+			enqueueInput({ params: { tokenBudget: 1_000, tokenCount: 3 } }),
+		);
+		expect(allowed.params).toEqual({ tokenBudget: 1_000, tokenCount: 3 });
+		expect(repo.rowCount).toBe(1);
+	});
+
 	test("claimNext is oldest-first, device-scoped and increments attempts", async () => {
 		const clock = new InMemoryConnectorCallRepository();
 		const first = await clock.enqueue(
@@ -290,6 +316,62 @@ describe("in-memory connector call repository", () => {
 			ok: false,
 			errorCode: "EXPIRED",
 		});
+	});
+
+	test("a scoped awaitResult reads its own row and hides foreign scopes", async () => {
+		const repo = new InMemoryConnectorCallRepository();
+		const call = await repo.enqueue(enqueueInput());
+		await repo.claimNext(DEVICE_A);
+		await repo.complete({
+			callId: call.id,
+			deviceId: DEVICE_A,
+			result: { issue: "SENTRY-1" },
+		});
+		expect(
+			await repo.awaitResult(call.id, 1_000, 10, {
+				organizationId: ORG_A,
+				deviceId: DEVICE_A,
+			}),
+		).toEqual({ ok: true, data: { issue: "SENTRY-1" } });
+		// A leaked call id is useless outside the owning tenant or device.
+		expect(
+			await repo.awaitResult(call.id, 20, 10, {
+				organizationId: ORG_B,
+				deviceId: DEVICE_A,
+			}),
+		).toBeNull();
+		expect(
+			await repo.awaitResult(call.id, 20, 10, {
+				organizationId: ORG_A,
+				deviceId: DEVICE_B,
+			}),
+		).toBeNull();
+		// The pre-scope call shape still works for existing callers/tests.
+		expect(await repo.awaitResult(call.id, 1_000, 10)).toEqual({
+			ok: true,
+			data: { issue: "SENTRY-1" },
+		});
+	});
+
+	test("complete refuses credential material nested in a device result", async () => {
+		const repo = new InMemoryConnectorCallRepository();
+		const call = await repo.enqueue(enqueueInput());
+		await repo.claimNext(DEVICE_A);
+		await expect(
+			repo.complete({
+				callId: call.id,
+				deviceId: DEVICE_A,
+				result: {
+					log: { headers: { authorization: `Bearer ${"x".repeat(20)}` } },
+				},
+			}),
+		).rejects.toBeInstanceOf(PlatformError);
+		const legitimate = await repo.complete({
+			callId: call.id,
+			deviceId: DEVICE_A,
+			result: { events: [], tokenBudget: 1_000 },
+		});
+		expect(legitimate).toEqual({ ok: true, replayed: false });
 	});
 });
 

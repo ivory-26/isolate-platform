@@ -113,6 +113,8 @@ export function createSentryHttpClient(
 				response = await fetchImpl(`${baseUrl}${path}`, {
 					method: "GET",
 					headers,
+					// Refuse redirects: a provider hop must not forward the key.
+					redirect: "error",
 					signal: AbortSignal.timeout(timeoutMs),
 				});
 			} catch {

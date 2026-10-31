@@ -14,12 +14,14 @@ import {
 } from "@isolate/integrations";
 import {
 	CONNECTOR_TOOL_NAMES,
+	CONNECTOR_TOOL_RISKS,
 	type ConnectorToolName,
 	type ToolImplementation,
 	type ToolName,
 } from "@isolate/mastra";
 import {
 	asOrganizationId,
+	assertNoCredentialMaterial,
 	type ErrorCode,
 	type OrganizationId,
 	PlatformError,
@@ -30,11 +32,13 @@ import { z } from "zod";
  * Wave 17 connector tools over the device poll queue.
  *
  * The worker never holds a provider key. For one call it:
- * 1. validates bounded, credential-free arguments,
+ * 1. validates bounded, credential-free arguments (recursive scan),
  * 2. resolves the organization's active device + credential through the
  *    `ConnectorDeviceBroker` (metadata only; no secret),
- * 3. enqueues a typed call for that device (`connector_calls`),
- * 4. awaits a bounded result shorter than the call TTL.
+ * 3. refuses a `scoped_write` tool unless the credential carries a write scope,
+ * 4. enqueues a typed call for that device (`connector_calls`),
+ * 5. awaits a bounded result shorter than the call TTL, scoped to the same
+ *    organization and device.
  *
  * The device daemon polls `/api/device/claim`, executes against the provider
  * with its own keychain item and posts a bounded `{ ok, data }`. Provider text,
@@ -46,12 +50,11 @@ import { z } from "zod";
 const DEFAULT_POLL_MS = 250;
 
 /**
- * Top-level keys that would carry a credential. Connector arguments are typed
- * provider query inputs; a model-supplied token/api-key/header is always a
- * boundary violation, so the call is rejected before anything is enqueued.
+ * A `scoped_write` tool needs an explicit write capability on the resolved
+ * credential. Reads stay available with a read-only token; a state-changing
+ * acknowledge/resolve must never ride a read scope.
  */
-const CREDENTIAL_KEY_PATTERN =
-	/(token|secret|password|passwd|api[-_]?key|apikey|credential|authorization|bearer|cookie|private[-_]?key|access[-_]?key|client[-_]?secret|session[-_]?id)/i;
+const CONNECTOR_WRITE_SCOPE = "connector:write";
 
 /** Strict JSON object at the boundary; unknown keys are forwarded as data. */
 const connectorArgumentsSchema = z.record(
@@ -135,8 +138,10 @@ function validationError(toolName: ConnectorToolName, reason: string) {
 
 /**
  * Validates model arguments before any broker or queue work: a strict bounded
- * JSON object (64 KiB, depth/key/item caps) with no credential-shaped or
- * forbidden top-level key. Returns a detached clone.
+ * JSON object (64 KiB, depth/key/item caps) with no credential material
+ * anywhere in the tree. The recursive scan replaces the old shallow top-level
+ * key check, so `{ headers: { authorization } }` and `{ note: "sk-..." }` are
+ * refused as well. Returns a detached clone.
  */
 export function validateConnectorToolArguments(
 	toolName: ConnectorToolName,
@@ -146,15 +151,8 @@ export function validateConnectorToolArguments(
 	if (!parsed.success) {
 		throw validationError(toolName, "arguments must be a JSON object");
 	}
-	for (const key of Object.keys(parsed.data)) {
-		if (CREDENTIAL_KEY_PATTERN.test(key)) {
-			// The key is not echoed: it may itself be the attempted secret.
-			throw validationError(
-				toolName,
-				"arguments contain a credential-shaped key",
-			);
-		}
-	}
+	// Fixed text, no value echo: the argument may itself be the attempted secret.
+	assertNoCredentialMaterial(parsed.data);
 	// Same JSON caps the queue enforces, applied before the device is woken.
 	assertBoundedDeviceJson(
 		parsed.data,
@@ -162,6 +160,29 @@ export function validateConnectorToolArguments(
 		CONNECTOR_CALL_MAX_PARAMS_BYTES,
 	);
 	return JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>;
+}
+
+/**
+ * Refuses a state-changing call when the resolved credential only carries
+ * read scopes. Checked after resolution and before enqueue, so a denied write
+ * never reaches the device queue.
+ */
+export function assertConnectorWriteScope(
+	toolName: ConnectorToolName,
+	connectorId: string,
+	scopes: readonly string[],
+): void {
+	if (CONNECTOR_TOOL_RISKS[toolName] !== "scoped_write") return;
+	const granted = scopes.some(
+		(scope) =>
+			scope === CONNECTOR_WRITE_SCOPE || scope === `${connectorId}:write`,
+	);
+	if (!granted) {
+		throw new PlatformError(
+			"POLICY_DENIED",
+			`connector "${connectorId}" credential lacks a write scope`,
+		);
+	}
 }
 
 function deviceFailure(connectorId: string, errorCode: string): PlatformError {
@@ -243,6 +264,7 @@ export function createConnectorToolImplementations(
 				resolved.deviceId,
 				resolved.credentialId,
 			);
+			assertConnectorWriteScope(toolName, connectorId, resolved.scopes);
 
 			const call = await deps.calls.enqueue({
 				organizationId,
@@ -259,6 +281,9 @@ export function createConnectorToolImplementations(
 				call.id,
 				timings.awaitTimeoutMs,
 				timings.pollMs,
+				// Tenant-scoped read: a leaked call id cannot return another
+				// organization's or device's result.
+				{ organizationId, deviceId: target.deviceId },
 			);
 			if (outcome === null) {
 				throw new PlatformError(

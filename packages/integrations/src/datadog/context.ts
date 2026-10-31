@@ -308,6 +308,8 @@ function createClient(config: Config): HttpClient {
 				response = await config.fetchImpl(`${config.baseUrl}${path}`, {
 					...init,
 					headers,
+					// Refuse redirects: a provider hop must not forward the key.
+					redirect: "error",
 					signal: AbortSignal.timeout(config.timeoutMs),
 				});
 			} catch {

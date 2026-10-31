@@ -3,6 +3,7 @@ import {
 	type ConnectorCallOutcome,
 	type ConnectorCallRecord,
 	type ConnectorCallRepository,
+	type ConnectorCallScope,
 	InMemoryConnectorCallRepository,
 } from "@isolate/db";
 import type {
@@ -20,7 +21,11 @@ import {
 	type WiredToolOutput,
 	wirePlatformTools,
 } from "@isolate/mastra";
-import { type ErrorCode, PlatformError } from "@isolate/shared";
+import {
+	asOrganizationId,
+	type ErrorCode,
+	PlatformError,
+} from "@isolate/shared";
 import {
 	connectorIdForToolName,
 	createConnectorToolImplementations,
@@ -74,7 +79,8 @@ function makeBroker(resolved: Partial<ResolvedConnectorDevice> = {}): {
 					deviceId: DEVICE_ID,
 					credentialId: CREDENTIAL_ID,
 					credentialRef: "keychain:isolate/test",
-					scopes: [],
+					// Read and write tools share this fixture; deny tests override it.
+					scopes: ["connector:write"],
 					metadata: {},
 					proxy: new NullDeviceProxy(),
 					...resolved,
@@ -87,11 +93,20 @@ function makeBroker(resolved: Partial<ResolvedConnectorDevice> = {}): {
 function makeCalls(outcome: ConnectorCallOutcome | null): {
 	calls: Pick<ConnectorCallRepository, "enqueue" | "awaitResult">;
 	enqueued: EnqueueInput[];
-	awaited: Array<{ callId: string; timeoutMs: number; pollMs: number }>;
+	awaited: Array<{
+		callId: string;
+		timeoutMs: number;
+		pollMs: number;
+		scope: ConnectorCallScope | undefined;
+	}>;
 } {
 	const enqueued: EnqueueInput[] = [];
-	const awaited: Array<{ callId: string; timeoutMs: number; pollMs: number }> =
-		[];
+	const awaited: Array<{
+		callId: string;
+		timeoutMs: number;
+		pollMs: number;
+		scope: ConnectorCallScope | undefined;
+	}> = [];
 	return {
 		enqueued,
 		awaited,
@@ -100,8 +115,8 @@ function makeCalls(outcome: ConnectorCallOutcome | null): {
 				enqueued.push(input);
 				return recordFor(input, enqueued.length);
 			},
-			async awaitResult(callId, timeoutMs, pollMs) {
-				awaited.push({ callId, timeoutMs, pollMs });
+			async awaitResult(callId, timeoutMs, pollMs, scope) {
+				awaited.push({ callId, timeoutMs, pollMs, scope });
 				return outcome;
 			},
 		},
@@ -223,6 +238,9 @@ describe("connector tool surface", () => {
 		expect(enqueued[0]?.ttlMs).toBe(5_000);
 		expect(awaited[0]?.timeoutMs).toBe(4_000);
 		expect(awaited[0]?.timeoutMs).toBeLessThan(5_000);
+		// The result read is scoped to the resolved organization and device.
+		expect(awaited[0]?.scope?.organizationId).toBe(asOrganizationId(ORG));
+		expect(awaited[0]?.scope?.deviceId).toBe(DEVICE_ID);
 	});
 
 	test("an oversized server wait is clamped below the TTL", async () => {
@@ -283,6 +301,63 @@ describe("connector tool surface", () => {
 		);
 		expect(valueError.message).not.toContain("ghp_");
 		expect(calls.rowCount).toBe(0);
+	});
+
+	test("credential material nested in arguments is rejected, token metadata passes", async () => {
+		const { implementation, connectorIds, enqueued } = implementationFor(
+			"sentry.list_issues",
+			{ outcome: { ok: true, data: {} } },
+		);
+		const cases: Record<string, unknown>[] = [
+			{ headers: { authorization: `Bearer ${"x".repeat(20)}` } },
+			{ note: `sk-proj-${"A".repeat(32)}` },
+			{ nested: { apiKey: "value" } },
+		];
+		for (const args of cases) {
+			const error = await expectPlatformCode(
+				implementation(args, context),
+				"VALIDATION_FAILED",
+			);
+			expect(error.message).not.toContain("Bearer");
+			expect(error.message).not.toContain("sk-proj");
+		}
+		expect(connectorIds).toHaveLength(0);
+		expect(enqueued).toHaveLength(0);
+
+		const allowed = await implementation({ tokenBudget: 1_000 }, context);
+		expect(allowed).toEqual({ ok: true, data: {} });
+		expect(enqueued).toHaveLength(1);
+	});
+
+	test("scoped writes require a write scope on the resolved credential", async () => {
+		const denied = implementationFor("pagerduty.acknowledge", {
+			resolved: { scopes: ["incidents:read"] },
+			outcome: { ok: true, data: {} },
+		});
+		const error = await expectPlatformCode(
+			denied.implementation({ incidentId: "P1" }, context),
+			"POLICY_DENIED",
+		);
+		expect(error.message).not.toContain("incidents:read");
+		expect(denied.enqueued).toHaveLength(0);
+
+		for (const scope of ["connector:write", "pagerduty:write"]) {
+			const allowed = implementationFor("pagerduty.resolve", {
+				resolved: { scopes: [scope] },
+				outcome: { ok: true, data: {} },
+			});
+			await allowed.implementation({ incidentId: "P1" }, context);
+			expect(allowed.enqueued).toHaveLength(1);
+		}
+	});
+
+	test("read tools stay callable with read-only scopes", async () => {
+		const read = implementationFor("pagerduty.list_incidents", {
+			resolved: { scopes: ["incidents:read"] },
+			outcome: { ok: true, data: { incidents: [] } },
+		});
+		await read.implementation({}, context);
+		expect(read.enqueued).toHaveLength(1);
 	});
 
 	test("a timeout or an expired row degrades to INTEGRATION_UNAVAILABLE", async () => {

@@ -1,8 +1,22 @@
 # Status
 
-Last updated: 2026-10-30 (wave 12: hardening merged, connector survey written, signed-webhook intake in progress; **live retry proof passed**)
+Last updated: 2026-10-31 (wave 13 merged and live-proven: **signed GitHub incident → task → context → review_ready**; limits raised to 1M/task with a 200M ceiling)
 
-## Current: wave 12 — Hardening + DevSecOps context (hardening merged, retry live-proven, intake in progress)
+## Current: wave 13 — GitHub-native incidents (merged, `0009` applied, live-proven with context)
+
+- **Signals and intake**: migration `0009` applied and verified (`incident_signals` with a 30-minute immutable dedupe bucket, `tasks.incident_source/fingerprint`); `verifyGitHubWebhook` (`x-hub-signature-256`, constant-time, 64 KiB); `workflow_run`/`check_suite` normalizers with the severity/production rule; intake enforces critical/high-on-production, 30-minute dedupe, **max 2 active** (terminal incidents no longer consume the cap) and creates the task with incident metadata.
+- **Context and policy**: read-only `fetchGitHubIncidentContext` (Actions runs, check runs/suites, rulesets, conventions, commits — 13 cited items on the live repo) is injected as a bounded untrusted section **from the base branch**; `github.comment`/`github.rerun_workflow` are `scoped_write`, deploy/rollback `sensitive`.
+- **Task shape**: incident tasks carry a deliverable for the first owned path (`INCIDENT_REPORT.md`) and a bounded turn budget (`WEBHOOK_MAX_AGENT_TURNS`), so the diff gate can actually decide.
+- **Live proof (2026-10-31, one bounded run)**: signed GitHub `workflow_run` failure → task (`github:ivory-26/agent-bank:ci-2dd7dd64:main`) → context loaded (no degrade) → 2 Meta turns → diff → **`review_ready`**. Meta **13,818/1,206** and **11,200/1,357** tokens; one Modal sandbox; **0 running** after; no push.
+- **Limits (operator, 2026-10-31)**: per-task token default **1,000,000** with a **200,000,000** schema ceiling; incident context bundle raised to **100 items / 4,000 chars each / 256 KiB** (shared contract + prompt). Per-turn output stays 8,192 max; USD cap unchanged.
+- **Gates**: biome 0 errors · typecheck 8/8 · **1,714 pass / 0 fail** offline · `acceptance:offline` PASS · web build + sweep + smoke.
+
+### Wave 13 open items
+1. Acceptance PRs `#1`, `#2` and branches (wave 7/8/9) remain as evidence; delete when done.
+2. A comment/rerun live call is still fake-tested only; the App now has the scopes, so one bounded write can prove it.
+3. Incident cap uses a 1-hour window of non-terminal tasks; long-running incidents beyond that no longer count (acceptable, documented in code).
+
+## Previous: wave 12 — Hardening + DevSecOps context (merged, retry live-proven)
 
 Backend hardening only, per the user: no UI, no hosting yet.
 

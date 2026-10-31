@@ -1,8 +1,19 @@
 # Status
 
-Last updated: 2026-10-31 (wave 13 merged and live-proven: **signed GitHub incident → task → context → review_ready**; limits raised to 1M/task with a 200M ceiling)
+Last updated: 2026-10-31 (wave 14: one bounded live `github.rerun_workflow` call accepted — attempt 2 running; connector docs split into operator guides)
 
-## Current: wave 13 — GitHub-native incidents (merged, `0009` applied, live-proven with context)
+## Current: wave 14 — scoped GitHub writes live + connector docs (2026-10-31)
+
+- **Live scoped write (one bounded call, no retry)**: `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`) performs exactly one `comment` or `rerun` through the shipped product path (real App token broker, input bounds, Postgres audit sink). Preflight read of run `41085679072` (`completed`/`failure`, attempt 1) → `rerunWorkflowRun` accepted → audit row `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df` (`tool=github.rerun_workflow`, `risk=scoped_write`, `outcome=SUCCEEDED`, `idempotencyKey=live-rerun-41085679072`) → GitHub reports `run_attempt: 2`, `status: in_progress`. No second write and no retry.
+- **Comment path**: `github.comment` remains fake-tested only because the one-call budget was spent on the more sensitive `actions:write` path. The same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval.
+- **Docs**: `docs/devsecops-connectors.md` now carries an implementation status/code map (P0 transport + P1 GitHub done, P2–P5 design-only), and `docs/connectors/` adds per-connector operator guides (GitHub, generic webhook, Sentry, PagerDuty, Datadog, Grafana, Slack) with env names, scopes, webhook verification, endpoints, caps and "never in context" rules.
+- **Gates**: typecheck 8/8 · scoped `writes.test.ts` 11/11 · **1704 pass / 0 fail / 10 skip** offline (×2) · biome 0 errors · no client surface touched.
+
+### Wave 14 open items
+1. `github.comment` live call still pending (one bounded call; `LIVE_WRITE_MODE=comment`, `LIVE_PR_NUMBER`).
+2. Vendor connectors (Sentry/PagerDuty/Datadog/Grafana/Slack) remain design-only pending the user's answers in `docs/connectors/*.md` and the survey §7.
+
+## Previous: wave 13 — GitHub-native incidents (merged, `0009` applied, live-proven with context)
 
 - **Signals and intake**: migration `0009` applied and verified (`incident_signals` with a 30-minute immutable dedupe bucket, `tasks.incident_source/fingerprint`); `verifyGitHubWebhook` (`x-hub-signature-256`, constant-time, 64 KiB); `workflow_run`/`check_suite` normalizers with the severity/production rule; intake enforces critical/high-on-production, 30-minute dedupe, **max 2 active** (terminal incidents no longer consume the cap) and creates the task with incident metadata.
 - **Context and policy**: read-only `fetchGitHubIncidentContext` (Actions runs, check runs/suites, rulesets, conventions, commits — 13 cited items on the live repo) is injected as a bounded untrusted section **from the base branch**; `github.comment`/`github.rerun_workflow` are `scoped_write`, deploy/rollback `sensitive`.
@@ -24,7 +35,7 @@ Backend hardening only, per the user: no UI, no hosting yet.
 - **Pending means wait** (coordinator, after review): both worker handlers now return a bounded `retry` with `APPROVAL_REQUIRED` while the approval is pending — no task failure, no job consumption. Previously the pre-enqueued job could fail the task before the human answered.
 - **Lease renewal + literal acceptance matching** (`def8254`, merge `bcb8a8b`): `BranchLockRepository.renew` + handler renewal on the heartbeat (5 min against a 15 min lease); `content_matches` is now a bounded literal substring, removing the ReDoS surface.
 - **DevSecOps survey** (`e80f36c`, merge `23cfe35`): `docs/devsecops-connectors.md` — 937 lines, 66 sources, per-connector auth/scopes/webhooks/rate limits, a `ContextBundle` shape with caps and citations, a phased order (webhook → GitHub context → one incident source → metrics → Slack), and a risk register.
-- **Signed incident intake** (`61b84d9`, merge `b5125e0`): `IncidentSignal`/`ContextBundle` contracts (strict, bounded), HMAC-SHA256 webhook verification over `${timestamp}.${body}` with a ±300 s window, 64 KiB body cap and constant-time compare, 30-minute fingerprint dedupe, and a server-only route (`/api/webhooks`) that creates a task through the normal submission path with the payload marked untrusted. Production binding is server-only env (`WEBHOOK_ORGANIZATION_ID`, `WEBHOOK_ACTOR_ID`, `WEBHOOK_REPOSITORY_ID`, workflow pin); missing config → 503, unmapped repository → 404. Body-supplied org/repo fields are rejected by the schema. Client sweep is now **33 checks** (secret and signature headers are forbidden in the bundle).
+- **Signed incident intake** (`61b84d9`, merge `b5125e0`): `IncidentSignal`/`ContextBundle` contracts (strict, bounded), HMAC-SHA256 webhook verification (GitHub signs the **raw body** via `x-hub-signature-256`, no timestamp; generic mode signs `${timestamp}.${body}` with a ±300 s window), 64 KiB body cap and constant-time compare, 30-minute fingerprint dedupe, and a server-only route (`/api/webhooks`) that creates a task through the normal submission path with the payload marked untrusted. Production binding is server-only env (`WEBHOOK_ORGANIZATION_ID`, `WEBHOOK_ACTOR_ID`, `WEBHOOK_REPOSITORY_ID`, workflow pin); missing config → 503, unmapped repository → 404. Body-supplied org/repo fields are rejected by the schema. Client sweep is now **33 checks** (secret and signature headers are forbidden in the bundle).
 - **Live retry proof (2026-10-30)**: failed task `06090543…` → `retryTask` → new task `ef96f8d7…` on `task/w8-live-9c768d96-retry-1`, `retry_of` linked, depth 1, exactly one `run_task`, one attempt, diff artifact, status `review_ready`. Real Meta turns **6403/1801** and **8742/3261** tokens; one Modal sandbox 97 s; **0 running** after. Push disabled, so no GitHub write.
 - **Gates on `main`**: biome 0 errors · typecheck 8/8 · **1611 pass / 0 fail** offline · `acceptance:offline` PASS · web build + **33-check** sweep + smoke.
 

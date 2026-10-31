@@ -16,12 +16,13 @@ Last updated: 2026-11-01 (wave 17: device-held credentials applied to Neon; 10-c
 - **Gates after the device stack**: biome 0 errors (10 pre-existing warnings) · typecheck **9/9** (daemon included) · **2388 tests / 0 fail / 10 skip** offline ×2 · offline acceptance 7/7 · security check PASS (281 source/migration files, 575 tracked).
 
 ### Wave 17 open items
-1. ~~Merge remaining lanes~~ done: all nine adapters, intake, setup/secdocs and the device transport are merged.
-2. ~~Apply `0011_connector_calls.sql`~~ **applied with approval** and verified (`connector_calls` with params/result/status/expiry, no secret columns). Tool binding to the queue is in flight (`task/w17-toolbind`).
-3. ~~Kubernetes local acceptance~~ **PASSED**: `kind v0.33.0` cluster `isolate-demo`, namespace-scoped read-only ServiceAccount (`events`, `pods`, `pods/log`, `deployments`, `replicasets`), one failing demo pod. `scripts/acceptance-k8s-local.ts` (`bun run acceptance:k8s-local`) produced **2 context items** (`kubernetes_events`, `kubernetes_pod`), **930 excerpt bytes**, `truncated: true` (no logs for an image-pull failure). No kubeconfig or token entered the agent sandbox.
-4. One bounded live acceptance per SaaS adapter once the user supplies device-held credentials; the setup guide (`docs/connectors/SETUP.md`) lists every key path for the ten.
-5. Validation loop: full biome/typecheck/tests ×2/acceptance after every merge; security loop after every merge (latest: 2256 tests green, security PASS).
-6. Remaining lanes: `task/w17-toolbind` (worker tool ↔ device queue).
+1. ~~Merge remaining lanes~~ done: nine adapters, intake, setup/secdocs, transport, tool binding, device registration, connect endpoints, daemon and security fixes are merged.
+2. ~~Apply migrations~~ `0010` and `0011` **applied with approval** and verified; no secret columns in either.
+3. ~~Kubernetes local acceptance~~ and ~~end-to-end device proof~~ **PASSED** (`kind` cluster, read-only SA, call `538a0a2a-…` completed with a 903-byte result and one ledger unit).
+4. **SaaS live acceptance deferred by user** (2026-10-31): offline tests only for the hackathon; no vendor credentials were provided or stored. `docs/connectors/SETUP.md` remains the key-fetch runbook.
+5. Validation loop final: biome 0 errors · typecheck 9/9 · **2407 tests / 0 fail / 10 skip ×2** · offline acceptance 7/7.
+6. Security loop final: `security:check` PASS; audit HIGH fixed; `project/SECURITY.md` records fixed vs deferred items.
+7. Known follow-ups: device-token expiry/rotation, streaming response caps, composite tenant constraints (migration), context loading for non-GitHub incident sources, and the web UI.
 
 ## Previous: wave 16 — credential foundation + first four adapters (2026-11-01)
 

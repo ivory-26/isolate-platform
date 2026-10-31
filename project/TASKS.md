@@ -48,8 +48,10 @@ User decisions: keys stay on the user's device (device daemon polls the server);
 | W17-DEVICEREG | `eeb54aa` → merged | **done** — register/list/revoke; token shown once, hash stored |
 | W17-DAEMON | `fb900ea` → merged | **done** — poll loop, complete 31-tool dispatch, local K8s client |
 | W17-CONNECT | `fd65563` → merged | **done** — metadata connect/list/revoke, secret-shape rejection |
-| W17-SECFIX | in flight | recursive secret scan, write-scope check, scoped result reads, redirect policy |
+| W17-SECFIX | `3305bff` → merged | **done** — recursive secret scan, write-scope check, scoped result reads, redirect policy |
 | W17-E2E | local proof | **PASS** — device daemon ↔ gateway ↔ kind cluster; call `538a0a2a-…` completed, 903-byte result, ledger +1 |
+
+SaaS live acceptance was **deferred by the user** (offline-only for the hackathon); no vendor credential was supplied or stored.
 
 Coordinator: `0473367` (31 tool names/risk bands, enums, barrels, `security:check`), `ad675eb` (literal device routes + regenerated route tree), `b9a7e86` (0011 applied record). Migrations applied: `0010` and `0011`, both verified.
 

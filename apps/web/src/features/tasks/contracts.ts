@@ -51,6 +51,41 @@ export const submitTaskSchema = z.strictObject({
 		jobTimeoutMs: true,
 	}),
 });
+/**
+ * Incident provenance (wave 13). Server-internal only: the intake sets both
+ * fields after normalizing a verified delivery. They are deliberately absent
+ * from `submitTaskSchema`, so the browser-facing validators (`submitTask` server
+ * function, task form) reject a client that tries to claim to be an incident
+ * (which would consume the per-organization cap).
+ */
+const incidentProvenanceShape = {
+	incidentSource: z.string().trim().min(1).max(32).optional(),
+	incidentFingerprint: z.string().trim().min(1).max(128).optional(),
+};
+function hasPairedProvenance(value: {
+	incidentSource?: string;
+	incidentFingerprint?: string;
+}): boolean {
+	return (
+		(value.incidentSource === undefined) ===
+		(value.incidentFingerprint === undefined)
+	);
+}
+export const incidentProvenanceSchema = z
+	.strictObject(incidentProvenanceShape)
+	.refine(hasPairedProvenance, {
+		message: "incidentSource and incidentFingerprint must be provided together",
+	});
+export type IncidentProvenance = z.output<typeof incidentProvenanceSchema>;
+/** The ordinary submission plus optional provenance, used server-side only. */
+export const incidentSubmissionSchema = z
+	.strictObject({
+		...submitTaskSchema.shape,
+		...incidentProvenanceShape,
+	})
+	.refine(hasPairedProvenance, {
+		message: "incidentSource and incidentFingerprint must be provided together",
+	});
 export const listTasksSchema = z.strictObject({
 	limit: z.number().int().min(1).max(100).default(25),
 });
@@ -118,7 +153,12 @@ export const submissionCompilationSchema = z.strictObject({
 	compiledPlanId: z.uuid(),
 });
 export type SubmitTaskInput = z.input<typeof submitTaskSchema>;
-export type ValidatedSubmission = z.output<typeof submitTaskSchema>;
+/**
+ * A validated submission. Incident provenance is optional and is only ever set
+ * by the server-side incident intake; the browser-facing schema stays strict
+ * and unknown keys are rejected before reaching the service.
+ */
+export type ValidatedSubmission = z.output<typeof incidentSubmissionSchema>;
 export type RetryTaskInput = z.input<typeof retryTaskSchema>;
 export type ValidatedRetry = z.output<typeof retryTaskSchema>;
 export type DecideApprovalInput = z.input<typeof decideApprovalSchema>;

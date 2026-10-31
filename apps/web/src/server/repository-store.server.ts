@@ -468,6 +468,10 @@ export function createRepositoryStore(
 			const acceptanceCriteria = input.acceptanceCriteria ?? [];
 			const acceptanceChecks = input.acceptanceChecks ?? [];
 			const fileOwnership = input.fileOwnership ?? [];
+			// Incident provenance travels as a pair (see `normalizeIncidentMetadata`);
+			// ordinary submissions carry neither field.
+			const incidentSource = input.incidentSource;
+			const incidentFingerprint = input.incidentFingerprint;
 			const task = await deps.tasks.create({
 				organizationId: scope.organizationId,
 				repositoryId: input.repositoryId,
@@ -478,6 +482,9 @@ export function createRepositoryStore(
 				acceptanceCriteria,
 				acceptanceChecks,
 				fileOwnership,
+				...(incidentSource === undefined || incidentFingerprint === undefined
+					? {}
+					: { incidentSource, incidentFingerprint }),
 				createdBy: scope.userId,
 			});
 			// create returns the existing row on races/idempotency hits. Validate
@@ -494,7 +501,9 @@ export function createRepositoryStore(
 				task.goal !== goal ||
 				!sameList(task.acceptance_criteria, acceptanceCriteria) ||
 				!sameChecks(task.acceptance_checks, acceptanceChecks) ||
-				!sameList(task.file_ownership, fileOwnership)
+				!sameList(task.file_ownership, fileOwnership) ||
+				(incidentFingerprint !== undefined &&
+					task.incident_fingerprint !== incidentFingerprint)
 			)
 				throw new ControlPlaneError("CONFLICT");
 			const job = await deps.queue.enqueue({

@@ -13,6 +13,7 @@ const forbidden = [
 	"BASETEN_",
 	"MODAL_",
 	"WEBHOOK_SIGNING_SECRET",
+	"WEBHOOK_GITHUB_SECRET",
 	"x-isolate-signature",
 	"x-isolate-timestamp",
 	"inference.baseten.co",

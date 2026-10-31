@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	decideApprovalSchema,
+	incidentSubmissionSchema,
 	MAX_SUBMITTED_ACCEPTANCE_CHECKS,
 	retryTaskSchema,
 	submitTaskSchema,
@@ -135,6 +136,45 @@ describe("submitTaskSchema task context", () => {
 				fileOwnership: [""],
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("incident provenance", () => {
+	test("the browser-facing submission rejects provenance fields", () => {
+		expect(
+			submitTaskSchema.safeParse({
+				...base,
+				goal: "ok",
+				incidentSource: "github",
+				incidentFingerprint: "github:owner/repo:CI:main",
+			}).success,
+		).toBe(false);
+	});
+
+	test("server submissions accept provenance only as a bounded pair", () => {
+		const parsed = incidentSubmissionSchema.parse({
+			...base,
+			goal: "ok",
+			incidentSource: "github",
+			incidentFingerprint: "github:owner/repo:CI:main",
+		});
+		expect(parsed.incidentSource).toBe("github");
+		expect(parsed.incidentFingerprint).toBe("github:owner/repo:CI:main");
+		// Neither is valid too (ordinary submission through the same schema).
+		expect(
+			incidentSubmissionSchema.safeParse({ ...base, goal: "ok" }).success,
+		).toBe(true);
+		for (const half of [
+			{ incidentSource: "github" },
+			{ incidentFingerprint: "gitHub:owner/repo:CI:main" },
+			{ incidentSource: "s".repeat(33), incidentFingerprint: "fp" },
+			{ incidentSource: "github", incidentFingerprint: "f".repeat(129) },
+			{ incidentSource: "github", incidentFingerprint: "" },
+		])
+			expect(
+				incidentSubmissionSchema.safeParse({ ...base, goal: "ok", ...half })
+					.success,
+			).toBe(false);
 	});
 });
 

@@ -15,6 +15,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@isolate/db": "workspace:*",
+        "@isolate/integrations": "workspace:*",
         "@isolate/shared": "workspace:*",
         "@isolate/workflow-schema": "workspace:*",
         "@neondatabase/auth": "0.7.0-beta",

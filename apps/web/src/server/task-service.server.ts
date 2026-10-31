@@ -11,12 +11,12 @@ import {
 	decideApprovalSchema,
 	type FailureCode,
 	failureMessages,
+	incidentSubmissionSchema,
 	listTasksSchema,
 	type RetryReceipt,
 	retryTaskSchema,
 	type ServiceResult,
 	type SubmissionReceipt,
-	submitTaskSchema,
 	type TaskSummary,
 	type ValidatedApprovalDecision,
 	type ValidatedRetry,
@@ -110,7 +110,10 @@ export function createTaskService(deps: {
 	}
 	return {
 		submit(input: unknown): Promise<ServiceResult<SubmissionReceipt>> {
-			const parsed = submitTaskSchema.safeParse(input);
+			// Accepts the ordinary submission plus optional incident provenance. The
+			// browser-facing validators use `submitTaskSchema` and reject provenance
+			// before this point, so only the server-side intake can set it.
+			const parsed = incidentSubmissionSchema.safeParse(input);
 			if (!parsed.success)
 				return Promise.resolve({
 					ok: false,

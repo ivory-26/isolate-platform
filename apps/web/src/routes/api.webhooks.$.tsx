@@ -8,13 +8,16 @@ import {
 } from "../server/webhook-signature.server";
 
 /**
- * Generic signed-webhook receiver (H12-4).
+ * Signed-webhook receiver (H12-4, wave 13).
  *
  * `server.handlers` only: no component, no client code, no secret in the
- * bundle. Verification, normalization, dedupe and submission all happen in
- * `incident-intake.server`; this route only maps a bounded result to a status.
- * A successful delivery returns 202 with the task id; a replay is 202 with
- * `deduped: true`. Nothing from the payload is echoed.
+ * bundle. Mode selection (`x-github-event` → GitHub, otherwise generic),
+ * verification, normalization, trigger policy, dedupe, the per-org cap and
+ * submission all happen in `incident-intake.server`; this route only maps a
+ * bounded result to a status. An accepted delivery is 202 with the task and
+ * job ids; a replay is 202 `{deduped: true}`; a non-triggering event is 202
+ * `{accepted: false}` and a capped one 202 `{accepted: false, throttled: true}`.
+ * Nothing from the payload, the signature or the secret is echoed.
  */
 export const Route = createFileRoute("/api/webhooks/$")({
 	server: {
@@ -88,8 +91,19 @@ async function handleWebhookRequest(request: Request): Promise<Response> {
 		return reject("UNAVAILABLE");
 	}
 	if (!result.ok) return reject(result.code);
+	// A non-triggering, duplicate or throttled delivery creates nothing; only a
+	// created (or live-replayed) task carries an id.
+	if (!("taskId" in result)) {
+		return Response.json(
+			{
+				...(result.deduped ? { deduped: true } : { accepted: false }),
+				...(result.throttled ? { throttled: true } : {}),
+			},
+			{ status: 202, headers: { "cache-control": "no-store" } },
+		);
+	}
 	return Response.json(
-		{ taskId: result.taskId, deduped: result.deduped },
+		{ taskId: result.taskId, jobId: result.jobId, deduped: result.deduped },
 		{ status: 202, headers: { "cache-control": "no-store" } },
 	);
 }

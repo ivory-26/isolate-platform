@@ -13,6 +13,7 @@
 	},
 	"dependencies": {
 		"@isolate/db": "workspace:*",
+		"@isolate/integrations": "workspace:*",
 		"@isolate/shared": "workspace:*",
 		"@neondatabase/auth": "0.7.0-beta",
 		"@tanstack/react-query": "5.105.0",

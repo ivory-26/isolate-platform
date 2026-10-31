@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { SandboxToolBackend, ToolDecisionRecord } from "@isolate/mastra";
+import {
+	CONNECTOR_TOOL_RISKS,
+	type SandboxToolBackend,
+	type ToolDecisionRecord,
+	type WiredToolOutput,
+} from "@isolate/mastra";
 import {
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
@@ -118,5 +123,53 @@ describe("createTaskTools", () => {
 			expect(decision.argumentsSha256).toMatch(/^[0-9a-f]{64}$/);
 			expect(decision.durationMs).toBeGreaterThanOrEqual(0);
 		}
+	});
+
+	test("merges the connector surface over the sandbox tools", async () => {
+		const decisions: ToolDecisionRecord[] = [];
+		const tools = createTaskTools({
+			backend,
+			toolContext: {
+				organizationId: "11111111-1111-4111-8111-111111111111",
+				taskId: "22222222-2222-4222-8222-222222222222",
+			},
+			onToolDecision: (record) => {
+				decisions.push(record);
+			},
+			connectorTools: {
+				implementations: {
+					"sentry.list_issues": async () => ({
+						ok: true,
+						data: { issues: [] },
+					}),
+				},
+				riskFor: CONNECTOR_TOOL_RISKS,
+			},
+		});
+
+		const connector = tools["sentry.list_issues"].execute;
+		const read = tools["repo.read_file"].execute;
+		if (connector === undefined || read === undefined) {
+			throw new Error("wired tools are missing execute");
+		}
+		const connectorOutput = (await connector(
+			{},
+			{} as never,
+		)) as WiredToolOutput;
+		expect(connectorOutput).toEqual({
+			state: "executed",
+			audited: true,
+			value: { ok: true, data: { issues: [] } },
+		});
+		// The sandbox surface is still wired on the same registry.
+		const readOutput = (await read(
+			{ path: "src/a.ts" },
+			{} as never,
+		)) as WiredToolOutput;
+		expect(readOutput.state).toBe("executed");
+		expect(decisions.map((decision) => decision.tool)).toEqual([
+			"sentry.list_issues",
+			"repo.read_file",
+		]);
 	});
 });

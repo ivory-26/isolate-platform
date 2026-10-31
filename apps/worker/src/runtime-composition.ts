@@ -8,6 +8,9 @@ import {
 	PostgresAuditRepository,
 	PostgresBlobStore,
 	PostgresBranchLockRepository,
+	PostgresConnectorCallRepository,
+	PostgresConnectorCredentialRepository,
+	PostgresConnectorDeviceRepository,
 	PostgresExecutionLifecycle,
 	PostgresQueueRepository,
 	PostgresRepositoryRepository,
@@ -24,12 +27,14 @@ import {
 	type UsageRepository,
 } from "@isolate/db";
 import {
+	createConnectorDeviceBroker,
 	createGitHubAppTokenProvider,
+	createNullDeviceProxyFactory,
 	createPullRequestForTask,
 	fetchGitHubIncidentContext,
 	type GitHubTokenProvider,
 } from "@isolate/integrations";
-import type { SandboxToolBackend } from "@isolate/mastra";
+import { CONNECTOR_TOOL_RISKS, type SandboxToolBackend } from "@isolate/mastra";
 import {
 	createModalSandboxClient,
 	createTaskWorkspaceGit,
@@ -51,6 +56,7 @@ import {
 } from "@isolate/shared";
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
+import { createConnectorToolImplementations } from "./connector-tools";
 import type { QueueLike } from "./contracts";
 import type {
 	CreatePullRequestSeam,
@@ -65,6 +71,7 @@ import {
 } from "./pull-request-approval";
 import { buildRunSummary } from "./run-summary";
 import {
+	type ConnectorToolBinding,
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
 } from "./runtime-factory";
@@ -228,11 +235,13 @@ export async function selectSandboxProvider(
 
 export function selectRuntimeFactory(
 	env: Record<string, string | undefined>,
+	connectorTools?: ConnectorToolBinding,
 ): WorkerCompositionOverrides["createRuntime"] {
 	const name = readInferenceProvider(env);
+	const options = connectorTools === undefined ? {} : { connectorTools };
 	if (name === "none") return undefined;
-	if (name === "meta") return createMetaRuntimeFactory(env);
-	if (name === "baseten") return createBasetenRuntimeFactory(env);
+	if (name === "meta") return createMetaRuntimeFactory(env, options);
+	if (name === "baseten") return createBasetenRuntimeFactory(env, options);
 	throw new PlatformError(
 		"MISSING_CONFIG",
 		"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
@@ -506,6 +515,37 @@ export function createIncidentContextBundleLoader(
 	};
 }
 
+/**
+ * Wave 17: connector tool binding for the device poll queue.
+ *
+ * Enabled only when `DEVICE_GATEWAY_ENABLED` is exactly `true` (the same gate
+ * the web claim/result endpoints use) and a database exists. The device broker
+ * resolves metadata only; the queue carries typed arguments and a bounded
+ * result. `NullDeviceProxy` is passed because the transport is the queue, not
+ * a synchronous proxy: no provider call ever originates in the worker.
+ *
+ * With the flag off (or no database) this returns `null` and the connector
+ * names stay registered but unimplemented, i.e. denied by the registry.
+ */
+export function createConfiguredConnectorTools(
+	sql: PgSql,
+	env: Record<string, string | undefined>,
+): ConnectorToolBinding | null {
+	if (env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() !== "true") return null;
+	const broker = createConnectorDeviceBroker({
+		devices: new PostgresConnectorDeviceRepository(sql),
+		credentials: new PostgresConnectorCredentialRepository(sql),
+		proxyFactory: createNullDeviceProxyFactory(),
+	});
+	return {
+		implementations: createConnectorToolImplementations({
+			broker,
+			calls: new PostgresConnectorCallRepository(sql),
+		}),
+		riskFor: CONNECTOR_TOOL_RISKS,
+	};
+}
+
 export async function createConfiguredWorkerComposition(
 	config: WorkerConfig,
 	logger: Logger,
@@ -517,6 +557,11 @@ export async function createConfiguredWorkerComposition(
 	// malformed table fails closed before any job is claimed.
 	const priceTable = loadCostPriceTable(env);
 	if (!config.databaseUrl) {
+		if (env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true") {
+			logger.warn(
+				"DEVICE_GATEWAY_ENABLED is set but DATABASE_URL is missing; connector tools stay unbound",
+			);
+		}
 		logger.warn(
 			"worker has no DATABASE_URL; queue, usage and task context stay unbound",
 		);
@@ -624,7 +669,10 @@ export async function createConfiguredWorkerComposition(
 		overrides.createSandboxBackend = sandboxBackendFactory(sandbox.provider);
 		overrides.createWorkspaceGit = createTaskWorkspaceGit;
 	}
-	const createRuntime = selectRuntimeFactory(env);
+	const createRuntime = selectRuntimeFactory(
+		env,
+		createConfiguredConnectorTools(sql, env) ?? undefined,
+	);
 	if (createRuntime !== undefined) overrides.createRuntime = createRuntime;
 
 	const githubTokenProvider = selectGitHubTokenProvider(env);

@@ -3,13 +3,20 @@ import {
 	type CodingAgentRuntimeFactory,
 	type CodingAgentRuntimeFactoryOptions,
 	createMastraAgentRuntime,
+	createRiskTablePolicy,
+	createSandboxToolImplementations,
 	defineCodingAgent,
 	metaModelConfig,
 	type OpenAICompatibleModelConfig,
+	SANDBOX_TOOL_RISKS,
 	type SandboxToolBackend,
 	type ToolDecisionRecord,
+	type ToolImplementation,
+	type ToolName,
+	type ToolRiskBand,
 	type UsagePriceTable,
 	type WiredToolCollection,
+	wirePlatformTools,
 	wireSandboxTools,
 } from "@isolate/mastra";
 
@@ -40,6 +47,22 @@ export type BasetenRuntimeFactoryOptions = {
 	agentId?: string;
 	agentName?: string;
 	priceTable?: UsagePriceTable;
+	/**
+	 * Wave 17: connector implementations + risk bands to merge over the sandbox
+	 * surface. Absent keeps the wave-7 sandbox-only registry (connector names
+	 * remain registered but deny-by-default).
+	 */
+	connectorTools?: ConnectorToolBinding;
+};
+
+/**
+ * Per-worker connector binding. The implementations resolve the organization
+ * and device from the per-task `ToolCallContext`, so one binding serves every
+ * tenant without carrying a credential.
+ */
+export type ConnectorToolBinding = {
+	implementations: Partial<Record<ToolName, ToolImplementation>>;
+	riskFor: Partial<Record<ToolName, ToolRiskBand>>;
 };
 
 /**
@@ -52,20 +75,37 @@ export function createTaskTools(input: {
 	backend: SandboxToolBackend;
 	toolContext: NonNullable<CodingAgentRuntimeFactoryOptions["toolContext"]>;
 	onToolDecision?: (record: ToolDecisionRecord) => Promise<void> | void;
+	/** Wave 17: connector surface merged over the sandbox tools. */
+	connectorTools?: ConnectorToolBinding;
 }): WiredToolCollection {
-	return wireSandboxTools(
-		input.backend,
-		input.onToolDecision === undefined
-			? {}
-			: { onDecision: input.onToolDecision },
-	).forTask({
+	const toolContext = {
 		organizationId: input.toolContext.organizationId,
 		taskId: input.toolContext.taskId,
 		scopes: [...(input.toolContext.scopes ?? [])],
 		// Wave 7: the tool gate rejects writes outside the authored ownership
 		// list; an empty list means "no writes".
 		fileOwnership: [...(input.toolContext.fileOwnership ?? [])],
-	});
+	};
+	const onDecision = input.onToolDecision;
+	if (input.connectorTools === undefined) {
+		return wireSandboxTools(
+			input.backend,
+			onDecision === undefined ? {} : { onDecision },
+		).forTask(toolContext);
+	}
+	// One policy and one implementation map for both surfaces, so a connector
+	// name can never run under a weaker gate than a sandbox tool.
+	return wirePlatformTools({
+		policy: createRiskTablePolicy({
+			...SANDBOX_TOOL_RISKS,
+			...input.connectorTools.riskFor,
+		}),
+		implementations: {
+			...createSandboxToolImplementations(input.backend),
+			...input.connectorTools.implementations,
+		},
+		onDecision,
+	}).forTask(toolContext);
 }
 
 function createOpenAIRuntimeFactory(
@@ -89,6 +129,9 @@ function createOpenAIRuntimeFactory(
 						...(factoryOptions.onToolDecision === undefined
 							? {}
 							: { onToolDecision: factoryOptions.onToolDecision }),
+						...(options.connectorTools === undefined
+							? {}
+							: { connectorTools: options.connectorTools }),
 					})
 				: undefined;
 		const agent = defineCodingAgent(model, {

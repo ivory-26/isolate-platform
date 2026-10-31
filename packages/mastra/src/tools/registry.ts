@@ -8,6 +8,7 @@ import {
 import type { ToolAction } from "@mastra/core/tools";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { CONNECTOR_TOOL_NAMES } from "./connector-tools";
 import type {
 	PolicyDecision,
 	ToolName,
@@ -196,6 +197,10 @@ export function wirePlatformTools(
 		"db.migrate",
 		"deploy.request",
 		"sandbox.exec",
+		// Wave 17: connector names are exposed so a per-task binding can supply
+		// their implementations. Without an implementation the registry still
+		// denies the call (deny-by-default is unchanged).
+		...CONNECTOR_TOOL_NAMES,
 	];
 
 	return {

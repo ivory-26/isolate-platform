@@ -138,6 +138,8 @@ describe("connector device broker", () => {
 	test("resolves an active device and credential into metadata plus a proxy", async () => {
 		const { broker, targets, proxy } = fixture({});
 		const resolved = await broker.resolve(ORG_A, "sentry");
+		expect(resolved.deviceId).toBe(DEVICE_ID);
+		expect(resolved.credentialId).toBe("44444444-4444-4444-8444-444444444444");
 		expect(resolved.credentialRef).toBe("keychain:isolate/sentry/team");
 		expect(resolved.scopes).toEqual(["issues:read"]);
 		expect(resolved.metadata).toEqual({
@@ -145,7 +147,9 @@ describe("connector device broker", () => {
 		});
 		expect(resolved.proxy).toBe(proxy);
 		expect(Object.keys(resolved).sort()).toEqual([
+			"credentialId",
 			"credentialRef",
+			"deviceId",
 			"metadata",
 			"proxy",
 			"scopes",
@@ -260,6 +264,8 @@ describe("connector device broker", () => {
 		});
 		const resolved = await enabled.broker.resolve(ORG_A, "sentry");
 		expect(resolved).toEqual({
+			deviceId: null,
+			credentialId: null,
 			credentialRef: ENV_REF,
 			scopes: [],
 			metadata: {},

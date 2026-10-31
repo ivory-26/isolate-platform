@@ -2,6 +2,28 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 14 — scoped GitHub write live + connector docs (2026-10-31)
+
+User request: one bounded live `github.comment` / `rerun_workflow` call (scopes granted, fakes already green), plus updated DevSecOps connector docs, with the work delegated.
+
+### W14-1 — Live scoped-write acceptance (coordinator, `main`)
+- `scripts/acceptance-live-github-write.ts` + `bun run acceptance:github-write`: exactly one write per invocation (`LIVE_WRITE_MODE=comment|rerun`), real `selectGitHubTokenProvider`, bounded inputs, Postgres `audit_events` row, credential-free output, non-zero exit on failure, no retry.
+- Live result: run `41085679072` rerun accepted; audit row `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df`; GitHub `run_attempt: 2` (`in_progress`). The comment path was deliberately not called (one-call budget).
+- Commit `88e4c7f`. Status: **done**.
+
+### W14-2 — Per-connector operator docs (agent W14-DOCS, branch `task/w14-connector-docs`)
+- `docs/connectors/`: index plus GitHub, generic webhook, Sentry, PagerDuty, Datadog, Grafana and Slack guides; implemented vs design-only, env var names, scopes, verification, endpoints, caps, never-in-context rules.
+- 1,367 lines across 9 files. Doc-vs-code corrections reported (GitHub signs the raw body; generic headers; ContextBundle shape; writes not agent-registered).
+- Status: **done** — commit `1e71dd6`, merge `367ee83`.
+
+### W14-3 — Survey of record update (agent W14-SURVEY, branch `task/w14-connector-survey`)
+- `docs/devsecops-connectors.md`: implementation status, code map, GitHub actual behavior/permissions, answered vs open questions.
+- 1,091 lines (+356/−202); coordinator filled the measured rerun proof and removed the last "pending" claims.
+- Status: **done** — commit `f9ba9cf`, merge `f840ac2`.
+
+### W14-OPS — Coordinator
+- Merged docs branches `--no-ff`; filled the measured live proof into the survey; gates ×2; updated STATUS. Corrections landed: GitHub webhook signs the raw body (no timestamp); the `github.comment` live call remains open.
+
 ## Wave 3 — Product surface expansion (`task/w3-*` branches, one worktree per agent)
 
 Worktrees: `C:/Users/Sahil/Documents/worktrees-platform/w3-*`. Common rules: agents own ONLY the files listed; root files (`package.json` at root, `bun.lock` root changes beyond `apps/web` scaffolding, `scripts/`, `project/`, `.env*`) are coordinator-only; scoped gates per package (`bunx biome check <owned>`, `bunx --bun tsc -p <project>/tsconfig.json --noEmit`, `bun test <owned-tests>`); commit on the task branch before reporting; never push; never read/print `.env*`.

@@ -43,7 +43,8 @@ User decisions: keys stay on the user's device (device daemon polls the server);
 | W17-TRANSPORT | `568ba41` → merged | **done** — `0011` applied + verified, three device endpoints, queue repository |
 | W17-SETUP | `646d88f` → merged | **done** — `docs/connectors/SETUP.md` (449 lines) |
 | W17-SECDOCS | `9aaf964` → merged | **done** — device-model docs, no server secrets |
-| W17-TOOLBIND | in flight | worker tools → device call queue |
+| W17-TOOLBIND | `d580108` → merged | **done** — 31 tools enqueue/await over the device queue; registry + policy merged |
+| W17-LEDGER | `557a644` | **done** — 80%-style daily free-tier guard on claim; `RATE_LIMITED` on exhaustion |
 | W17-DEVICEREG | in flight | user device register/list/revoke endpoints (token shown once, hash stored) |
 | W17-DAEMON | in flight | `apps/device-daemon`: local keys, poll, dispatch all 31 tools, post results |
 | W17-CONNECT | in flight | connector metadata connect/list/revoke (opaque ref, secret-shaped values rejected) |

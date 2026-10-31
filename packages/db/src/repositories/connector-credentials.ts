@@ -3,6 +3,7 @@ import {
 	type ConnectorCredentialStatus,
 	type ConnectorCredentialSummary,
 	connectorAuthKindSchema,
+	connectorCredentialRefSchema,
 	connectorCredentialStatusSchema,
 	connectorDisplayNameSchema,
 	connectorIdSchema,
@@ -18,30 +19,26 @@ import type { PgSql } from "../client";
 import { parseJsonbColumn } from "../client";
 
 /**
- * Tenant-scoped connector credential store (migration 0010).
+ * Tenant-scoped connector credential metadata store (migration 0010).
+ *
+ * SECURITY: there is no server-side secret here. A row names the owning
+ * device, an opaque `credential_ref` (keychain item name) and bounded metadata;
+ * the provider secret stays on the user's device. This module has no
+ * ciphertext column, no key version and no secret-returning method.
  *
  * Every read carries `organization_id`; a foreign id is indistinguishable from
- * a missing one. Summaries exclude the ciphertext envelope, which is returned
- * only by `getSecret` — the single method the credential broker may use.
- *
- * The pure normalizers and row mapper below are shared with the in-memory fake
- * so the DB CHECKs and the fake cannot drift.
+ * a missing one. The pure normalizers and row mapper below are shared with the
+ * in-memory fake so the DB CHECKs and the fake cannot drift.
  */
-
-export type ConnectorCredentialCiphertext = {
-	/** Packed AEAD payload: nonce || tag || ciphertext. */
-	readonly encryptedPayload: Uint8Array;
-	/** DEK wrapped under the operator KEK. */
-	readonly wrappedDek: Uint8Array;
-	readonly keyVersion: number;
-};
 
 export type CreateConnectorCredentialInput = {
 	organizationId: OrganizationId;
+	deviceId: string;
 	connectorId: string;
 	displayName: string;
 	authKind: ConnectorAuthKind;
-	ciphertext: ConnectorCredentialCiphertext;
+	/** Device-side keychain item name; never the secret itself. */
+	credentialRef: string;
 	scopes?: readonly string[];
 	status?: ConnectorCredentialStatus;
 	freeTierProfile?: FreeTierProfile;
@@ -49,29 +46,20 @@ export type CreateConnectorCredentialInput = {
 	createdBy?: string | null;
 };
 
-export type StoredConnectorCredentialSecret = {
-	credential: ConnectorCredentialSummary;
-	encryptedPayload: Uint8Array;
-	wrappedDek: Uint8Array;
-	keyVersion: number;
-};
-
 export type ConnectorCredentialRecord = {
 	id: string;
 	organizationId: OrganizationId;
+	deviceId: string;
 	connectorId: string;
 	displayName: string;
 	authKind: ConnectorAuthKind;
+	credentialRef: string;
 	scopes: string[];
 	status: ConnectorCredentialStatus;
 	freeTierProfile: FreeTierProfile;
 	metadata: Record<string, unknown>;
-	keyVersion: number;
 	lastValidatedAt: Date | null;
 	lastUsedAt: Date | null;
-	createdBy: string | null;
-	createdAt: Date;
-	updatedAt: Date;
 };
 
 export interface ConnectorCredentialRepository {
@@ -108,17 +96,12 @@ export interface ConnectorCredentialRepository {
 		organizationId: OrganizationId,
 		credentialId: string,
 	): Promise<boolean>;
-	getSecret(
-		organizationId: OrganizationId,
-		credentialId: string,
-	): Promise<StoredConnectorCredentialSecret | null>;
 }
 
-const SUMMARY_COLUMNS = `id, organization_id, connector_id, display_name, auth_kind, scopes, status, free_tier_profile, metadata, key_version, last_validated_at, last_used_at, created_by, created_at, updated_at`;
+const SELECT_COLUMNS = `id, organization_id, device_id, connector_id, display_name, auth_kind, credential_ref, scopes, status, free_tier_profile, metadata, last_validated_at, last_used_at`;
 
-const MAX_ENCRYPTED_PAYLOAD_BYTES = 256 * 1024;
-const MAX_WRAPPED_DEK_BYTES = 4096;
 const MAX_CREDENTIAL_ID_CHARS = 128;
+const MAX_DEVICE_ID_CHARS = 128;
 
 function validationError(message: string): PlatformError {
 	return new PlatformError("VALIDATION_FAILED", message);
@@ -129,6 +112,18 @@ function requireNotEmpty(value: unknown, field: string): string {
 		throw validationError(`${field} must be a non-empty string`);
 	}
 	return value;
+}
+
+function requireBoundedId(
+	value: unknown,
+	field: string,
+	maxChars: number,
+): string {
+	const id = requireNotEmpty(value, field);
+	if (id.length > maxChars) {
+		throw validationError(`${field} is too long`);
+	}
+	return id;
 }
 
 function readProfileNumber(value: unknown): number | null {
@@ -155,37 +150,15 @@ export function normalizeFreeTierProfileValue(value: unknown): FreeTierProfile {
 	};
 }
 
-function requireBytes(
-	value: unknown,
-	field: string,
-	maxBytes: number,
-): Uint8Array {
-	if (!(value instanceof Uint8Array) || value.byteLength === 0) {
-		throw validationError(`${field} must be a non-empty byte array`);
-	}
-	if (value.byteLength > maxBytes) {
-		throw validationError(`${field} exceeds ${maxBytes} bytes`);
-	}
-	return new Uint8Array(value);
-}
-
-function requireKeyVersion(value: unknown): number {
-	if (!Number.isSafeInteger(value) || (value as number) < 1) {
-		throw validationError("keyVersion must be a positive integer");
-	}
-	return value as number;
-}
-
 export function normalizeConnectorCredentialCreate(
 	input: CreateConnectorCredentialInput,
 ): {
 	organizationId: OrganizationId;
+	deviceId: string;
 	connectorId: string;
 	displayName: string;
 	authKind: ConnectorAuthKind;
-	encryptedPayload: Uint8Array;
-	wrappedDek: Uint8Array;
-	keyVersion: number;
+	credentialRef: string;
 	scopes: string[];
 	status: ConnectorCredentialStatus;
 	freeTierProfile: FreeTierProfile;
@@ -196,16 +169,33 @@ export function normalizeConnectorCredentialCreate(
 		input.organizationId,
 		"organizationId",
 	) as OrganizationId;
+	const deviceId = requireBoundedId(
+		input.deviceId,
+		"deviceId",
+		MAX_DEVICE_ID_CHARS,
+	);
 	const connectorId = connectorIdSchema.safeParse(input.connectorId);
 	if (!connectorId.success) throw validationError("connectorId is invalid");
 	const displayName = connectorDisplayNameSchema.safeParse(input.displayName);
 	if (!displayName.success) throw validationError("displayName is invalid");
 	const authKind = connectorAuthKindSchema.safeParse(input.authKind);
 	if (!authKind.success) throw validationError("authKind is invalid");
+	const credentialRef = connectorCredentialRefSchema.safeParse(
+		input.credentialRef,
+	);
+	if (!credentialRef.success) {
+		throw validationError(
+			`credentialRef is invalid: ${zodIssueSummary(credentialRef.error)}`,
+		);
+	}
 	const status = connectorCredentialStatusSchema.safeParse(
 		input.status ?? "pending_validation",
 	);
-	if (!status.success) throw validationError("status is invalid");
+	if (!status.success) {
+		throw validationError(
+			`status is invalid: ${zodIssueSummary(status.error)}`,
+		);
+	}
 	const scopes = connectorScopesSchema.safeParse(input.scopes ?? []);
 	if (!scopes.success) {
 		throw validationError(
@@ -230,20 +220,11 @@ export function normalizeConnectorCredentialCreate(
 	}
 	return {
 		organizationId,
+		deviceId,
 		connectorId: connectorId.data,
 		displayName: displayName.data,
 		authKind: authKind.data,
-		encryptedPayload: requireBytes(
-			input.ciphertext?.encryptedPayload,
-			"encryptedPayload",
-			MAX_ENCRYPTED_PAYLOAD_BYTES,
-		),
-		wrappedDek: requireBytes(
-			input.ciphertext?.wrappedDek,
-			"wrappedDek",
-			MAX_WRAPPED_DEK_BYTES,
-		),
-		keyVersion: requireKeyVersion(input.ciphertext?.keyVersion),
+		credentialRef: credentialRef.data,
 		scopes: [...scopes.data],
 		status: status.data,
 		freeTierProfile: profile.data,
@@ -261,58 +242,48 @@ function toDate(value: unknown): Date {
 		: new Date(String(value));
 }
 
-function toBytes(value: unknown): Uint8Array {
-	if (value instanceof Uint8Array) return new Uint8Array(value);
-	throw new PlatformError(
-		"DB_UNAVAILABLE",
-		"connector credential ciphertext column is not a byte array",
-	);
-}
-
 export function mapConnectorCredentialRow(
 	row: Record<string, unknown>,
 ): ConnectorCredentialRecord {
 	return {
 		id: String(row.id),
 		organizationId: row.organization_id as OrganizationId,
+		deviceId: String(row.device_id),
 		connectorId: String(row.connector_id),
 		displayName: String(row.display_name),
 		authKind: row.auth_kind as ConnectorAuthKind,
+		credentialRef: String(row.credential_ref),
 		scopes: Array.isArray(row.scopes) ? row.scopes.map(String) : [],
 		status: row.status as ConnectorCredentialStatus,
 		freeTierProfile: normalizeFreeTierProfileValue(
 			parseJsonbColumn<unknown>(row.free_tier_profile),
 		),
 		metadata: parseJsonbColumn<Record<string, unknown>>(row.metadata) ?? {},
-		keyVersion: Number(row.key_version),
 		lastValidatedAt:
 			row.last_validated_at === null ? null : toDate(row.last_validated_at),
 		lastUsedAt: row.last_used_at === null ? null : toDate(row.last_used_at),
-		createdBy: row.created_by === null ? null : String(row.created_by),
-		createdAt: toDate(row.created_at),
-		updatedAt: toDate(row.updated_at),
 	};
 }
 
+/** Drops every non-summary column; there is no secret column to drop. */
 export function toConnectorCredentialSummary(
 	record: ConnectorCredentialRecord,
 ): ConnectorCredentialSummary {
 	return {
 		id: record.id,
 		organizationId: record.organizationId,
+		deviceId: record.deviceId,
 		connectorId: record.connectorId,
 		displayName: record.displayName,
 		authKind: record.authKind,
+		credentialRef: record.credentialRef,
 		scopes: [...record.scopes],
 		status: record.status,
 		freeTierProfile: { ...record.freeTierProfile },
 		metadata: { ...record.metadata },
-		keyVersion: record.keyVersion,
 		lastValidatedAt:
 			record.lastValidatedAt === null ? null : new Date(record.lastValidatedAt),
 		lastUsedAt: record.lastUsedAt === null ? null : new Date(record.lastUsedAt),
-		createdAt: new Date(record.createdAt),
-		updatedAt: new Date(record.updatedAt),
 	};
 }
 
@@ -337,46 +308,37 @@ function requireOptionalTimestamp(
 
 const STMT = {
 	insert: `INSERT INTO connector_credentials (
-		organization_id, connector_id, display_name, auth_kind,
-		encrypted_payload, wrapped_dek, key_version, scopes, status,
-		free_tier_profile, metadata, created_by
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9,
-		$10::text::jsonb, $11::text::jsonb, $12)
-	RETURNING ${SUMMARY_COLUMNS}`,
-	list: `SELECT ${SUMMARY_COLUMNS} FROM connector_credentials
+		organization_id, device_id, connector_id, display_name, auth_kind,
+		credential_ref, scopes, status, free_tier_profile, metadata, created_by
+	) VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8,
+		$9::text::jsonb, $10::text::jsonb, $11)
+	RETURNING ${SELECT_COLUMNS}`,
+	list: `SELECT ${SELECT_COLUMNS} FROM connector_credentials
 		WHERE organization_id = $1
 		ORDER BY connector_id ASC, display_name ASC, id ASC`,
-	get: `SELECT ${SUMMARY_COLUMNS} FROM connector_credentials
+	get: `SELECT ${SELECT_COLUMNS} FROM connector_credentials
 		WHERE organization_id = $1 AND id = $2`,
 	setStatus: `UPDATE connector_credentials
 		SET status = $3, updated_at = now()
 		WHERE organization_id = $1 AND id = $2
-		RETURNING ${SUMMARY_COLUMNS}`,
+		RETURNING ${SELECT_COLUMNS}`,
 	touchValidated: `UPDATE connector_credentials
 		SET last_validated_at = $3::timestamptz, updated_at = now()
 		WHERE organization_id = $1 AND id = $2
-		RETURNING ${SUMMARY_COLUMNS}`,
+		RETURNING ${SELECT_COLUMNS}`,
 	touchUsed: `UPDATE connector_credentials
 		SET last_used_at = $3::timestamptz, updated_at = now()
 		WHERE organization_id = $1 AND id = $2
-		RETURNING ${SUMMARY_COLUMNS}`,
+		RETURNING ${SELECT_COLUMNS}`,
+	// Revocation keeps the metadata row and only flips status; the secret was
+	// never here to clear.
 	revoke: `UPDATE connector_credentials
-		SET status = 'revoked',
-			encrypted_payload = ''::bytea,
-			wrapped_dek = ''::bytea,
-			updated_at = now()
+		SET status = 'revoked', updated_at = now()
 		WHERE organization_id = $1 AND id = $2
-		RETURNING ${SUMMARY_COLUMNS}`,
+		RETURNING ${SELECT_COLUMNS}`,
 	delete: `DELETE FROM connector_credentials
 		WHERE organization_id = $1 AND id = $2
 		RETURNING id`,
-	getSecret: `SELECT ${SUMMARY_COLUMNS}, encrypted_payload, wrapped_dek
-		FROM connector_credentials
-		WHERE organization_id = $1
-		  AND id = $2
-		  AND status <> 'revoked'
-		  AND octet_length(encrypted_payload) > 0
-		  AND octet_length(wrapped_dek) > 0`,
 } as const;
 
 export class PostgresConnectorCredentialRepository
@@ -390,12 +352,11 @@ export class PostgresConnectorCredentialRepository
 		const normalized = normalizeConnectorCredentialCreate(input);
 		const rows = (await this.sql.unsafe(STMT.insert, [
 			normalized.organizationId,
+			normalized.deviceId,
 			normalized.connectorId,
 			normalized.displayName,
 			normalized.authKind,
-			normalized.encryptedPayload,
-			normalized.wrappedDek,
-			normalized.keyVersion,
+			normalized.credentialRef,
 			normalized.scopes,
 			normalized.status,
 			JSON.stringify(normalized.freeTierProfile),
@@ -506,23 +467,5 @@ export class PostgresConnectorCredentialRepository
 			requireCredentialId(credentialId),
 		])) as unknown as Record<string, unknown>[];
 		return rows.length > 0;
-	}
-
-	async getSecret(
-		organizationId: OrganizationId,
-		credentialId: string,
-	): Promise<StoredConnectorCredentialSecret | null> {
-		const rows = (await this.sql.unsafe(STMT.getSecret, [
-			requireNotEmpty(organizationId, "organizationId"),
-			requireCredentialId(credentialId),
-		])) as unknown as Record<string, unknown>[];
-		if (rows.length === 0) return null;
-		const record = mapConnectorCredentialRow(rows[0]);
-		return {
-			credential: toConnectorCredentialSummary(record),
-			encryptedPayload: toBytes(rows[0].encrypted_payload),
-			wrappedDek: toBytes(rows[0].wrapped_dek),
-			keyVersion: record.keyVersion,
-		};
 	}
 }

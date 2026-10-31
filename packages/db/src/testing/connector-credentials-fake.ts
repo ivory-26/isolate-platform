@@ -4,76 +4,66 @@ import type {
 } from "@isolate/shared";
 import { type OrganizationId, PlatformError } from "@isolate/shared";
 import {
-	type ConnectorCredentialCiphertext,
 	type ConnectorCredentialRecord,
 	type ConnectorCredentialRepository,
 	type CreateConnectorCredentialInput,
 	normalizeConnectorCredentialCreate,
-	type StoredConnectorCredentialSecret,
 	toConnectorCredentialSummary,
 } from "../repositories/connector-credentials";
 
 /**
  * Offline twin of `PostgresConnectorCredentialRepository`. Same contract and
- * the same pure normalizers: tenant-scoped reads, summaries without
- * ciphertext, ciphertext only through `getSecret`, and revocation zeroing both
- * bytea columns while keeping the row.
+ * the same pure normalizers: tenant-scoped reads, metadata-only summaries and
+ * no secret path at all. Revocation flips status and keeps the row; there is
+ * nothing to zero because the secret never reaches this layer.
  */
-type StoredRow = {
-	record: ConnectorCredentialRecord;
-	encryptedPayload: Uint8Array;
-	wrappedDek: Uint8Array;
-};
-
-function copyBytes(bytes: Uint8Array): Uint8Array {
-	return new Uint8Array(bytes);
-}
-
 export class InMemoryConnectorCredentialRepository
 	implements ConnectorCredentialRepository
 {
-	private readonly rows = new Map<string, StoredRow>();
+	private readonly rows = new Map<string, ConnectorCredentialRecord>();
 
 	async create(
 		input: CreateConnectorCredentialInput,
 	): Promise<ConnectorCredentialSummary> {
 		const normalized = normalizeConnectorCredentialCreate(input);
-		const duplicate = [...this.rows.values()].some(
-			(row) =>
-				row.record.organizationId === normalized.organizationId &&
-				row.record.connectorId === normalized.connectorId &&
-				row.record.displayName === normalized.displayName,
-		);
-		if (duplicate) {
-			throw new PlatformError(
-				"VALIDATION_FAILED",
-				"a connector credential with this display name already exists",
-			);
+		for (const row of this.rows.values()) {
+			if (
+				row.organizationId === normalized.organizationId &&
+				row.connectorId === normalized.connectorId &&
+				row.displayName === normalized.displayName
+			) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"a connector credential with this display name already exists",
+				);
+			}
+			if (
+				row.deviceId === normalized.deviceId &&
+				row.connectorId === normalized.connectorId &&
+				row.credentialRef === normalized.credentialRef
+			) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"this credential ref is already registered for the device",
+				);
+			}
 		}
-		const now = new Date();
 		const record: ConnectorCredentialRecord = {
 			id: crypto.randomUUID(),
 			organizationId: normalized.organizationId,
+			deviceId: normalized.deviceId,
 			connectorId: normalized.connectorId,
 			displayName: normalized.displayName,
 			authKind: normalized.authKind,
+			credentialRef: normalized.credentialRef,
 			scopes: [...normalized.scopes],
 			status: normalized.status,
 			freeTierProfile: { ...normalized.freeTierProfile },
 			metadata: { ...normalized.metadata },
-			keyVersion: normalized.keyVersion,
 			lastValidatedAt: null,
 			lastUsedAt: null,
-			createdBy: normalized.createdBy,
-			createdAt: now,
-			updatedAt: now,
 		};
-		const stored: StoredRow = {
-			record,
-			encryptedPayload: copyBytes(normalized.encryptedPayload),
-			wrappedDek: copyBytes(normalized.wrappedDek),
-		};
-		this.rows.set(record.id, stored);
+		this.rows.set(record.id, record);
 		return toConnectorCredentialSummary(record);
 	}
 
@@ -81,19 +71,15 @@ export class InMemoryConnectorCredentialRepository
 		organizationId: OrganizationId,
 	): Promise<ConnectorCredentialSummary[]> {
 		return [...this.rows.values()]
-			.filter((row) => row.record.organizationId === organizationId)
+			.filter((row) => row.organizationId === organizationId)
 			.sort((left, right) => {
-				const byConnector = left.record.connectorId.localeCompare(
-					right.record.connectorId,
-				);
+				const byConnector = left.connectorId.localeCompare(right.connectorId);
 				if (byConnector !== 0) return byConnector;
-				const byName = left.record.displayName.localeCompare(
-					right.record.displayName,
-				);
+				const byName = left.displayName.localeCompare(right.displayName);
 				if (byName !== 0) return byName;
-				return left.record.id.localeCompare(right.record.id);
+				return left.id.localeCompare(right.id);
 			})
-			.map((row) => toConnectorCredentialSummary(row.record));
+			.map((row) => toConnectorCredentialSummary(row));
 	}
 
 	async get(
@@ -101,10 +87,10 @@ export class InMemoryConnectorCredentialRepository
 		credentialId: string,
 	): Promise<ConnectorCredentialSummary | null> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return null;
 		}
-		return toConnectorCredentialSummary(row.record);
+		return toConnectorCredentialSummary(row);
 	}
 
 	async setStatus(
@@ -113,12 +99,11 @@ export class InMemoryConnectorCredentialRepository
 		status: ConnectorCredentialStatus,
 	): Promise<ConnectorCredentialSummary | null> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return null;
 		}
-		row.record.status = status;
-		row.record.updatedAt = new Date();
-		return toConnectorCredentialSummary(row.record);
+		row.status = status;
+		return toConnectorCredentialSummary(row);
 	}
 
 	async touchValidated(
@@ -127,16 +112,15 @@ export class InMemoryConnectorCredentialRepository
 		validatedAt?: Date,
 	): Promise<ConnectorCredentialSummary | null> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return null;
 		}
 		const at = validatedAt ?? new Date();
 		if (!(at instanceof Date) || Number.isNaN(at.getTime())) {
 			throw new PlatformError("VALIDATION_FAILED", "validatedAt is invalid");
 		}
-		row.record.lastValidatedAt = new Date(at.getTime());
-		row.record.updatedAt = new Date();
-		return toConnectorCredentialSummary(row.record);
+		row.lastValidatedAt = new Date(at.getTime());
+		return toConnectorCredentialSummary(row);
 	}
 
 	async touchUsed(
@@ -145,16 +129,15 @@ export class InMemoryConnectorCredentialRepository
 		usedAt?: Date,
 	): Promise<ConnectorCredentialSummary | null> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return null;
 		}
 		const at = usedAt ?? new Date();
 		if (!(at instanceof Date) || Number.isNaN(at.getTime())) {
 			throw new PlatformError("VALIDATION_FAILED", "usedAt is invalid");
 		}
-		row.record.lastUsedAt = new Date(at.getTime());
-		row.record.updatedAt = new Date();
-		return toConnectorCredentialSummary(row.record);
+		row.lastUsedAt = new Date(at.getTime());
+		return toConnectorCredentialSummary(row);
 	}
 
 	async revoke(
@@ -162,14 +145,11 @@ export class InMemoryConnectorCredentialRepository
 		credentialId: string,
 	): Promise<ConnectorCredentialSummary | null> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return null;
 		}
-		row.record.status = "revoked";
-		row.encryptedPayload = new Uint8Array(0);
-		row.wrappedDek = new Uint8Array(0);
-		row.record.updatedAt = new Date();
-		return toConnectorCredentialSummary(row.record);
+		row.status = "revoked";
+		return toConnectorCredentialSummary(row);
 	}
 
 	async delete(
@@ -177,32 +157,10 @@ export class InMemoryConnectorCredentialRepository
 		credentialId: string,
 	): Promise<boolean> {
 		const row = this.rows.get(credentialId);
-		if (row === undefined || row.record.organizationId !== organizationId) {
+		if (row === undefined || row.organizationId !== organizationId) {
 			return false;
 		}
 		return this.rows.delete(credentialId);
-	}
-
-	async getSecret(
-		organizationId: OrganizationId,
-		credentialId: string,
-	): Promise<StoredConnectorCredentialSecret | null> {
-		const row = this.rows.get(credentialId);
-		if (
-			row === undefined ||
-			row.record.organizationId !== organizationId ||
-			row.record.status === "revoked" ||
-			row.encryptedPayload.byteLength === 0 ||
-			row.wrappedDek.byteLength === 0
-		) {
-			return null;
-		}
-		return {
-			credential: toConnectorCredentialSummary(row.record),
-			encryptedPayload: copyBytes(row.encryptedPayload),
-			wrappedDek: copyBytes(row.wrappedDek),
-			keyVersion: row.record.keyVersion,
-		};
 	}
 
 	/**
@@ -217,25 +175,13 @@ export class InMemoryConnectorCredentialRepository
 		return row === undefined
 			? null
 			: {
-					organizationId: row.record.organizationId,
-					connectorId: row.record.connectorId,
+					organizationId: row.organizationId,
+					connectorId: row.connectorId,
 				};
 	}
 
 	/** Test-only visibility; never part of the repository contract. */
 	get rowCount(): number {
 		return this.rows.size;
-	}
-
-	/** Test-only ciphertext accessor to prove revocation cleared the bytes. */
-	ciphertextOf(credentialId: string): ConnectorCredentialCiphertext | null {
-		const row = this.rows.get(credentialId);
-		return row === undefined
-			? null
-			: {
-					encryptedPayload: copyBytes(row.encryptedPayload),
-					wrappedDek: copyBytes(row.wrappedDek),
-					keyVersion: row.record.keyVersion,
-				};
 	}
 }

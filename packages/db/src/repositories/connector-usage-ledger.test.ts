@@ -15,14 +15,11 @@ async function ledgerFixture() {
 	const credentials = new InMemoryConnectorCredentialRepository();
 	const credential = await credentials.create({
 		organizationId: ORG,
+		deviceId: "33333333-3333-4333-8333-333333333333",
 		connectorId: "sentry",
 		displayName: "Team Sentry",
 		authKind: "api_key",
-		ciphertext: {
-			encryptedPayload: new Uint8Array([1]),
-			wrappedDek: new Uint8Array([2]),
-			keyVersion: 1,
-		},
+		credentialRef: "keychain:isolate/sentry/team",
 		status: "active",
 	});
 	const ledger = new InMemoryConnectorUsageLedger(credentials);

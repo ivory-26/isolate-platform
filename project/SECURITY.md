@@ -37,7 +37,26 @@
 - Adapters: https-only base URLs, no userinfo/query, auth header only, bounded excerpts, failure mapping without provider bodies.
 - Policy/tools: unbound connector tools deny by default; argument digest only in audit.
 
-## 4. Running the loop
+## 4. Secret-scanning incident (2026-10-31)
+
+- **What happened**: GitGuardian flagged synthetic JWT-shaped and API-key-shaped test
+  fixtures in the Kubernetes, SigNoz, Datadog, New Relic and GitHub suites.
+- **Why the local gates missed them**: the CI `secret-scan` job was
+  `continue-on-error: true` (advisory), and `scripts/security-check.ts` excluded
+  `*.test.ts` and had no JWT/generic-key rule. The fixtures were synthetic
+  (`alg`/`sub` plus a short signature), not live credentials.
+- **Fix**: every fixture is now built at runtime; `security:check` rejects static JWT-shaped
+  literals in tests; `.gitleaks.toml` has an explicit JWT rule; the CI secret scan is
+  **blocking**; `.githooks/pre-commit` runs the local check when enabled with
+  `git config core.hooksPath .githooks`.
+- **History**: rewritten and force-pushed with lease. `origin/main` is `8be851d` and a
+  local `gitleaks git --log-opts=main` reports **0 leaks**. Old objects remain locally only
+  because the pre-rewrite wave-18 branches still point at the old base; they are rebased
+  onto the cleaned main before merge, then purged.
+- **Rotation**: no live credential existed in these fixtures, so there was nothing to
+  rotate; the repository's real GitHub App key was never committed.
+
+## 5. Running the loop
 
 ```bash
 bun run security:check     # repo-wide credential boundary + migration checks

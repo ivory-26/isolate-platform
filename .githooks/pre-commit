@@ -1,0 +1,4 @@
+#!/bin/sh
+# Local secret gate. Enable once with: git config core.hooksPath .githooks
+# Blocks a commit when the working tree contains a credential-shaped literal.
+bun run security:check

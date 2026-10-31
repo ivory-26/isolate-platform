@@ -148,7 +148,7 @@ describe("worker config — task execution caps", () => {
 		["maxOutputTokensPerTurn", 8193],
 		["maxOutputTokensPerTurn", 1.5],
 		["maxTokensPerTask", 999],
-		["maxTokensPerTask", 2_000_001],
+		["maxTokensPerTask", 200_000_001],
 		["maxSandboxSeconds", 59],
 		["maxSandboxSeconds", 3601],
 		["maxCostUsdPerTask", -0.01],

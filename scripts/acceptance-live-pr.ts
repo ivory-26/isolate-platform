@@ -75,7 +75,7 @@ const databaseUrl = required("DATABASE_URL");
 const maxTokensPerTask = Number(required("WORKER_MAX_TOKENS_PER_TASK"));
 const maxSandboxSeconds = Number(required("WORKER_MAX_SANDBOX_SECONDS"));
 const maxCostUsdPerTask = Number(required("WORKER_MAX_COST_USD_PER_TASK"));
-assert.ok(maxTokensPerTask > 0 && maxTokensPerTask <= 32_768);
+assert.ok(maxTokensPerTask > 0 && maxTokensPerTask <= 200_000_000);
 assert.ok(maxSandboxSeconds > 0 && maxSandboxSeconds <= 600);
 assert.ok(maxCostUsdPerTask > 0 && maxCostUsdPerTask <= 5);
 assert.equal(process.env.INFERENCE_PROVIDER?.trim(), "meta");

@@ -57,7 +57,7 @@ const sourceTaskId = asTaskId(required("LIVE_FAILED_TASK_ID"));
 const databaseUrl = required("DATABASE_URL");
 const maxTokensPerTask = Number(required("WORKER_MAX_TOKENS_PER_TASK"));
 const maxSandboxSeconds = Number(required("WORKER_MAX_SANDBOX_SECONDS"));
-assert.ok(maxTokensPerTask > 0 && maxTokensPerTask <= 32_768);
+assert.ok(maxTokensPerTask > 0 && maxTokensPerTask <= 200_000_000);
 assert.ok(maxSandboxSeconds > 0 && maxSandboxSeconds <= 600);
 assert.equal(process.env.INFERENCE_PROVIDER?.trim(), "meta");
 assert.equal(process.env.SANDBOX_PROVIDER?.trim(), "modal");

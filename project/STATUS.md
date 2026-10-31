@@ -13,7 +13,7 @@ Last updated: 2026-11-01 (wave 17: device-held credentials applied to Neon; 10-c
 - **Security loop**: `bun run security:check` (`scripts/security-check.ts`) forbids server-side connector keys, encrypted credential columns, committed `.env`/`.pem`, private-key blocks and real-looking provider tokens. Latest run: **PASS** (256 source/migration files, 539 tracked files). A read-only audit found one HIGH issue (secret-shaped values in params/metadata) and several MEDIUMs; the fix lane is in flight.
 - **End-to-end device proof (local, free)**: seeded an active device + Kubernetes credential (metadata only), started the web gateway and `apps/device-daemon` with the kube token **only on the device**, then enqueued call `538a0a2a-…` (`k8s.list_events`). The daemon claimed it, read the local kind cluster, and posted a **903-byte** result; the call ended `completed` and `connector_usage_ledger` recorded **1** request. No provider key reached the server or the sandbox.
 - **Docs**: a living `docs/connectors/SETUP.md` is being written with per-connector key-fetch steps for the ten; onboarding/usage docs are being rewritten to the device model (in flight).
-- **Gates at this point**: typecheck 8/8 · 314 scoped tests green · security check PASS. Full offline suite runs once all lanes merge.
+- **Gates after the device stack**: biome 0 errors (10 pre-existing warnings) · typecheck **9/9** (daemon included) · **2388 tests / 0 fail / 10 skip** offline ×2 · offline acceptance 7/7 · security check PASS (281 source/migration files, 575 tracked).
 
 ### Wave 17 open items
 1. ~~Merge remaining lanes~~ done: all nine adapters, intake, setup/secdocs and the device transport are merged.

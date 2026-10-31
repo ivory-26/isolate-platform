@@ -14,7 +14,7 @@ A connector does exactly two things:
 1. **Trigger** — accept a signed inbound delivery and turn it into one bounded `IncidentSignal` and one task, through the normal submission path.
 2. **Context** — fetch a bounded, redacted, cited `ContextBundle` for that task with a read-only credential.
 
-It is never a generic fetch proxy. Every URL template lives in trusted code; every provider identifier is validated; there is no "fetch this URL" tool. A connector credential is resolved by server code only — it is never placed in a prompt, a tool result, an error message, a URL, or audit details.
+It is never a generic fetch proxy. Every URL template lives in trusted code; every provider identifier is validated; there is no "fetch this URL" tool. A provider key lives on the user's device: the server sees only an opaque `credential_ref` and enqueues a typed call that the device daemon executes. No provider key is placed in a prompt, a tool result, an error message, a URL, audit details, the database, or server env.
 
 An inbound webhook is a **task source, not an execution path**: it can create a task, and it cannot approve, merge, deploy, resolve or comment (`ARCHITECTURE.md` §7–§8, `apps/web/src/routes/api.webhooks.$.tsx`).
 
@@ -36,7 +36,7 @@ Implemented today: **GitHub** (App auth, incident context, signed intake, two sc
 | Notification | [Slack](slack.md) | Free workspace | Design-only |
 | Transport | [Generic signed webhook](generic-webhook.md) | Platform | **Implemented** |
 
-"Design-only" describes the intake/agent surface. Wave 16 added adapter modules under `packages/integrations/src/{sentry,grafana,pagerduty,kubernetes}/` (fake-tested, not yet registered as agent tools); the remaining vendors have no code. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
+**Ten connectors are implemented** (user decision: implement ten, document the rest): GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom and SigNoz. Their adapter modules are merged and fake-tested; webhook intake and device-backed tool binding are landing in wave 17. The other vendors in this index have verified documentation and no code; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
 
 Both GitHub scoped writes are live-proven on 2026-10-31: `github.rerun_workflow` (run `41085679072`, attempt 2, audit row `b0bd5386…`) and `github.comment` (comment `6547408811` on PR #2, audit row `bed3a504…`, after adding `pull_requests:write`). They are still not registered as agent tools; see [github.md](github.md) §8.3.
 
@@ -105,7 +105,7 @@ Binding rules are in `apps/web/src/server/incident-intake-runtime.server.ts`. Th
 Cross-cutting documents:
 
 - [connector-onboarding.md](../connector-onboarding.md) — how a user connects an account, how credentials are stored/rotated, how the sandbox agent gets tool access, and the free-tier guardrails.
-- [connector-usage.md](../connector-usage.md) — adapter contract, credential broker, multi-connector routing and implementation order.
+- [connector-usage.md](../connector-usage.md) — adapter contract, device credential broker, multi-connector routing and implementation order.
 - [free-tier-catalog.md](free-tier-catalog.md) — verified free/paid matrix and recommended defaults.
 - [env-reference.md](env-reference.md) — every connector env name, grouped (names only; values blank).
 - [_template.md](_template.md) — checklist for the next connector.

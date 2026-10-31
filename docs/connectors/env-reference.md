@@ -4,10 +4,10 @@
 |---|---|
 | Purpose | Names only for every connector setting; no values |
 | Generated from | `docs/connectors/*.md` dotenv blocks, 2026-10-31 |
-| Product model | Per-organization credentials are stored encrypted in `connector_credentials`; see [`docs/connector-onboarding.md`](../connector-onboarding.md) |
-| When to use env | Single-tenant/operator fallback before the credential UI exists, or deployment-level secrets (webhook secrets, KEK) |
+| Product model | Provider keys are held on the user's device; the server stores only a device-token hash and connector metadata (`credential_ref`), never a secret. See [`docs/connector-onboarding.md`](../connector-onboarding.md) |
+| When to use env | Deployment-level webhook verification secrets only; vendor read keys belong on the device |
 
-**Platform-level (deployment env):** `CONNECTOR_CREDENTIAL_KEY` (KEK for the credential store), `DATABASE_URL`.
+**Platform-level (deployment env):** `DATABASE_URL`, `DEVICE_GATEWAY_ENABLED`, and the inbound webhook secrets (`WEBHOOK_SENTRY_SECRET`, `WEBHOOK_GRAFANA_SECRET`, `WEBHOOK_PAGERDUTY_SECRET`). There is no server-side credential encryption key.
 
 Never commit values. A stored per-organization credential takes precedence over an env fallback.
 

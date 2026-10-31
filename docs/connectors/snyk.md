@@ -54,7 +54,7 @@ Public-vs-private: Snyk Free monitors public and private repositories within the
 | Header | `Authorization: token <API_TOKEN>` [S4] |
 | Token type | Service account token tied to one organization, preferred over a personal token; group service accounts only if cross-org reads are required [S4] |
 | Region | The token is region-specific. Use `https://api.snyk.io/rest`, `https://api.us.snyk.io/rest`, `https://api.eu.snyk.io/rest` or `https://api.au.snyk.io/rest` matching the account [S6] |
-| Storage | Server-only connector credential, encrypted at rest, keyed by `(organization, connector)`; never in a prompt or URL |
+| Storage | Device-held credential (user keychain), referenced by an opaque `credential_ref`; never on the server, in a prompt or in a URL |
 | Rotation | Create a second service account token, deploy it, verify one read, then revoke the first; tokens are long-lived, so rotation is scheduled, not automatic |
 
 Requested permissions, taken from the OpenAPI description of `GET /orgs/{org_id}/issues` [S1]:

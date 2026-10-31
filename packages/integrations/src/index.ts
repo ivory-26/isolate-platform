@@ -1,10 +1,12 @@
 /**
  * Barrel for the integrations package (github + mcp surfaces). All public
- * contracts are exported here; credentials always stay server-side.
+ * contracts are exported here; connector credentials stay on the user's
+ * device, so this package never holds a provider secret.
  */
 
-export * from "./connectors/credential-broker";
-export * from "./connectors/credential-crypto";
+export * from "./connectors/device-broker";
+export * from "./connectors/device-proxy";
+export * from "./connectors/device-token";
 export * from "./github/auth";
 export * from "./github/context";
 export * from "./github/incidents";

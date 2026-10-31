@@ -2,14 +2,19 @@ import { describe, expect, test } from "bun:test";
 import {
 	CONNECTOR_AUTH_KINDS,
 	CONNECTOR_CREDENTIAL_STATUSES,
+	CONNECTOR_DEVICE_STATUSES,
 	type ConnectorCredentialSummary,
+	type ConnectorDeviceSummary,
 	connectorAuthKindSchema,
+	connectorCredentialRefSchema,
 	connectorCredentialStatusSchema,
+	connectorDeviceStatusSchema,
 	connectorDisplayNameSchema,
 	connectorIdSchema,
 	connectorScopesSchema,
 	emptyFreeTierProfile,
 	freeTierProfileSchema,
+	MAX_CONNECTOR_CREDENTIAL_REF_CHARS,
 	MAX_CONNECTOR_DISPLAY_NAME_CHARS,
 	MAX_CONNECTOR_SCOPE_CHARS,
 	MAX_CONNECTOR_SCOPES,
@@ -19,16 +24,26 @@ import { asOrganizationId } from "./ids";
 const summary: ConnectorCredentialSummary = {
 	id: "11111111-1111-4111-8111-111111111111",
 	organizationId: asOrganizationId("22222222-2222-4222-8222-222222222222"),
+	deviceId: "33333333-3333-4333-8333-333333333333",
 	connectorId: "sentry",
 	displayName: "Team Sentry",
 	authKind: "api_key",
+	credentialRef: "keychain:isolate/sentry/team",
 	scopes: ["issues:read"],
 	status: "active",
 	freeTierProfile: emptyFreeTierProfile(),
 	metadata: { enabledTools: ["sentry.issue_context"] },
-	keyVersion: 1,
 	lastValidatedAt: new Date("2026-10-31T12:00:00.000Z"),
 	lastUsedAt: null,
+};
+
+const device: ConnectorDeviceSummary = {
+	id: "33333333-3333-4333-8333-333333333333",
+	organizationId: asOrganizationId("22222222-2222-4222-8222-222222222222"),
+	userId: null,
+	displayName: "Sahil's laptop",
+	status: "active",
+	lastSeenAt: new Date("2026-10-31T12:00:00.000Z"),
 	createdAt: new Date("2026-10-31T11:00:00.000Z"),
 	updatedAt: new Date("2026-10-31T12:00:00.000Z"),
 };
@@ -49,14 +64,21 @@ describe("connector contracts", () => {
 			"invalid",
 			"revoked",
 		]);
+		expect(CONNECTOR_DEVICE_STATUSES).toEqual(["pending", "active", "revoked"]);
 		for (const kind of CONNECTOR_AUTH_KINDS) {
 			expect(connectorAuthKindSchema.parse(kind)).toBe(kind);
 		}
 		for (const status of CONNECTOR_CREDENTIAL_STATUSES) {
 			expect(connectorCredentialStatusSchema.parse(status)).toBe(status);
 		}
+		for (const status of CONNECTOR_DEVICE_STATUSES) {
+			expect(connectorDeviceStatusSchema.parse(status)).toBe(status);
+		}
 		expect(connectorAuthKindSchema.safeParse("oauth").success).toBe(false);
 		expect(connectorCredentialStatusSchema.safeParse("expired").success).toBe(
+			false,
+		);
+		expect(connectorDeviceStatusSchema.safeParse("offline").success).toBe(
 			false,
 		);
 	});
@@ -95,6 +117,28 @@ describe("connector contracts", () => {
 				"n".repeat(MAX_CONNECTOR_DISPLAY_NAME_CHARS + 1),
 			).success,
 		).toBe(false);
+	});
+
+	test("credential refs are bounded opaque device-side names", () => {
+		expect(connectorCredentialRefSchema.parse("keychain:isolate/sentry")).toBe(
+			"keychain:isolate/sentry",
+		);
+		expect(
+			connectorCredentialRefSchema.parse(
+				"r".repeat(MAX_CONNECTOR_CREDENTIAL_REF_CHARS),
+			),
+		).toHaveLength(MAX_CONNECTOR_CREDENTIAL_REF_CHARS);
+		for (const invalid of [
+			"",
+			"   ",
+			"r".repeat(MAX_CONNECTOR_CREDENTIAL_REF_CHARS + 1),
+			"bad\u0000ref",
+			"bad\nref",
+		]) {
+			expect(connectorCredentialRefSchema.safeParse(invalid).success).toBe(
+				false,
+			);
+		}
 	});
 
 	test("scopes are capped at 32 tokens of at most 64 characters", () => {
@@ -149,7 +193,7 @@ describe("connector contracts", () => {
 		}
 	});
 
-	test("a credential summary carries no secret or ciphertext field", () => {
+	test("a credential summary carries no secret, ciphertext or key material", () => {
 		const withSecret: ConnectorCredentialSummary = {
 			...summary,
 			// @ts-expect-error summaries never carry a secret
@@ -160,11 +204,39 @@ describe("connector contracts", () => {
 			// @ts-expect-error summaries never carry ciphertext
 			encryptedPayload: new Uint8Array(1),
 		};
+		const withKeyVersion: ConnectorCredentialSummary = {
+			...summary,
+			// @ts-expect-error summaries never carry a key version
+			keyVersion: 1,
+		};
 		expect(Object.hasOwn(withSecret, "secret")).toBe(true);
 		expect(Object.hasOwn(withCiphertext, "encryptedPayload")).toBe(true);
+		expect(Object.hasOwn(withKeyVersion, "keyVersion")).toBe(true);
 		const serialized = JSON.stringify(summary);
 		expect(serialized).not.toContain("secret");
 		expect(serialized).not.toContain("ciphertext");
 		expect(serialized).not.toContain("wrappedDek");
+		expect(serialized).not.toContain("keyVersion");
+		expect(summary.deviceId).toBe(device.id);
+		expect(summary.credentialRef).toBe("keychain:isolate/sentry/team");
+	});
+
+	test("a device summary carries no token or token hash", () => {
+		const withToken: ConnectorDeviceSummary = {
+			...device,
+			// @ts-expect-error device summaries never carry a token
+			token: "t",
+		};
+		const withHash: ConnectorDeviceSummary = {
+			...device,
+			// @ts-expect-error device summaries never carry a token hash
+			tokenHash: "a".repeat(64),
+		};
+		expect(Object.hasOwn(withToken, "token")).toBe(true);
+		expect(Object.hasOwn(withHash, "tokenHash")).toBe(true);
+		const serialized = JSON.stringify(device);
+		expect(serialized).not.toContain("token");
+		expect(serialized).not.toContain("hash");
+		expect(device.status).toBe("active");
 	});
 });

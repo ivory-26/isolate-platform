@@ -40,7 +40,7 @@ Four consequences, all binding:
 ## 1. User journey
 
 ```text
-install daemon ─► register device ─► activate ─► catalog ─► connect metadata
+install daemon ─► register device (active, token shown once) ─► catalog ─► connect metadata
                                                               │
    ┌──────────────── run task ◄── verify (one cheap read on device)
    │                                                          │
@@ -71,7 +71,7 @@ install daemon ─► register device ─► activate ─► catalog ─► conn
 | `device_pending` | Device registered, not yet active | "Waiting for an owner or admin" | Cancel |
 | `device_offline` | Active device is not polling | "Device offline; connector calls will pause" | Retry later |
 | `device_revoked` | Device token hash revoked | "Device disconnected; register again" | Register |
-| `connect_forbidden` | Role lacks `connector:manage` | "Ask an owner or admin" | Back |
+| `connect_forbidden` | Role lacks `member:manage` (owner/admin) | "Ask an owner or admin" | Back |
 | `connect_form` | Capability ok | Fields for the credential kind; `autocomplete="off"` | Submit |
 | `connect_oauth_waiting` | Authorization-code start | "Waiting for the provider…" with a cancel link | Cancel |
 | `connect_validating` | Submit accepted | One bounded spinner, no progress theatre | Wait |
@@ -106,9 +106,8 @@ storage, sets `Cache-Control: private, no-store`, and returns a bounded
 | Action | Method | Capability | Input (bounded) | Output |
 |---|---|---|---|---|
 | `listConnectorDevices` | GET | `connector:read` | none | Device summaries with `lastSeenAt`, status; never a token hash |
-| `registerConnectorDevice` | POST | `connector:manage` | `{ displayName, tokenHash }` | `{ deviceId, status: "pending" }` |
-| `activateConnectorDevice` | POST | `connector:manage` | `{ deviceId }` | `{ status: "active" }` |
-| `revokeConnectorDevice` | POST | `connector:manage` | `{ deviceId }` | `{ status: "revoked" }` |
+| `registerConnectorDevice` | POST | `member:manage` | `{ displayName }` | `{ deviceId, token }` once; status `active` |
+| `revokeConnectorDevice` | POST | `member:manage` | `{ deviceId }` | `{ status: "revoked" }` |
 | `listConnectorCatalog` | GET | `connector:read` | none | Catalog entries with free-tier profile |
 | `getConnectorInstance` | GET | `connector:read` | `{ connector }` | Status summary, enabled tools, usage counters; never a secret (the server has none) |
 | `startConnectorConnect` | POST | `connector:manage` | `{ connector, credentialKind, displayName, baseUrl? }` | Form descriptor or a device-side OAuth start descriptor |

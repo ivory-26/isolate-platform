@@ -32,7 +32,7 @@ Notes:
 
 - **All ten adapter modules are merged and fake-tested.** Five were merged in wave 17 (Datadog, New Relic, Honeycomb, Axiom, SigNoz).
 - Sentry, Grafana and PagerDuty now have signed intake modes. Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes have no native verifier and require the signed generic bridge.
-- "No tool binding" means the adapter functions are not registered as agent tools yet: the device transport and call queue are still landing. An allowlisted but unimplemented tool is denied with `POLICY_DENIED`.
+- Worker tool binding is merged: the 31 connector tools are registered only when `DEVICE_GATEWAY_ENABLED=true` and a daemon is polling; otherwise they stay denied. The daemon client itself is still landing.
 - No SaaS vendor except GitHub has been exercised live. Every SaaS adapter is fake-tested.
 - **Kubernetes has a local live proof:** `kind` cluster `isolate-demo`, namespaced read-only ServiceAccount, failing demo pod; `bun run acceptance:k8s-local` returned 2 bounded items (warning events + pod) and `truncated: true`. No kubeconfig or token enters the sandbox.
 

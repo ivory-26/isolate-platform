@@ -33,12 +33,12 @@ first is in [`../connector-usage.md`](../connector-usage.md) §2.
 
 | Endpoint | Auth | Purpose | Availability |
 |---|---|---|---|
-| `POST /api/device/register` | user session, `member:manage` | create a device, return the token **once** | landing (wave 17) |
-| `GET /api/device/list` | user session, `member:manage` | list devices for the organization (no hashes) | landing (wave 17) |
-| `POST /api/device/revoke` | user session, `member:manage` | revoke a device; idempotent | landing (wave 17) |
-| `POST /api/connectors/connect` | user session, `member:manage` | store metadata + opaque `credential_ref` | landing (wave 17) |
-| `GET /api/connectors/list` | user session, `member:manage` | list connected metadata | landing (wave 17) |
-| `POST /api/connectors/revoke` | user session, `member:manage` | revoke one connection | landing (wave 17) |
+| `POST /api/device/register` | user session, `member:manage` | create a device, return the token **once**, status active | **implemented** |
+| `GET /api/device/list` | user session, `organization:read` | list devices for the organization (no hashes) | **implemented** |
+| `POST /api/device/revoke` | user session, `member:manage` | revoke a device; idempotent | **implemented** |
+| `POST /api/connectors/connect` | user session, `member:manage` | store metadata + opaque `credential_ref` | **implemented** |
+| `GET /api/connectors/list` | user session, `organization:read` | list connected metadata | **implemented** |
+| `POST /api/connectors/revoke` | user session, `member:manage` | revoke one connection | **implemented** |
 | `POST /api/device/claim` | device bearer token | claim one queued call | **implemented** |
 | `POST /api/device/calls/{id}/result` | device bearer token | post the bounded result | **implemented** |
 | `POST /api/device/heartbeat` | device bearer token | touch `last_seen_at` | **implemented** |
@@ -50,7 +50,8 @@ returns `503`. The gateway never reads a provider key.
 
 1. **Create.** The owner/admin posts a display name. The server generates 256 bits of
    randomness (base64url), stores only `sha256(token)` in `connector_devices.token_hash`,
-   and returns the plaintext once with `Cache-Control: no-store`.
+   sets the device `active` immediately, and returns the plaintext once with
+   `Cache-Control: no-store`. There is no separate activation step.
 2. **Store.** The device writes the token to its OS keychain (or a file readable only by the
    daemon user). It is never written to the server, the repo, a log or a prompt.
 3. **Use.** Every claim/result/heartbeat sends `Authorization: Bearer <token>`. The server

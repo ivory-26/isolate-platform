@@ -1324,7 +1324,7 @@ function incidentBundle(fingerprint: string): ContextBundle {
 }
 
 describe("task execution handler — wave 13 incident context", () => {
-	test("loads evidence once, after the task context, for the task branch", async () => {
+	test("loads evidence once, after the task context, for the base branch", async () => {
 		const calls: Array<{
 			organizationId: string;
 			taskId: string;
@@ -1347,7 +1347,7 @@ describe("task execution handler — wave 13 incident context", () => {
 				organizationId: ORG_ID,
 				taskId: TASK_ID,
 				repositoryFullName: "acme/widget",
-				ref: DEFAULT_CONTEXT.isolatedBranch,
+				ref: DEFAULT_CONTEXT.baseBranch,
 			},
 		]);
 		const prompt = harness.runtime.prompts[0] ?? "";

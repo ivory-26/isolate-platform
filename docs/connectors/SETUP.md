@@ -40,32 +40,75 @@ Notes:
 
 ### 2.1 What runs on the device
 
-The chosen transport is a user-run device daemon, not a server-side credential store. The daemon is **not shipped on this branch**; the pieces below define what it must install and read when it lands.
+The chosen transport is a user-run device daemon, not a server-side credential store. `apps/device-daemon` is that daemon: it polls the platform, executes typed connector calls with the merged adapters and posts bounded results.
 
-- One small outbound-only daemon. It opens no inbound port and makes HTTPS requests to the platform and to the provider.
-- `~/.isolate/connectors.toml` (proposed path) for non-secret selectors: server URL, `credential_ref` names, organization slug, region, dataset, namespace, API base URL.
-- Provider secrets in the OS keychain, referenced by `credential_ref` (for example `keychain:isolate/sentry/prod`). The TOML file names the item; it does not contain the secret.
-- For Kubernetes only, a CA file and a short-lived token file under `~/.isolate/`, readable only by the daemon user. The kubeconfig stays on the device and never enters the agent sandbox.
+- One small outbound-only daemon. It opens no inbound port and makes HTTPS requests only to the platform and to the provider.
+- JSON config at `ISOLATE_DEVICE_CONFIG` or `~/.isolate/connectors.json`. The file holds non-secret selectors: server origin, the **name** of the token env var, poll interval, vendor base URLs, org/account/dataset ids, datasource UIDs and namespaces.
+- Provider secrets are read from the daemon's own environment, named per field by `vendors.<vendor>.secretEnv`. The config never contains a secret value, and no secret is ever sent to the platform. A keychain adapter is a later seam: `resolveSecret()` in `src/config.ts` is the single read point that would consult the OS keychain instead of `process.env`.
+- The device token is a 43-character base64url value in the env var named by `deviceTokenEnv` (for example `ISOLATE_DEVICE_TOKEN`). Create it with `generateConnectorDeviceToken()` and register only its sha256 hash; see §2.2.
+- For Kubernetes only, `secretEnv.serviceAccountTokenFile` and optional `secretEnv.caFile` name env vars containing **file paths** (for example `KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE`, `KUBERNETES_CA_FILE`). The files are read at call time under `~/.isolate/`, readable only by the daemon user. Kubeconfig is not supported and never enters the agent sandbox.
 
-Proposed shape, names only, values omitted:
+Shape (values omitted; `timeoutMs` is optional per vendor, 1,000–30,000 ms):
 
-```toml
-# ~/.isolate/connectors.toml
-[device]
-server_url = "https://<isolate-host>"
-token_ref = "keychain:isolate-device"
-
-[connectors.sentry]
-credential_ref = "keychain:isolate/sentry/prod"
-org_slug = "<org-slug>"
-region = "us"
-
-[connectors.kubernetes]
-credential_ref = "file:~/.isolate/k8s-token"
-api_url = "https://127.0.0.1:<port>"
-namespace = "isolate-demo"
-ca_file = "~/.isolate/k8s-ca.pem"
+```json
+{
+  "serverUrl": "https://<isolate-host>",
+  "deviceTokenEnv": "ISOLATE_DEVICE_TOKEN",
+  "pollIntervalMs": 2000,
+  "vendors": {
+    "sentry": {
+      "secretEnv": { "token": "SENTRY_API_KEY" },
+      "baseUrl": "https://sentry.io"
+    },
+    "grafana": {
+      "secretEnv": { "token": "GRAFANA_TOKEN" },
+      "baseUrl": "https://grafana.example.com",
+      "metricsDatasourceUid": "<prometheus-uid>",
+      "logsDatasourceUid": "<loki-uid>"
+    },
+    "pagerduty": {
+      "secretEnv": { "token": "PAGERDUTY_API_KEY" },
+      "fromEmail": "oncall@example.com",
+      "baseUrl": "https://api.pagerduty.com"
+    },
+    "kubernetes": {
+      "secretEnv": {
+        "serviceAccountTokenFile": "KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE",
+        "caFile": "KUBERNETES_CA_FILE"
+      },
+      "apiUrl": "https://127.0.0.1:<port>",
+      "namespace": "isolate-demo"
+    },
+    "datadog": {
+      "secretEnv": { "apiKey": "DD_API_KEY", "appKey": "DD_APP_KEY" },
+      "baseUrl": "https://api.datadoghq.com",
+      "logsEnabled": true
+    },
+    "newrelic": {
+      "secretEnv": { "apiKey": "NEW_RELIC_API_KEY" },
+      "accountId": "<account-id>"
+    },
+    "honeycomb": {
+      "secretEnv": { "apiKey": "HONEYCOMB_API_KEY" },
+      "dataset": "<dataset-slug>"
+    },
+    "axiom": {
+      "secretEnv": { "token": "AXIOM_TOKEN" },
+      "baseUrl": "https://api.axiom.co",
+      "dataset": "<dataset>"
+    },
+    "signoz": {
+      "secretEnv": { "apiKey": "SIGNOZ_API_KEY" },
+      "baseUrl": "https://signoz.example.com"
+    }
+  }
+}
 ```
+
+- Every object is strict, the server URL must be an https origin, and a vendor is optional. A vendor with an unset secret env var fails closed as `INTEGRATION_UNAVAILABLE` without a provider call; an unknown tool name is rejected before dispatch.
+- Env fallbacks, used only when the JSON field is absent: `PAGERDUTY_FROM_EMAIL` for `fromEmail`, `KUBERNETES_API_URL` for `apiUrl`, `KUBERNETES_NAMESPACE` for `namespace`.
+- Boot prints configured vendor names and the poll interval only. Each call logs `tool`, `connector`, `outcome` and `durationMs`; the token, params and result bodies are never logged.
+- Run it locally with `bun apps/device-daemon/src/index.ts` after exporting the token and the provider env vars named above.
 
 ### 2.2 Device token creation and registration
 

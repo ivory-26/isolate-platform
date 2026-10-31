@@ -23,9 +23,21 @@ Coordinator reconciliation `12b897e`: catalog added to the survey and index, sta
 biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail / 10 skip offline ×2 · `acceptance:offline` 7/7 (`--no-env-file`) · web build + 34-check sweep + smoke.
 
 ### W15-LIVE — status
-- `github.comment`: attempted **once**; failed 403 `POLICY_DENIED` ("Resource not accessible by integration") despite the installation reporting `issues: write`. Failure audit row written; **not retried**. **Blocked on user confirmation.**
-- Incident end-to-end run: prepared (`LIVE_INCIDENT=1`, seeded ids, inline webhook secret, Meta + Modal, push disabled) but **awaiting explicit approval**.
-- No metered spend was incurred by the failed comment attempt; no sandbox was created.
+- `github.comment`: attempted once, 403 `POLICY_DENIED`; after user approval was re-accepted, retried **once** and failed identically. **No further retry.** The installation reports `issues: write`, so the cause needs a token-scope diagnosis.
+- Incident end-to-end: executed with a **50k** acceptance cap. Signed webhook created task `e0e1c5a3-…`; 4 Meta turns (4 tool calls each) then `failed` / `budget exhausted`. Measured **54,670 prompt + 5,300 completion** tokens, one Modal sandbox **96 s**, no push. Retry with the 1M operator default is a spend decision pending user approval.
+- No sandbox was created by the comment attempts; no cost rows were priced (`cost_usd` null for Meta contributor and for Modal without a price table).
+
+## Wave 16 — first connector adapters + credential store (2026-10-31)
+
+User direction: start the real adapters in separate worktree/subagent lanes. First batch: the four offered connectors plus the shared credential foundation.
+
+- **W16-CRED** — `packages/db` migration `0010_connectors.sql` (encrypted `connector_credentials`, `connector_usage_ledger`), repositories + fakes, AES-256-GCM broker in `packages/integrations/src/connectors/`, shared credential types. Env fallback for single-tenant only; `CONNECTOR_CREDENTIAL_KEY` required for the store.
+- **W16-SENTRY** — `packages/integrations/src/sentry/`: signed webhook, normalizer, bounded context reader, read-only tools. Fake-fetch tests only.
+- **W16-GRAFANA** — `packages/integrations/src/grafana/`: alert webhook (optional HMAC), normalizer, datasource query reader (metrics/logs/traces), read-only tools.
+- **W16-PAGERDUTY** — `packages/integrations/src/pagerduty/`: v3 signed webhook, normalizer, incident/log-entry/service reader, read-only + ack/resolve scoped-write design.
+- **W16-KUBERNETES** — `packages/integrations/src/kubernetes/`: read-only in-cluster client (events/pods/logs tail), normalizer, tools; no kubeconfig in the sandbox.
+
+Rules: one owner per file group; adapters never edit `packages/integrations/src/index.ts` (coordinator integrates); no live calls, credentials, or `.env` access; scoped gates ×2; commit on `task/w16-*`; never push.
 
 ## Wave 14 — scoped GitHub write live + connector docs (2026-10-31)
 

@@ -1,8 +1,16 @@
 # Status
 
-Last updated: 2026-11-01 (wave 17: device-held credentials applied to Neon; 10-connector cap; Datadog/Axiom/SigNoz merged; transport and intake binding in flight)
+Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lanes; published history purged of JWT-shaped test fixtures)
 
-## Current: wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
+## Current: wave 18 — connector hardening, tracing and secret remediation (2026-11-01)
+
+- **Secret incident (resolved)**: GitGuardian flagged synthetic JWT-shaped fixtures in the Kubernetes and SigNoz tests (commits `c62c705`, `1217440`, `484b473`, `02cbf6f`). They were synthetic (`alg` + `sub` + short signature), never live credentials. Fixtures now build a JWT at runtime; `security:check` rejects static JWT literals in tests; `.gitleaks.toml` gained an explicit JWT rule; the CI secret scan is **blocking** instead of advisory. History was rewritten and force-pushed with lease; `origin/main` is `7beec7a` and contains no JWT-shaped literal.
+- **Audit**: fresh full audit of auth/Neon Auth, tenancy, rate limits, validation, secret handling, queue integrity, SSRF, load balancing and batching is running.
+- **Hardening lanes**: DB-backed rate limiting/throttling + batched claims (`task/w18-rate`), per-tool Zod validation + request guard (`task/w18-batch`), bounded streaming response reads (`task/w18-stream`). `0012_rate_limits` and `0013_trace_context` are created, not applied.
+- **Tracing**: shared W3C-compatible trace primitives (`9f3140c`) and the design of record (`docs/connectors/TRACING.md`); worker/gateway/daemon wiring follows the hardening merges.
+- **Scaling record**: `docs/connectors/SCALING.md` documents the multi-replica model, limits, backpressure, batching and chunking.
+
+## Previous: wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
 
 **Security pivot (user):** no provider key may be stored on the server; keys stay on the user's device and a **device daemon polls the server** for typed connector calls. The server stores only a device-token hash and connector metadata.
 

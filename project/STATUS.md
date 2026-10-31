@@ -1,8 +1,27 @@
 # Status
 
-Last updated: 2026-11-01 (wave 16: credential foundation + Sentry/Grafana/PagerDuty/Kubernetes adapters merged; wave 15 live paths both passed)
+Last updated: 2026-11-01 (wave 17: device-held credentials applied to Neon; 10-connector cap; Datadog/Axiom/SigNoz merged; transport and intake binding in flight)
 
-## Current: wave 16 — credential foundation + first four adapters (2026-11-01)
+## Current: wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
+
+**Security pivot (user):** no provider key may be stored on the server; keys stay on the user's device and a **device daemon polls the server** for typed connector calls. The server stores only a device-token hash and connector metadata.
+
+- **DB applied**: `0010_connectors.sql` was rewritten before application and applied to Neon (10 migrations, 20/20 legacy tables verified). It now has `connector_devices` (sha256 `token_hash` only), `connector_credentials` (`device_id`, `credential_ref`, **no secret columns**), and `connector_usage_ledger`. The old `CONNECTOR_CREDENTIAL_KEY`/AEAD design was never applied.
+- **Device refactor merged** (`42a8c0c`, merge `7a3b679`): server-side `credential-crypto.ts`/`credential-broker.ts` deleted; `device-token`, `device-proxy` (injected transport, `NullDeviceProxy` fail-closed), `device-broker` (active device + credential metadata only), and device/credential repositories with token-hash verification.
+- **Scope cap (user): 10 connectors implemented, the rest documented only.** GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, Axiom and SigNoz are merged; New Relic and Honeycomb are in flight. No further adapters will be implemented beyond these ten.
+- **Binding started**: 31 typed connector tool names and risk bands (`0473367`); reads `read_only`, PagerDuty acknowledge/resolve `scoped_write`, none sensitive/destructive. Webhook-intake and device-poll transport lanes are running; tool registry wiring follows.
+- **Security loop**: `bun run security:check` (`scripts/security-check.ts`) forbids server-side connector keys, encrypted credential columns, committed `.env`/`.pem`, private-key blocks and real-looking provider tokens. Latest run: **PASS** (230 source/migration files, 497 tracked files).
+- **Docs**: a living `docs/connectors/SETUP.md` is being written with per-connector key-fetch steps for the ten; onboarding/usage docs are being rewritten to the device model (in flight).
+- **Gates at this point**: typecheck 8/8 · 314 scoped tests green · security check PASS. Full offline suite runs once all lanes merge.
+
+### Wave 17 open items
+1. Merge New Relic + Honeycomb, intake, setup/secdocs and transport lanes.
+2. Apply `0011_connector_calls.sql` **with approval** (durable device call queue), then bind worker tool implementations to the device proxy.
+3. Kubernetes local acceptance: Docker Desktop daemon is installed but not running; `kind`/`k3d` not installed. Start Docker, install `kind`, create a disposable cluster, mint a namespaced read-only token, run the local acceptance.
+4. One bounded live acceptance per SaaS adapter once the user supplies device-held credentials.
+5. Validation loop: full biome/typecheck/tests ×2/acceptance after every merge; security loop after every merge.
+
+## Previous: wave 16 — credential foundation + first four adapters (2026-11-01)
 
 - **Credential foundation** (`f30f952`, merge `2368530`): shared connector types; migration `0010_connectors.sql` (**not applied**); tenant-scoped `ConnectorCredentialRepository` with ciphertext only via `getSecret` and revoke zeroing both bytea columns; atomic `connector_usage_ledger.consume` (parallel tests stop at the limit); AES-256-GCM KEK/DEK envelope with AAD binding and fixed errors; `ConnectorCredentialBroker` with active-only resolution, callback-only material, and opt-in single-tenant env fallback.
 - **Adapters** (all fake-fetch tested, zero live calls):

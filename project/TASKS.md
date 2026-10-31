@@ -27,6 +27,28 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 - Incident end-to-end: **PASS on the approved 1M-budget retry**. Task `2a6d6902-…` → `review_ready`; 12 Meta calls, **170,818 prompt / 13,101 completion**; one Modal sandbox **244 s**; diff artifact 1 file / 26 insertions; push disabled. The earlier 50k run is retained as cap-enforcement evidence.
 - No cost was priced (`cost_usd` null for the Meta contributor model and for Modal without a price table); no GitHub write occurred in the incident run.
 
+## Wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
+
+User decisions: keys stay on the user's device (device daemon polls the server); implement at most **10** connectors, document the rest; maintain a setup guide; run validation and security loops.
+
+| Lane | Commit | Status |
+|---|---|---|
+| W17-DEVICE | `42a8c0c` → merge `7a3b679` | **done** — device schema code, token hash, proxy/broker, server crypto deleted |
+| W17-DATADOG | `873d09b` → merge `52c503e` | **done** |
+| W17-AXIOM | `91df22b` → merge `295974c` | **done** |
+| W17-SIGNOZ | `c62c705` → merge `1217440` | **done** |
+| W17-NEWRELIC | in flight | pending |
+| W17-HONEYCOMB | in flight | pending |
+| W17-INTAKE | in flight | pending (Sentry/Grafana/PagerDuty webhook modes) |
+| W17-TRANSPORT | in flight | pending (`0011` call queue + device endpoints; **not applied**) |
+| W17-SETUP | in flight | pending (`docs/connectors/SETUP.md`) |
+| W17-SECDOCS | in flight | pending (device-model doc rewrite) |
+
+Coordinator `0473367`: 31 connector tool names/risk bands, source enums, barrel exports, and `bun run security:check` (PASS).
+
+### W17-OPS — remaining
+- Merge remaining lanes; apply `0011` **with approval**; bind worker tools to the device proxy; Kubernetes local acceptance (needs Docker daemon + kind); full gates ×2 + security loop; live acceptance per SaaS adapter; update SETUP statuses.
+
 ## Wave 16 — first connector adapters + credential store (2026-10-31 → merged 2026-11-01)
 
 User direction: start the real adapters in separate worktree/subagent lanes. First batch: the four offered connectors plus the shared credential foundation.

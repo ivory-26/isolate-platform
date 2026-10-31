@@ -100,7 +100,7 @@ function dependencies(
 }
 
 describe("commentOnPullRequest", () => {
-	test("posts a bounded comment with issues:write and audits it", async () => {
+	test("posts a bounded comment with issues:write and pull_requests:write, and audits it", async () => {
 		const { impl, calls } = recordingFetch(() =>
 			jsonResponse(201, {
 				id: 555,
@@ -133,6 +133,7 @@ describe("commentOnPullRequest", () => {
 			repositoryFullName: REPOSITORY,
 			contents: "read",
 			issues: "write",
+			pullRequests: "write",
 		});
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.url).toBe(

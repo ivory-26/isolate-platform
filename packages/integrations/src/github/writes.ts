@@ -205,6 +205,7 @@ async function prepareWrite(
 		contents: "read";
 		issues?: "write";
 		actions?: "write";
+		pullRequests?: "write";
 	},
 	audit: {
 		onFailure: (code: PullRequestFailureCode, message: string) => void;
@@ -393,6 +394,9 @@ export async function commentOnPullRequest(
 			repositoryFullName: validated.repositoryFullName,
 			contents: "read",
 			issues: "write",
+			// Pull-request comments are issue comments on GitHub, but the
+			// installation rejected issues:write alone with 403; request both.
+			pullRequests: "write",
 		},
 		{
 			onFailure: (code) => {

@@ -1,14 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
+import type {
+	CountActiveIncidentTasksInput,
+	IncidentRepository,
+	IncidentSignalInput,
+} from "@isolate/db";
 import { incidentSignalSchema } from "@isolate/shared";
 import { localDemo } from "./caller-scope.server";
 import {
 	acceptIncident,
 	buildIncidentGoal,
 	createInMemoryIncidentDedupeStore,
+	detectIncidentIntakeMode,
+	evaluateIncidentTrigger,
+	githubIncidentOnDefaultBranch,
 	INCIDENT_DEDUPE_WINDOW_MS,
+	INCIDENT_TASK_CAP_WINDOW_MS,
 	type IncidentIntakeDependencies,
 	type IncidentRepositoryRoute,
+	MAX_ACTIVE_INCIDENT_TASKS,
 	UNTRUSTED_INCIDENT_NOTICE,
 } from "./incident-intake.server";
 import { harness, otherScope, scope, workflowPin } from "./test-fixtures";
@@ -106,7 +116,9 @@ describe("acceptIncident", () => {
 			delivery(signal(), { timestamp: NOW_SECONDS }),
 		);
 		expect(result.ok).toBe(true);
-		if (!result.ok) throw new Error("Expected acceptance");
+		if (!result.ok || !("taskId" in result)) {
+			throw new Error("Expected a created task");
+		}
 		expect(result.deduped).toBe(false);
 		expect(result.jobId).not.toBe(result.taskId);
 		expect(h.tasks.calls).toHaveLength(1);
@@ -150,7 +162,9 @@ describe("acceptIncident", () => {
 		const h = harness();
 		const deps = dependencies(h);
 		const first = await acceptIncident(deps, delivery(signal()));
-		if (!first.ok) throw new Error("Expected acceptance");
+		if (!first.ok || !("taskId" in first)) {
+			throw new Error("Expected a created task");
+		}
 		const replay = await acceptIncident(deps, {
 			...delivery(signal(), {
 				timestamp: NOW_SECONDS + 29 * 60,
@@ -446,5 +460,539 @@ describe("in-memory dedupe store", () => {
 				NOW,
 			),
 		).toBeNull();
+	});
+});
+
+const GITHUB_SECRET = "fabricated-github-webhook-secret-0123456789";
+const HEAD_SHA = "a".repeat(40);
+
+type WorkflowPayloadOptions = {
+	action?: string;
+	defaultBranch?: string;
+	headBranch?: string;
+	conclusion?: string;
+	name?: string;
+	environment?: string;
+};
+
+function workflowPayload(options: WorkflowPayloadOptions = {}) {
+	return {
+		action: options.action ?? "completed",
+		repository: {
+			name: "checkout-api",
+			full_name: "owner/checkout-api",
+			default_branch: options.defaultBranch ?? "main",
+			html_url: "https://github.com/owner/checkout-api",
+		},
+		workflow_run: {
+			id: 42,
+			name: options.name ?? "CI",
+			head_branch: options.headBranch ?? "main",
+			head_sha: HEAD_SHA,
+			conclusion: options.conclusion ?? "failure",
+			html_url: "https://github.com/owner/checkout-api/actions/runs/42",
+			...(options.environment === undefined
+				? {}
+				: { environment: { name: options.environment } }),
+		},
+	};
+}
+
+type GitHubDeliveryOptions = {
+	secret?: string;
+	event?: string;
+	delivery?: string;
+	body?: string;
+	signature?: string | null;
+};
+
+function githubDelivery(
+	payload: unknown,
+	options: GitHubDeliveryOptions = {},
+): { rawBody: string; headers: Headers } {
+	const rawBody = options.body ?? JSON.stringify(payload);
+	const signature =
+		options.signature === undefined
+			? `sha256=${createHmac("sha256", options.secret ?? GITHUB_SECRET)
+					.update(rawBody)
+					.digest("hex")}`
+			: options.signature;
+	const headers = new Headers();
+	headers.set("x-github-event", options.event ?? "workflow_run");
+	headers.set("x-github-delivery", options.delivery ?? "delivery-1");
+	if (signature !== null) headers.set("x-hub-signature-256", signature);
+	return { rawBody, headers };
+}
+
+/** Fake signal store: shares the dedupe bucket and records every call. */
+function incidentRepository(
+	options: { active?: number; duplicate?: boolean; fail?: boolean } = {},
+) {
+	const signalCalls: IncidentSignalInput[] = [];
+	const capCalls: CountActiveIncidentTasksInput[] = [];
+	const recorded = new Set<string>();
+	const repository: IncidentRepository = {
+		async recordIfNew(input) {
+			signalCalls.push(input);
+			if (options.fail === true) throw new Error("private signal store detail");
+			const key = `${input.organizationId}:${input.source}:${input.fingerprint}:${Math.floor(
+				(input.receivedAt ?? new Date(NOW)).getTime() /
+					INCIDENT_DEDUPE_WINDOW_MS,
+			)}`;
+			if (options.duplicate === true || recorded.has(key))
+				return { ok: true, signalId: "signal-surviving", created: false };
+			recorded.add(key);
+			return { ok: true, signalId: crypto.randomUUID(), created: true };
+		},
+		async countActiveIncidentTasks(input) {
+			capCalls.push(input);
+			if (options.fail === true) throw new Error("private cap detail");
+			return options.active ?? 0;
+		},
+	};
+	return { repository, signalCalls, capCalls };
+}
+
+function githubDependencies(
+	h: ReturnType<typeof harness>,
+	options: {
+		active?: number;
+		duplicate?: boolean;
+		fail?: boolean;
+		store?: ReturnType<typeof incidentRepository>;
+		overrides?: Partial<IncidentIntakeDependencies>;
+	} = {},
+) {
+	const store = options.store ?? incidentRepository(options);
+	const deps = dependencies(h, {
+		githubSecret: GITHUB_SECRET,
+		incidentRepository: store.repository,
+		...options.overrides,
+	});
+	return { deps, store };
+}
+
+function createdTask(result: Awaited<ReturnType<typeof acceptIncident>>): {
+	taskId: string;
+	jobId: string;
+	deduped: boolean;
+} {
+	if (!result.ok || !("taskId" in result))
+		throw new Error("Expected a created task");
+	return result;
+}
+
+describe("mode selection", () => {
+	test("chooses GitHub only for a delivery carrying x-github-event", () => {
+		expect(
+			detectIncidentIntakeMode(githubDelivery(workflowPayload()).headers),
+		).toBe("github");
+		expect(detectIncidentIntakeMode(delivery(signal()).headers)).toBe(
+			"generic",
+		);
+		expect(detectIncidentIntakeMode({})).toBe("generic");
+		expect(detectIncidentIntakeMode({ "x-github-event": "  " })).toBe(
+			"generic",
+		);
+	});
+
+	test("fails closed with 503 when the detected mode has no secret", async () => {
+		const h = harness();
+		const github = githubDependencies(h, {
+			overrides: { githubSecret: undefined },
+		});
+		expect(
+			await acceptIncident(github.deps, githubDelivery(workflowPayload())),
+		).toEqual({ ok: false, code: "UNAVAILABLE" });
+		const generic = dependencies(h, { signingSecret: undefined });
+		expect(await acceptIncident(generic, delivery(signal()))).toEqual({
+			ok: false,
+			code: "UNAVAILABLE",
+		});
+		expect(h.tasks.calls).toHaveLength(0);
+	});
+
+	test("rejects a GitHub delivery signed with another secret or header set", async () => {
+		const h = harness();
+		const { deps } = githubDependencies(h);
+		const cases = [
+			githubDelivery(workflowPayload(), { secret: SECRET }),
+			githubDelivery(workflowPayload(), {
+				signature: `sha256=${"a".repeat(64)}`,
+			}),
+			githubDelivery(workflowPayload(), {
+				signature: `sha1=${"a".repeat(40)}`,
+			}),
+			githubDelivery(workflowPayload(), { signature: "not-a-signature" }),
+			githubDelivery(workflowPayload(), { signature: null }),
+		];
+		for (const request of cases)
+			expect(await acceptIncident(deps, request)).toEqual({
+				ok: false,
+				code: "UNAUTHORIZED",
+			});
+		// The GitHub secret never verifies a generic (timestamped) delivery.
+		expect(
+			await acceptIncident(
+				dependencies(h, { signingSecret: GITHUB_SECRET }),
+				delivery(signal()),
+			),
+		).toEqual({ ok: false, code: "UNAUTHORIZED" });
+		expect(h.tasks.calls).toHaveLength(0);
+	});
+});
+
+describe("trigger policy", () => {
+	const table = [
+		{
+			severity: "critical",
+			production: true,
+			onDefaultBranch: false,
+			decision: { accepted: true, severity: "critical" },
+		},
+		{
+			severity: "critical",
+			production: true,
+			onDefaultBranch: true,
+			decision: { accepted: true, severity: "critical" },
+		},
+		{
+			severity: "critical",
+			production: false,
+			onDefaultBranch: true,
+			decision: { accepted: false, reason: "production" },
+		},
+		{
+			severity: "high",
+			production: false,
+			onDefaultBranch: true,
+			decision: { accepted: true, severity: "high" },
+		},
+		{
+			severity: "high",
+			production: false,
+			onDefaultBranch: false,
+			decision: { accepted: false, reason: "branch" },
+		},
+		{
+			severity: "high",
+			production: true,
+			onDefaultBranch: false,
+			decision: { accepted: false, reason: "branch" },
+		},
+		{
+			severity: "medium",
+			production: true,
+			onDefaultBranch: true,
+			decision: { accepted: false, reason: "severity" },
+		},
+		{
+			severity: "low",
+			production: true,
+			onDefaultBranch: true,
+			decision: { accepted: false, reason: "severity" },
+		},
+		{
+			severity: "info",
+			production: true,
+			onDefaultBranch: true,
+			decision: { accepted: false, reason: "severity" },
+		},
+	] as const;
+
+	test("accepts only critical-with-production and high-on-default", () => {
+		for (const row of table)
+			expect(
+				evaluateIncidentTrigger({
+					severity: row.severity,
+					production: row.production,
+					onDefaultBranch: row.onDefaultBranch,
+				}),
+			).toEqual(row.decision);
+	});
+
+	test("reads the default branch from the delivery, never from a claim", () => {
+		expect(
+			githubIncidentOnDefaultBranch({
+				name: "workflow_run",
+				payload: workflowPayload({ defaultBranch: "main", headBranch: "main" }),
+			}),
+		).toBe(true);
+		expect(
+			githubIncidentOnDefaultBranch({
+				name: "workflow_run",
+				payload: workflowPayload({
+					defaultBranch: "main",
+					headBranch: "feature/x",
+				}),
+			}),
+		).toBe(false);
+		expect(
+			githubIncidentOnDefaultBranch({
+				name: "workflow_run",
+				payload: workflowPayload({
+					defaultBranch: "develop",
+					headBranch: "develop",
+				}),
+			}),
+		).toBe(true);
+		expect(
+			githubIncidentOnDefaultBranch({
+				name: "push",
+				payload: workflowPayload(),
+			}),
+		).toBe(false);
+		expect(
+			githubIncidentOnDefaultBranch({ name: "workflow_run", payload: null }),
+		).toBe(false);
+		expect(
+			githubIncidentOnDefaultBranch({ name: "workflow_run", payload: {} }),
+		).toBe(false);
+	});
+});
+
+describe("github delivery", () => {
+	test("creates one incident task with provenance and a bounded untrusted goal", async () => {
+		const h = harness();
+		const { deps, store } = githubDependencies(h);
+		const request = githubDelivery(workflowPayload(), {
+			delivery: "delivery-42",
+		});
+		const result = createdTask(await acceptIncident(deps, request));
+		expect(result.deduped).toBe(false);
+		expect(h.tasks.calls).toHaveLength(1);
+		const task = h.tasks.calls[0];
+		if (task === undefined) throw new Error("Expected a task row");
+		expect(task.incidentSource).toBe("github");
+		expect(task.incidentFingerprint).toBe("github:owner/checkout-api:CI:main");
+		expect(task.acceptanceCriteria).toEqual([]);
+		expect(task.acceptanceChecks).toEqual([]);
+		expect(task.goal?.startsWith(UNTRUSTED_INCIDENT_NOTICE)).toBe(true);
+		expect(task.goal).toContain('Workflow "CI" failed on main');
+		expect(task.goal).toContain(
+			"https://github.com/owner/checkout-api/actions/runs/42",
+		);
+		expect(task.goal?.length).toBeLessThanOrEqual(4000);
+		expect(store.signalCalls).toHaveLength(1);
+		const recorded = store.signalCalls[0];
+		if (recorded === undefined) throw new Error("Expected a signal row");
+		expect(recorded.organizationId).toBe(scope.organizationId);
+		expect(recorded.source).toBe("github");
+		expect(recorded.kind).toBe("workflow_failed");
+		expect(recorded.severity).toBe("critical");
+		expect(recorded.service).toBe("checkout-api");
+		expect(recorded.deliveryId).toBe("delivery-42");
+		expect(recorded.receivedAt?.getTime()).toBe(NOW);
+		expect(store.capCalls).toHaveLength(1);
+		const cap = store.capCalls[0];
+		expect(cap?.organizationId).toBe(scope.organizationId);
+		expect(cap?.sources).toEqual(["github"]);
+		expect(cap?.since.getTime()).toBe(NOW - INCIDENT_TASK_CAP_WINDOW_MS);
+	});
+
+	test("accepts a production environment off the default branch", async () => {
+		const h = harness();
+		const { deps } = githubDependencies(h);
+		const result = createdTask(
+			await acceptIncident(
+				deps,
+				githubDelivery(
+					workflowPayload({
+						headBranch: "release/1.2",
+						environment: "production",
+					}),
+				),
+			),
+		);
+		expect(result.deduped).toBe(false);
+		expect(h.tasks.calls).toHaveLength(1);
+	});
+
+	test("accepts high on a non-production default branch", async () => {
+		const h = harness();
+		const { deps, store } = githubDependencies(h);
+		await acceptIncident(
+			deps,
+			githubDelivery(
+				workflowPayload({ defaultBranch: "develop", headBranch: "develop" }),
+			),
+		);
+		expect(store.signalCalls[0]?.severity).toBe("high");
+		expect(h.tasks.calls).toHaveLength(1);
+	});
+
+	test("returns accepted:false for non-triggering deliveries and writes nothing", async () => {
+		const cases = [
+			workflowPayload({ headBranch: "feature/x" }),
+			workflowPayload({ conclusion: "success" }),
+			workflowPayload({ action: "requested" }),
+			{ repository: { name: "checkout-api" }, hello: "world" },
+		];
+		for (const payload of cases) {
+			const h = harness();
+			const { deps, store } = githubDependencies(h);
+			expect(await acceptIncident(deps, githubDelivery(payload))).toEqual({
+				ok: true,
+				accepted: false,
+				deduped: false,
+				throttled: false,
+			});
+			expect(store.signalCalls).toHaveLength(0);
+			expect(store.capCalls).toHaveLength(0);
+			expect(h.tasks.calls).toHaveLength(0);
+			expect(h.queue.calls).toHaveLength(0);
+		}
+		// An unsupported event type is not an incident either.
+		const h = harness();
+		const { deps, store } = githubDependencies(h);
+		expect(
+			await acceptIncident(
+				deps,
+				githubDelivery(workflowPayload(), { event: "push" }),
+			),
+		).toEqual({ ok: true, accepted: false, deduped: false, throttled: false });
+		expect(store.signalCalls).toHaveLength(0);
+	});
+
+	test("rejects malformed JSON after a valid signature without writing", async () => {
+		const h = harness();
+		const { deps, store } = githubDependencies(h);
+		expect(
+			await acceptIncident(deps, githubDelivery(null, { body: "{not json" })),
+		).toEqual({ ok: false, code: "INVALID_INPUT" });
+		expect(store.signalCalls).toHaveLength(0);
+		expect(h.tasks.calls).toHaveLength(0);
+	});
+});
+
+describe("github dedupe and cap", () => {
+	test("a redelivery inside the window reuses the task and writes nothing", async () => {
+		const h = harness();
+		const { deps, store } = githubDependencies(h);
+		const first = createdTask(
+			await acceptIncident(deps, githubDelivery(workflowPayload())),
+		);
+		const replay = createdTask(
+			await acceptIncident(
+				deps,
+				githubDelivery(workflowPayload(), { delivery: "delivery-2" }),
+			),
+		);
+		expect(replay).toEqual({ ...first, deduped: true });
+		expect(h.tasks.calls).toHaveLength(1);
+		expect(store.signalCalls).toHaveLength(1);
+		expect(store.capCalls).toHaveLength(1);
+	});
+
+	test("a surviving signal row dedupes after the in-process store is lost", async () => {
+		const h = harness();
+		const shared = incidentRepository();
+		const first = createdTask(
+			await acceptIncident(
+				githubDependencies(h, { store: shared }).deps,
+				githubDelivery(workflowPayload()),
+			),
+		);
+		// Simulate a restart: new in-memory store, same surviving signal row.
+		const restarted = githubDependencies(h, { store: shared });
+		expect(
+			await acceptIncident(restarted.deps, githubDelivery(workflowPayload())),
+		).toEqual({
+			ok: true,
+			accepted: false,
+			deduped: true,
+			throttled: false,
+		});
+		// The cap is consulted once, for the first delivery only.
+		expect(restarted.store.capCalls).toHaveLength(1);
+		expect(h.tasks.calls).toHaveLength(1);
+		expect(first.deduped).toBe(false);
+	});
+
+	test("opens a new task after the dedupe window closes", async () => {
+		const h = harness();
+		const { deps } = githubDependencies(h);
+		createdTask(await acceptIncident(deps, githubDelivery(workflowPayload())));
+		const later = createdTask(
+			await acceptIncident(deps, {
+				...githubDelivery(workflowPayload(), { delivery: "delivery-3" }),
+				now: NOW + INCIDENT_DEDUPE_WINDOW_MS + 60_000,
+			}),
+		);
+		expect(later.deduped).toBe(false);
+		expect(h.tasks.calls).toHaveLength(2);
+	});
+
+	test("throttles at the per-org cap without creating a task", async () => {
+		const h = harness();
+		const { deps, store } = githubDependencies(h, {
+			active: MAX_ACTIVE_INCIDENT_TASKS,
+		});
+		expect(
+			await acceptIncident(deps, githubDelivery(workflowPayload())),
+		).toEqual({ ok: true, accepted: false, deduped: false, throttled: true });
+		// The signal is recorded before the cap, so a replay is deduped, not retried.
+		expect(store.signalCalls).toHaveLength(1);
+		expect(h.tasks.calls).toHaveLength(0);
+		expect(h.queue.calls).toHaveLength(0);
+
+		const below = harness();
+		const allowed = githubDependencies(below, {
+			active: MAX_ACTIVE_INCIDENT_TASKS - 1,
+		});
+		createdTask(
+			await acceptIncident(allowed.deps, githubDelivery(workflowPayload())),
+		);
+		expect(below.tasks.calls).toHaveLength(1);
+	});
+
+	test("fails closed when the signal store is absent or errors", async () => {
+		const h = harness();
+		const absent = githubDependencies(h, {
+			overrides: { incidentRepository: null },
+		});
+		expect(
+			await acceptIncident(absent.deps, githubDelivery(workflowPayload())),
+		).toEqual({ ok: false, code: "UNAVAILABLE" });
+		const failing = githubDependencies(h, { fail: true });
+		expect(
+			await acceptIncident(failing.deps, githubDelivery(workflowPayload())),
+		).toEqual({ ok: false, code: "UNAVAILABLE" });
+		expect(h.tasks.calls).toHaveLength(0);
+	});
+});
+
+describe("github hygiene", () => {
+	test("never logs or returns the secret, signature or payload text", async () => {
+		const h = harness();
+		const { deps } = githubDependencies(h);
+		const request = githubDelivery(
+			workflowPayload({ name: "payload-marker-7c1" }),
+		);
+		const signature = request.headers.get("x-hub-signature-256") ?? "";
+		const messages: string[] = [];
+		const methods = ["log", "info", "warn", "error"] as const;
+		const original = methods.map((method) => console[method]);
+		for (const method of methods) {
+			console[method] = (...args: unknown[]) => {
+				messages.push(args.map((value) => String(value)).join(" "));
+			};
+		}
+		let result: Awaited<ReturnType<typeof acceptIncident>> | undefined;
+		try {
+			result = await acceptIncident(deps, request);
+		} finally {
+			methods.forEach((method, index) => {
+				console[method] = original[index];
+			});
+		}
+		if (result === undefined) throw new Error("Expected a result");
+		const serialized = JSON.stringify(result);
+		for (const secret of [GITHUB_SECRET, signature, "payload-marker-7c1"])
+			expect(serialized).not.toContain(secret);
+		const logged = messages.join("\n");
+		for (const secret of [GITHUB_SECRET, signature, "payload-marker-7c1"])
+			expect(logged).not.toContain(secret);
+		expect(messages).toHaveLength(0);
 	});
 });

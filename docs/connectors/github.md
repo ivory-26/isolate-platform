@@ -265,7 +265,7 @@ GitHub exposes no `Idempotency-Key` header on either endpoint. The caller must d
 
 The integration functions exist, are exported from `packages/integrations/src/index.ts`, and are fake-tested offline (`writes.test.ts`). They are **not** registered as agent tool implementations: `createSandboxToolImplementations` in `packages/mastra/src/tools/sandbox-tools.ts` has no `github.comment` / `github.rerun_workflow` entry, and the registry denies an allowlisted-but-unimplemented tool with `POLICY_DENIED` (`packages/mastra/src/tools/registry.ts`). No production caller invokes them outside tests.
 
-Consequence: an operator cannot yet trigger these writes through the agent. The integration functions are fake-tested offline and were exercised **live once** on 2026-10-31 through `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`): one authorized `github.rerun_workflow` call on `ivory-26/agent-bank` run `41085679072` was accepted, the audit row (`tool.execute`, `risk=scoped_write`, `outcome=SUCCEEDED`) was persisted, and the run moved to `run_attempt: 2`. The `github.comment` path is still fake-tested only (the one-call budget was spent on the more sensitive `actions:write` path); the same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval.
+Consequence: an operator cannot yet trigger these writes through the agent. The integration functions are fake-tested offline and were exercised **live once** on 2026-10-31 through `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`): one authorized `github.rerun_workflow` call on `ivory-26/agent-bank` run `41085679072` was accepted, the audit row (`tool.execute`, `risk=scoped_write`, `outcome=SUCCEEDED`) was persisted, and the run moved to `run_attempt: 2`. The `github.comment` path was live-proven on 2026-10-31 as well: comment `6547408811` was posted on PR #2 with audit row `bed3a504-4947-4b1f-965a-b5f0d7a4f0a8`. The first attempts returned 403 "Resource not accessible by integration" even though the installation reported `issues: write`; the passing call requests both `issues:write` and `pull_requests:write`.
 
 ## 9. Acceptance checklist
 
@@ -282,8 +282,8 @@ Live (executed once on 2026-10-31 under one explicit authorization; no retries a
 - [x] One disposable run id recorded before the call: `41085679072` (`completed`, `failure`, attempt 1).
 - [x] `github.rerun_workflow` called once; GitHub accepted it and reports `run_attempt: 2`.
 - [x] Exactly one `audit_events` row: `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df`, `details.outcome = SUCCEEDED`, `idempotencyKey = live-rerun-41085679072`.
-- [ ] `github.comment` live call (not made; the one-call budget went to `actions:write`).
-- [x] GitHub API is not credit-funded, so no metered spend to record. No retry was made.
+- [x] `github.comment` live call: comment `6547408811` on `ivory-26/agent-bank#2`, audit row `bed3a504-4947-4b1f-965a-b5f0d7a4f0a8`, after adding `pull_requests:write` to the token request.
+- [x] GitHub API is not credit-funded, so no metered spend to record. No retry was made after the successful call.
 
 ## 10. What must never enter model context
 

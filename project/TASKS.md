@@ -23,9 +23,9 @@ Coordinator reconciliation `12b897e`: catalog added to the survey and index, sta
 biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail / 10 skip offline ×2 · `acceptance:offline` 7/7 (`--no-env-file`) · web build + 34-check sweep + smoke.
 
 ### W15-LIVE — status
-- `github.comment`: attempted once, 403 `POLICY_DENIED`; after user approval was re-accepted, retried **once** and failed identically. **No further retry.** The installation reports `issues: write`, so the cause needs a token-scope diagnosis.
-- Incident end-to-end: executed with a **50k** acceptance cap. Signed webhook created task `e0e1c5a3-…`; 4 Meta turns (4 tool calls each) then `failed` / `budget exhausted`. Measured **54,670 prompt + 5,300 completion** tokens, one Modal sandbox **96 s**, no push. Retry with the 1M operator default is a spend decision pending user approval.
-- No sandbox was created by the comment attempts; no cost rows were priced (`cost_usd` null for Meta contributor and for Modal without a price table).
+- `github.comment`: **PASS** after the token fix `13095db` (issues:write + pull_requests:write). Comment `6547408811` on PR #2, audit row `bed3a504-…`. Two earlier 403 attempts are the diagnostic history.
+- Incident end-to-end: **PASS on the approved 1M-budget retry**. Task `2a6d6902-…` → `review_ready`; 12 Meta calls, **170,818 prompt / 13,101 completion**; one Modal sandbox **244 s**; diff artifact 1 file / 26 insertions; push disabled. The earlier 50k run is retained as cap-enforcement evidence.
+- No cost was priced (`cost_usd` null for the Meta contributor model and for Modal without a price table); no GitHub write occurred in the incident run.
 
 ## Wave 16 — first connector adapters + credential store (2026-10-31)
 

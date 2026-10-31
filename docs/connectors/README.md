@@ -38,7 +38,7 @@ Implemented today: **GitHub** (App auth, incident context, signed intake, two sc
 
 "Design-only" means there is no connector code in this repository. Those pages describe a proposal with verified vendor facts; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
 
-The GitHub scoped writes were proven live once on 2026-10-31 (one authorized `github.rerun_workflow` call, audit row persisted, run attempt incremented). They are still not registered as agent tools; see [github.md](github.md) §8.3.
+Both GitHub scoped writes are live-proven on 2026-10-31: `github.rerun_workflow` (run `41085679072`, attempt 2, audit row `b0bd5386…`) and `github.comment` (comment `6547408811` on PR #2, audit row `bed3a504…`, after adding `pull_requests:write`). They are still not registered as agent tools; see [github.md](github.md) §8.3.
 
 ## 3. Shared transport rules
 

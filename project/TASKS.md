@@ -2,6 +2,31 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 15 — user-connectable connectors + verified free tiers (2026-10-31)
+
+User intent: **users** connect their own free/self-hosted tools; the sandbox agent uses them through server-side tools; zero platform vendor cost. Work was split across eight worktrees, one owner per file group, all merged `--no-ff`.
+
+| Lane | Branch | Commit | Deliverable |
+|---|---|---|---|
+| W15-GRAFANA-K8S | `task/w15-grafana-k8s` | `0e9fadf` | Grafana, Prometheus, Loki/Tempo, Kubernetes, Argo CD |
+| W15-INCIDENTS | `task/w15-incidents` | `6234fb2` (salvaged after turn-limit) | Sentry, PagerDuty, Rollbar, Better Stack, incident.io, Rootly |
+| W15-APM | `task/w15-apm` | `6979408` | Datadog, New Relic, Honeycomb, SigNoz, Axiom, Elastic, Splunk |
+| W15-CLOUD-UPTIME | `task/w15-cloud-uptime` | `2b20a6e` | CloudWatch, Azure Monitor, GCP Monitoring, UptimeRobot, Uptime Kuma |
+| W15-SECURITY-SAAS | `task/w15-security-saas` | `4b26924` | GitHub security alerts, Snyk, Semgrep, Socket, GitGuardian |
+| W15-SECURITY-OSS | `task/w15-security-oss` | `b987d60` | Trivy, OSV-Scanner, Dependency-Track, DefectDojo, Wazuh, Falco, CrowdSec, ZAP, Scorecard |
+| W15-KAFKA-USAGE | `task/w15-kafka-usage` | `ea4929d` | Kafka, Confluent, Redpanda, Aiven Kafka, Upstash Kafka + `docs/connector-usage.md` |
+| W15-ONBOARDING | `task/w15-onboarding` | `6f3e12d` | `docs/connector-onboarding.md` + `docs/connectors/free-tier-catalog.md` |
+
+Coordinator reconciliation `12b897e`: catalog added to the survey and index, stale prompt caps corrected, `docs/connectors/env-reference.md` generated, `.env.example` gained `CONNECTOR_CREDENTIAL_KEY` and a pointer (per-org credentials are DB-stored, not env). Merge commits: `2a89e90`, `077d4b1`, `e104599`, `8675f94`, `d8ccdbd`, `3e01a71`, `feb8691`.
+
+### Gates on main
+biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail / 10 skip offline ×2 · `acceptance:offline` 7/7 (`--no-env-file`) · web build + 34-check sweep + smoke.
+
+### W15-LIVE — status
+- `github.comment`: attempted **once**; failed 403 `POLICY_DENIED` ("Resource not accessible by integration") despite the installation reporting `issues: write`. Failure audit row written; **not retried**. **Blocked on user confirmation.**
+- Incident end-to-end run: prepared (`LIVE_INCIDENT=1`, seeded ids, inline webhook secret, Meta + Modal, push disabled) but **awaiting explicit approval**.
+- No metered spend was incurred by the failed comment attempt; no sandbox was created.
+
 ## Wave 14 — scoped GitHub write live + connector docs (2026-10-31)
 
 User request: one bounded live `github.comment` / `rerun_workflow` call (scopes granted, fakes already green), plus updated DevSecOps connector docs, with the work delegated.

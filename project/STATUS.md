@@ -1,8 +1,26 @@
 # Status
 
-Last updated: 2026-10-31 (wave 14: one bounded live `github.rerun_workflow` call accepted — attempt 2 running; connector docs split into operator guides)
+Last updated: 2026-10-31 (wave 15: 45-page user-connectable connector catalog with verified free tiers; comment live call hit a 403 and was not retried; incident live run awaits explicit approval)
 
-## Current: wave 14 — scoped GitHub writes live + connector docs (2026-10-31)
+## Current: wave 15 — user-connectable connectors + verified free tiers (2026-10-31)
+
+**Scope correction (user):** the connectors are for **users to connect their own free or self-hosted accounts**; the sandbox agent uses them through trusted server-side tools. The platform ships no vendor credentials and must stay at zero platform cost.
+
+- **Catalog**: 45 pages under `docs/connectors/` (40+ vendors across incidents, metrics/APM, logs/traces, Kubernetes/deploy, cloud monitoring, uptime, security scanners, streaming), each with auth, verified free-tier limits, webhook signing, read endpoints, framework fit (module, source enum, tools, risk bands, env names), sandbox isolation and an acceptance checklist.
+- **Cross-cutting design**: `docs/connector-usage.md` (adapter contract, credential broker, multi-connector routing, implementation order), `docs/connector-onboarding.md` (7-step user journey, encrypted `connector_credentials` with KEK/DEK, capability gates `connector:read|use|manage`, 80% free-tier ledger guard, 11-row threat model), `docs/connectors/free-tier-catalog.md` (45/45 matrix, stays-free shortlist, do-not-default list, platform guard budgets), `docs/connectors/env-reference.md` (every env name, names only).
+- **Verified free paths**: Sentry, PagerDuty (5 users), Rollbar, Better Stack, Grafana Cloud, Datadog (metrics), New Relic, Honeycomb, Axiom, UptimeRobot, Aiven Kafka; OSS self-host for Prometheus, Loki/Tempo, Kubernetes, Argo CD, SigNoz CE, Wazuh, Falco, CrowdSec, DefectDojo, Dependency-Track, Trivy, OSV-Scanner, ZAP, Scorecard, Uptime Kuma. Trial-only: Confluent, Redpanda, Elastic Cloud, SigNoz Cloud, Rootly. Not viable free: incident.io (API/webhooks excluded), Upstash Kafka (discontinued), Snyk REST API (Enterprise-only), Splunk Free (cannot alert), GitHub private code/secret scanning (paid).
+- **Findings that shape the adapters**: most observability vendors do **not** sign webhooks (Datadog, New Relic, Honeycomb, SigNoz, Axiom, Elastic, Azure, GCP, UptimeRobot, Alertmanager, Argo CD, several OSS tools) → signed generic bridge or canonical re-fetch is mandatory. GitHub signs the raw body; Grafana supports an optional HMAC; Sentry/PagerDuty/Rollbar/Better Stack/Socket/GitGuardian/Dependency-Track have native signatures. Kafka has no inbound webhook; the consumer bridge is specified.
+- **Docs corrections**: stale prompt caps fixed to 100 items / 4,000 chars / 256 KiB; GitHub HMAC is raw-body only; `INCIDENT_SOURCES` needs extension before any new adapter; `connector_credentials` and `connector_usage_ledger` do not exist yet and are specified, not applied.
+- **Gates on main**: biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · **1704 pass / 0 fail / 10 skip** offline ×2 · `acceptance:offline` **7/7** with `--no-env-file` · web production build + **34-check** client sweep + smoke green.
+- **Live status**: the one authorized `github.comment` attempt failed with **403 `POLICY_DENIED` — "Resource not accessible by integration"** even though `GET /app/installations/{id}` reports `issues: write`; the failure audit row was written and the call was **not retried**. The incident end-to-end live run (Meta turns + one Modal sandbox + GitHub read context) is prepared but **awaits explicit approval** because the environment treats it as a new external write.
+
+### Wave 15 open items
+1. **Comment 403**: confirm the App's Issues permission is accepted on the installation (or grant `pull_requests: write` to the comment token) before retrying once.
+2. **Incident live run**: one bounded pass pending explicit user approval.
+3. **Implementation**: credential store + broker + tool registry binding + first adapter (Sentry or Grafana) are specified in `docs/connector-onboarding.md` §8 but not built.
+4. UI and deployment remain deferred; every connector except GitHub/generic webhook is design-only.
+
+## Previous: wave 14 — scoped GitHub writes live + connector docs (2026-10-31)
 
 - **Live scoped write (one bounded call, no retry)**: `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`) performs exactly one `comment` or `rerun` through the shipped product path (real App token broker, input bounds, Postgres audit sink). Preflight read of run `41085679072` (`completed`/`failure`, attempt 1) → `rerunWorkflowRun` accepted → audit row `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df` (`tool=github.rerun_workflow`, `risk=scoped_write`, `outcome=SUCCEEDED`, `idempotencyKey=live-rerun-41085679072`) → GitHub reports `run_attempt: 2`, `status: in_progress`. No second write and no retry.
 - **Comment path**: `github.comment` remains fake-tested only because the one-call budget was spent on the more sensitive `actions:write` path. The same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval.

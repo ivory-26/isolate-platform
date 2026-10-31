@@ -59,13 +59,14 @@ CREATE TABLE IF NOT EXISTS incident_signals (
 );
 
 -- Dedupe identity: one signal per tenant, source, fingerprint and 30-minute
--- bucket. `to_timestamp(double precision)` is immutable, so it is indexable.
+-- bucket. The bucket is computed from the UTC wall clock so every operand is
+-- IMMUTABLE (Postgres rejects `to_timestamp` here: it is only STABLE).
 CREATE UNIQUE INDEX IF NOT EXISTS incident_signals_dedupe_unique
 	ON incident_signals (
 		organization_id,
 		source,
 		fingerprint,
-		(to_timestamp(floor(extract(epoch from received_at) / 1800) * 1800))
+		(floor(extract(epoch from (received_at AT TIME ZONE 'UTC')) / 1800))
 	);
 
 -- Operator listing: newest signals first for one tenant.

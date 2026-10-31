@@ -90,7 +90,7 @@ Known gaps in the implemented subset:
 
 Wave 13 (2026-10-31, one bounded run): a signed GitHub `workflow_run` failure created task `github:ivory-26/agent-bank:ci-2dd7dd64:main`; the context reader returned **13 cited items** with no degrade; two Meta turns produced a diff and the task reached **`review_ready`**. Measured Meta usage **13,818/1,206** and **11,200/1,357** tokens (prompt/completion); one Modal sandbox, **0 running** after; no push.
 
-**Scoped-write live acceptance: pending this wave.** No live GitHub comment or rerun has been executed; both paths are fake-tested only.
+Wave 14 (2026-10-31, one bounded call): the scoped-write path was exercised once through `scripts/acceptance-live-github-write.ts` (`bun run acceptance:github-write`). A preflight read showed run `41085679072` on `ivory-26/agent-bank` as `completed`/`failure` (attempt 1); `github.rerun_workflow` was accepted and GitHub reports **`run_attempt: 2`**. Exactly one audit row was written: `b0bd5386-847a-4ef0-85ae-3bd8c5bcd9df`, target `repo:ivory-26/agent-bank:run:41085679072`, `details.outcome = SUCCEEDED`, `details.idempotencyKey = live-rerun-41085679072`. No retry was made. The **`github.comment` path remains fake-tested only** (the one-call budget went to the more sensitive `actions:write` path); the same script runs it with `LIVE_WRITE_MODE=comment` on the next explicit approval. The live call used the integration function directly — the tool-registry gap above is unchanged.
 
 ---
 
@@ -856,7 +856,7 @@ Design-only:
 | **P2** | Sentry issue + latest event + release reader; optional PagerDuty swap | **Design-only** — pending the user's source choice (GitHub is the live source) | A signed issue webhook creates one task; the bundle contains issue metadata, a bounded stack trace, and a release; PII fields are absent; citation validator passes |
 | **P3** | Grafana `/api/ds/query` (or Datadog metrics/logs/incidents) | **Design-only** — pending backend choice | One bounded metric/log query returns a summarized excerpt, not raw lines; rate-limit path tested; provider down degrades to partial bundle |
 | **P4** | Slack notification | **Design-only** — pending workspace/channel answer | One message per incident state transition, with <=3 citation links; 429 path waits and retries once; no token/PII/log body in the message |
-| **P5** | PagerDuty lifecycle, provider write tools, second metrics vendor, GitHub security alerts | **Partially done.** `github.comment` and `github.rerun_workflow` exist as `scoped_write` connector functions (offline fake-tested, not agent-callable). The rest, including all approval-bound writes, is design-only | GitHub comment/rerun: no approval, audited, dedupe by delivery id, credential-shape refusal. **Live proof pending.** Approval-gated writes: payload SHA, no write credential in the context reader, audit proves actor and decision |
+| **P5** | PagerDuty lifecycle, provider write tools, second metrics vendor, GitHub security alerts | **Partially done.** `github.comment` and `github.rerun_workflow` exist as `scoped_write` connector functions (offline fake-tested, not agent-callable). The rest, including all approval-bound writes, is design-only | GitHub comment/rerun: no approval, audited, dedupe by delivery id, credential-shape refusal. **Live-proven once: rerun on 2026-10-31; comment still pending.** Approval-gated writes: payload SHA, no write credential in the context reader, audit proves actor and decision |
 
 What is actually done: P0 (generic transport, contracts, dedupe, offline tests) and P1 for GitHub (context reader, intake, task creation, injected context), plus the two GitHub scoped-write functions. What remains before P2: a live scoped-write acceptance, log excerpts/deployments/PR context if they are wanted, and the user's choice of the first non-GitHub source. **Sentry, PagerDuty, Datadog, Grafana and Slack are design-only and stay that way until the user answers §7.**
 
@@ -1000,7 +1000,7 @@ The following could not be confirmed against official documentation during this 
 
 ### 8.1 Implementation items not verified
 
-- **No live scoped-write call.** `github.comment` and `github.rerun_workflow` are fake-tested only; their endpoints, permissions, response handling and audit rows have not been exercised against GitHub.
+- **`github.comment` has no live call.** `github.rerun_workflow` ran once live on 2026-10-31 (run `41085679072`, attempt 2, audit row `b0bd5386-…`); the comment endpoint, its response handling and its audit row remain fake-tested only.
 - **Per-endpoint live coverage.** The one live context run produced 13 items; this document does not record which endpoint produced each item, so branch protection/rulesets/check-suite reads are covered by fakes, not by a recorded live result.
 - **Installed permission grant.** `project/STATUS.md` reports the wave-13 scopes as granted on the App; the installation itself was not inspected for this document.
 - **Design-only safety machinery.** PII redactors, structural redactors, the `[ctx:n]` validator, bundle hashing, `omitted` reasons, TTLs and multi-endpoint webhook routing have no code and therefore no test.

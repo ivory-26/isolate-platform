@@ -318,6 +318,11 @@ describe("sandbox tools behind the policy gate", () => {
 			"git.push_branch": "sensitive",
 			"github.create_pull_request": "sensitive",
 			"github.merge_pull_request": "destructive",
+			// Wave 13: commenting and rerunning CI are audited scoped writes.
+			"github.comment": "scoped_write",
+			"github.rerun_workflow": "scoped_write",
+			"github.deploy": "sensitive",
+			"github.rollback": "sensitive",
 			"db.migrate": "destructive",
 			"deploy.request": "destructive",
 		});

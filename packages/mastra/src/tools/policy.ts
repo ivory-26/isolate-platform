@@ -17,6 +17,10 @@ export type ToolName =
 	| "git.push_branch"
 	| "github.create_pull_request"
 	| "github.merge_pull_request"
+	| "github.comment"
+	| "github.rerun_workflow"
+	| "github.deploy"
+	| "github.rollback"
 	| "db.migrate"
 	| "deploy.request"
 	| "sandbox.exec";

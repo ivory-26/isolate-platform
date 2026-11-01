@@ -34,10 +34,12 @@ User request: full security audit plus rate limiting, throttling, validation, Ne
 | Lane | Branch | Status |
 |---|---|---|
 | W18-AUDIT | read-only | in flight — full connector/binding audit |
-| W18-PROTECT | `task/w18-rate` | **resumed** — WIP replayed onto cleaned main; gateway/user/intake/daemon limits + batch claim remaining |
-| W18-VALID | `task/w18-batch` | **resumed** — WIP replayed; request-guard module + tests remaining |
-| W18-STREAM | `task/w18-stream` | **resumed** — WIP replayed; adapter call sites + tests remaining |
-| W18-AUDIT-2 | read-only | in flight — fresh audit of the current main |
+| W18-PROTECT | `task/w18-rate` | **done** — `0012` applied, durable limits + batch claim, gateway/user/intake/daemon wired |
+| W18-VALID | `task/w18-batch` | **done** — per-tool schemas + request guard, wired into registration/connect |
+| W18-STREAM | `task/w18-stream` | **done** — bounded streaming reads through all ten adapters |
+| W18-AUDIT-2 | read-only | **done** — no criticals; findings fixed or tracked in SECURITY.md |
+| W18-SECFIX2 | `main` | **done** — token expiry, atomic webhook admission, server guard, reaper, composite FKs |
+| W18-TRACE | `main` | **done** — run trace + turn spans + traceparent through queue/daemon |
 | W18-DOCS | `main` `5ec2ee7` | **done** — `docs/connectors/SCALING.md` |
 
 Rules: migration `0012` is created by the lane and applied by the coordinator with approval; no provider keys; no live calls.

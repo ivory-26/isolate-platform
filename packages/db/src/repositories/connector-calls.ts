@@ -548,7 +548,7 @@ export function connectorCallOutcome(row: {
 }): ConnectorCallOutcome | null {
 	if (row.status === "completed") {
 		if (row.result === null) return { ok: false, errorCode: "INTERNAL" };
-		assertNoCredentialMaterial(row.result);
+		assertNoCredentialMaterial(row.result, { maxDepth: MAX_JSON_DEPTH });
 		return { ok: true, data: row.result };
 	}
 	if (row.status === "failed") {

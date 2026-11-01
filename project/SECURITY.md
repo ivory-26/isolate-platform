@@ -62,18 +62,18 @@ Read-only audit of the device-held model. No CRITICAL findings.
 
 | # | Severity | Finding | Disposition |
 |---|---|---|---|
-| 1 | HIGH | No rate limiting on device/user/webhook surfaces | **Lane `w18-rate`** implements `0012` fixed-window limits, gateway/user/intake/worker limits and batched claims |
-| 2 | HIGH | Device tokens never expire or rotate | **Registry layer done** (`8aa5f43`, `0014` unapplied): `expires_at`, expiry-aware verify, summaries. Registration TTL + rotate endpoint follow the rate lane |
-| 3 | HIGH | Webhook cap is non-atomic; capped fingerprints are burned | Pending: one transactional reserve + count in the incident repository, then wire intake |
-| 4 | MEDIUM | `expireStale` has no caller | Pending: worker reaper tick |
-| 5 | MEDIUM | No composite tenant FKs | Pending: migration with `(organization_id, id)` uniques + composite FKs |
-| 6 | MEDIUM | Client controls `requestsPerDay` | Pending: gateway ignores the client profile and uses the server guard only |
-| 7 | MEDIUM | No Origin/CSRF check on cookie POSTs | **Module merged** (`w18-batch`): `request-guard.server.ts`; wiring into routes pending |
-| 8 | MEDIUM | Provider bodies buffered before cap | **Fixed** (`f4a8884`): bounded stream reader wired through all ten adapters |
-| 9 | MEDIUM | Worker lacked per-tool argument schemas | **Fixed** (`646dcbe`): all 31 names validated against adapter schemas before enqueue |
-| 10 | LOW | `touchSeen` on every request; 250 ms result polling | Throttle `touchSeen`; polling stays bounded by TTL |
+| 1 | HIGH | No rate limiting on device/user/webhook surfaces | **FIXED**: `0012` applied; device/user/intake limits and batched claims merged |
+| 2 | HIGH | Device tokens never expire or rotate | **FIXED (expiry)**: `0014` applied; registration sets 90 days; verify rejects expired. Rotation endpoint remains a follow-up |
+| 3 | HIGH | Webhook cap is non-atomic; capped fingerprints are burned | **FIXED**: transactional `reserveIfNewUnderCap` with a per-org advisory lock; intake wired |
+| 4 | MEDIUM | `expireStale` has no caller | **FIXED**: worker reaper tick (60 s) when the device gateway is enabled |
+| 5 | MEDIUM | No composite tenant FKs | **FIXED**: `0015` applied (unique org/id + four composite FKs) |
+| 6 | MEDIUM | Client controls `requestsPerDay` | **FIXED**: gateway ignores the stored client profile and uses the server guard |
+| 7 | MEDIUM | No Origin/CSRF check on cookie POSTs | **FIXED**: guard wired into device register/revoke and connector connect/revoke |
+| 8 | MEDIUM | Provider bodies buffered before cap | **FIXED**: bounded stream reader through all ten adapters |
+| 9 | MEDIUM | Worker lacked per-tool argument schemas | **FIXED**: all 31 names validated against adapter schemas before enqueue |
+| 10 | LOW | `touchSeen` on every request; 250 ms result polling | **PARTIAL**: `touchSeen` throttled to 1/min/device; polling bounded by TTL |
 | 11 | LOW | Result re-scan depth 6 vs write depth 8 | Align depths in the call repository |
-| 12 | LOW | STATUS claimed registry gated by env | Doc drift; implementations (not names) are gated |
+| 12 | LOW | STATUS claimed registry gated by env | **FIXED**: wording corrected to "implementations are gated" |
 | 13 | LOW | Social callback origin trusted without allowlist | Neon rejects untrusted callback hosts; add an explicit allowlist as defense |
 
 Verified safe: bearer-hash device auth, capability-before-write, fail-closed gateway, atomic

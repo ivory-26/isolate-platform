@@ -96,7 +96,9 @@ The existing worker metrics (`worker.turn.latency_ms`, `worker.sandbox.seconds`,
 ## 7. Implementation status
 
 - Trace primitives and tests: **done** (`packages/shared/src/observability/trace.ts`).
-- Migration `0013_trace_context.sql`: **created, not applied**.
-- Worker/gateway/daemon propagation: **pending** the wave-18 hardening merges, then wired in
-  one lane so rate-limit, batching and trace changes do not conflict.
-- Trace read model and dashboards: planned.
+- Migration `0013_trace_context.sql`: **applied** (`connector_calls.traceparent`).
+- Worker per-run tracing: **done** — one trace id per job, one `agent.turn` span per turn,
+  trace id on turn events and the latency metric.
+- Gateway/daemon propagation: **done** — the worker stamps the run traceparent on the call,
+  the claim returns it, and the daemon logs `connector call` with the same trace id.
+- Trace read model, OTLP exporter and dashboards: planned.

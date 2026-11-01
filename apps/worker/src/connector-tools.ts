@@ -26,7 +26,7 @@ import {
 	type OrganizationId,
 	PlatformError,
 } from "@isolate/shared";
-import { validateConnectorToolArguments } from "./connector-schemas";
+import { parseConnectorToolArguments } from "./connector-schemas";
 
 /**
  * Wave 17 connector tools over the device poll queue.
@@ -125,37 +125,30 @@ export type ConnectorToolDependencies = {
 	pollMs?: number;
 };
 
-function validationError(toolName: ConnectorToolName, reason: string) {
-	return new PlatformError(
-		"VALIDATION_FAILED",
-		`connector tool ${toolName} ${reason}`,
-	);
-}
-
 /**
- * Validates model arguments before any broker or queue work: a strict bounded
- * JSON object (64 KiB, depth/key/item caps) with no credential material
- * anywhere in the tree. The recursive scan replaces the old shallow top-level
- * key check, so `{ headers: { authorization } }` and `{ note: "sk-..." }` are
- * refused as well. Returns a detached clone.
+ * Validates model arguments before any broker or queue work.
+ *
+ * Order is deliberate: a 64 KiB JSON bound (the same cap the queue enforces)
+ * refuses an oversized tree before Zod walks it, the adapter's own strict
+ * schema then rejects an unknown tool name, unknown/extra keys, malformed
+ * values and out-of-range numbers, and finally the recursive credential scan
+ * refuses a provider secret hidden in an accepted string value. Returns the
+ * detached parsed object, so only schema-shaped data reaches the device queue.
  */
 export function validateConnectorToolArguments(
 	toolName: ConnectorToolName,
 	args: Record<string, unknown>,
 ): Record<string, unknown> {
-	const parsed = connectorArgumentsSchema.safeParse(args);
-	if (!parsed.success) {
-		throw validationError(toolName, "arguments must be a JSON object");
-	}
-	// Fixed text, no value echo: the argument may itself be the attempted secret.
-	assertNoCredentialMaterial(parsed.data);
-	// Same JSON caps the queue enforces, applied before the device is woken.
 	assertBoundedDeviceJson(
-		parsed.data,
+		args,
 		"connector tool arguments",
 		CONNECTOR_CALL_MAX_PARAMS_BYTES,
 	);
-	return JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>;
+	const validated = parseConnectorToolArguments(toolName, args);
+	if (!validated.ok) throw validated.error;
+	// Fixed text, no value echo: the argument may itself be the attempted secret.
+	assertNoCredentialMaterial(validated.data);
+	return validated.data;
 }
 
 /**

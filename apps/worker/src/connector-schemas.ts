@@ -103,13 +103,16 @@ export type ConnectorToolArgumentsResult =
 	| ValidatedConnectorToolArguments
 	| InvalidConnectorToolArguments;
 
-function invalidArguments(summary: string): InvalidConnectorToolArguments {
+function invalidArguments(
+	name: string,
+	summary: string,
+): InvalidConnectorToolArguments {
 	const detail = summary.length > 0 ? `: ${summary}` : "";
 	return {
 		ok: false,
 		error: new PlatformError(
 			"VALIDATION_FAILED",
-			`connector tool arguments are invalid${detail}`,
+			`connector tool "${name}" arguments are invalid${detail}`,
 		),
 	};
 }
@@ -126,7 +129,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * fails closed here, before any broker, credential or queue work, and its
  * text is never echoed back.
  */
-export function validateConnectorToolArguments(
+export function parseConnectorToolArguments(
 	name: string,
 	args: unknown,
 ): ConnectorToolArgumentsResult {
@@ -142,10 +145,10 @@ export function validateConnectorToolArguments(
 	const schema = CONNECTOR_TOOL_ARGUMENT_SCHEMAS[name as ConnectorToolName];
 	const parsed = schema.safeParse(args);
 	if (!parsed.success) {
-		return invalidArguments(zodIssueSummary(parsed.error));
+		return invalidArguments(name, zodIssueSummary(parsed.error));
 	}
 	if (!isRecord(parsed.data)) {
-		return invalidArguments("");
+		return invalidArguments(name, "");
 	}
 	try {
 		// Detach the value from any caller-held reference before it is queued.
@@ -154,6 +157,6 @@ export function validateConnectorToolArguments(
 			data: JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>,
 		};
 	} catch {
-		return invalidArguments("");
+		return invalidArguments(name, "");
 	}
 }

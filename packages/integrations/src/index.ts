@@ -13,6 +13,7 @@ export * from "./axiom/webhook";
 export * from "./connectors/device-broker";
 export * from "./connectors/device-proxy";
 export * from "./connectors/device-token";
+export * from "./connectors/fingerprints";
 export * from "./datadog/context";
 export * from "./datadog/normalize";
 export * from "./datadog/redact";

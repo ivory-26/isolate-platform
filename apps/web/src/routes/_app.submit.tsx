@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useSession } from "@/components/auth/SessionProvider";
@@ -8,9 +8,17 @@ import { Section } from "@/components/common/section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { activeRole, requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
+import { submitOptionsQueryOptions } from "@/features/overview/queries";
 import {
 	type SubmitTaskInput,
 	submitTaskSchema,
@@ -61,6 +69,37 @@ function SubmitPage() {
 	const [validationError, setValidationError] = useState<string | null>(null);
 	const session = useSession();
 	const readOnly = activeRole(session) === "viewer";
+
+	const optionsQuery = useQuery(submitOptionsQueryOptions());
+	const options = optionsQuery.data?.ok ? optionsQuery.data.value : null;
+	const repositories = options?.repositories ?? [];
+	const workflows = options?.workflows ?? [];
+
+	// The local demo seeds one repository and one workflow version; those ids
+	// are the documented defaults and stay prefilled when live reads are off.
+	const demoRepositoryId =
+		session.mode === "demo" ? "10000000-0000-4000-8000-000000000003" : "";
+	const demoDefinitionId =
+		session.mode === "demo" ? "10000000-0000-4000-8000-000000000004" : "";
+
+	const [repositoryId, setRepositoryId] = useState(demoRepositoryId);
+	const [definitionId, setDefinitionId] = useState(demoDefinitionId);
+	const selectedWorkflow = workflows.find(
+		(workflow) => workflow.id === definitionId,
+	);
+	const versions = selectedWorkflow?.versions ?? [];
+	const [version, setVersion] = useState(versions[0] ?? 1);
+
+	const onDefinitionChange = (nextId: string) => {
+		setDefinitionId(nextId);
+		const next = workflows.find((workflow) => workflow.id === nextId);
+		setVersion(next?.versions[0] ?? 1);
+	};
+
+	const optionsUnavailable =
+		optionsQuery.isError ||
+		(optionsQuery.data !== undefined && !optionsQuery.data.ok);
+
 	const mutation = useMutation({
 		mutationFn: (data: SubmitTaskInput) => submitTask({ data }),
 		onSuccess: async (result) => {
@@ -89,16 +128,16 @@ function SubmitPage() {
 			) : null}
 			{session.mode === "demo" ? (
 				<div className="rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs leading-5 text-ink-muted">
-					Local demo: data is temporary and no worker executes it. Demo
+					Local demo: data is temporary and no worker executes it. The demo
 					repository{" "}
 					<code className="font-mono">
 						10000000-0000-4000-8000-000000000003
-					</code>
-					, workflow{" "}
+					</code>{" "}
+					and workflow{" "}
 					<code className="font-mono">
 						10000000-0000-4000-8000-000000000004
 					</code>{" "}
-					version <code className="font-mono">1</code>.
+					version <code className="font-mono">1</code> are prefilled below.
 				</div>
 			) : null}
 
@@ -147,18 +186,48 @@ function SubmitPage() {
 					>
 						<div className="grid gap-4 md:grid-cols-2">
 							<Field
-								label="Repository ID"
+								label="Repository"
 								htmlFor="repositoryId"
 								hint="A repository record already connected to this organization."
 							>
-								<Input
-									id="repositoryId"
-									name="repositoryId"
-									required
-									placeholder="00000000-0000-4000-8000-000000000000"
-									autoComplete="off"
-									spellCheck={false}
-								/>
+								{repositories.length > 0 ? (
+									<>
+										<input
+											type="hidden"
+											name="repositoryId"
+											value={repositoryId}
+											readOnly
+										/>
+										<Select
+											value={repositoryId || undefined}
+											onValueChange={setRepositoryId}
+										>
+											<SelectTrigger id="repositoryId" className="w-full">
+												<SelectValue placeholder="Select a repository" />
+											</SelectTrigger>
+											<SelectContent>
+												{repositories.map((repository) => (
+													<SelectItem key={repository.id} value={repository.id}>
+														{repository.name}
+														<span className="font-mono text-[11px] text-ink-muted">
+															{repository.defaultBranch}
+														</span>
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</>
+								) : (
+									<Input
+										id="repositoryId"
+										name="repositoryId"
+										required
+										placeholder="00000000-0000-4000-8000-000000000000"
+										defaultValue={demoRepositoryId || undefined}
+										autoComplete="off"
+										spellCheck={false}
+									/>
+								)}
 							</Field>
 							<Field
 								label="Task branch"
@@ -176,40 +245,112 @@ function SubmitPage() {
 								/>
 							</Field>
 							<Field
-								label="Workflow definition ID"
+								label="Workflow"
 								htmlFor="workflowDefinitionId"
 								hint="The authored definition, not the compiled plan."
 							>
-								<Input
-									id="workflowDefinitionId"
-									name="workflowDefinitionId"
-									required
-									placeholder="00000000-0000-4000-8000-000000000000"
-									defaultValue={
-										session.mode === "demo"
-											? "10000000-0000-4000-8000-000000000004"
-											: undefined
-									}
-									autoComplete="off"
-									spellCheck={false}
-								/>
+								{workflows.length > 0 ? (
+									<>
+										<input
+											type="hidden"
+											name="workflowDefinitionId"
+											value={definitionId}
+											readOnly
+										/>
+										<Select
+											value={definitionId || undefined}
+											onValueChange={onDefinitionChange}
+										>
+											<SelectTrigger
+												id="workflowDefinitionId"
+												className="w-full"
+											>
+												<SelectValue placeholder="Select a workflow" />
+											</SelectTrigger>
+											<SelectContent>
+												{workflows.map((workflow) => (
+													<SelectItem
+														key={workflow.id}
+														value={workflow.id}
+														disabled={workflow.versions.length === 0}
+													>
+														{workflow.name}
+														<span className="font-mono text-[11px] text-ink-muted">
+															{workflow.versions.length === 0
+																? "no published version"
+																: `v${workflow.versions[0]}`}
+														</span>
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</>
+								) : (
+									<Input
+										id="workflowDefinitionId"
+										name="workflowDefinitionId"
+										required
+										placeholder="00000000-0000-4000-8000-000000000000"
+										defaultValue={demoDefinitionId || undefined}
+										autoComplete="off"
+										spellCheck={false}
+									/>
+								)}
 							</Field>
 							<Field
 								label="Pinned workflow version"
 								htmlFor="workflowVersion"
 								hint="Versions are immutable; a new edit publishes a new version."
 							>
-								<Input
-									id="workflowVersion"
-									name="workflowVersion"
-									type="number"
-									min={1}
-									max={2147483647}
-									defaultValue={1}
-									required
-								/>
+								{versions.length > 0 ? (
+									<>
+										<input
+											type="hidden"
+											name="workflowVersion"
+											value={String(version)}
+											readOnly
+										/>
+										<Select
+											value={String(version)}
+											onValueChange={(next) => setVersion(Number(next))}
+										>
+											<SelectTrigger id="workflowVersion" className="w-full">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												{versions.map((entry) => (
+													<SelectItem key={entry} value={String(entry)}>
+														Version {entry}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</>
+								) : (
+									<Input
+										id="workflowVersion"
+										name="workflowVersion"
+										type="number"
+										min={1}
+										max={2147483647}
+										defaultValue={1}
+										required
+									/>
+								)}
 							</Field>
 						</div>
+						{optionsQuery.isLoading ? (
+							<p className="text-xs text-ink-muted">
+								Loading connected repositories and workflow versions…
+							</p>
+						) : null}
+						{optionsUnavailable ? (
+							<p className="text-xs leading-5 text-ink-muted">
+								The connected repository and workflow lists are unavailable, so
+								enter the UUIDs directly. Your submission is still validated on
+								the server.
+							</p>
+						) : null}
 					</Section>
 
 					<Section

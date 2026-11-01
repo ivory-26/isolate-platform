@@ -13,6 +13,7 @@ import {
 	PostgresConnectorCredentialRepository,
 	PostgresConnectorDeviceRepository,
 	PostgresExecutionLifecycle,
+	PostgresIncidentRepository,
 	PostgresQueueRepository,
 	PostgresRepositoryRepository,
 	PostgresRunEventRepository,
@@ -61,6 +62,10 @@ import {
 } from "@isolate/shared";
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
+import {
+	createConnectorContextLoader,
+	createRoutedContextLoader,
+} from "./connector-context";
 import { createConnectorToolImplementations } from "./connector-tools";
 import type { QueueLike } from "./contracts";
 import type {
@@ -789,23 +794,53 @@ export async function createConfiguredWorkerComposition(
 		};
 	}
 
-	// Wave 13: read-only incident context. Bound only when a GitHub broker
-	// exists; the per-call task-row check is the second gate, so a normal task
-	// never pays for GitHub reads and never receives incident evidence.
-	if (githubTokenProvider !== null) {
-		overrides.loadContextBundle = createIncidentContextBundleLoader(
-			githubTokenProvider,
-			taskRepository,
-		);
+	// Wave 13/19: read-only incident context. Both readers are gated per call
+	// by the task row, so a normal task never pays for a provider read and never
+	// receives incident evidence.
+	const deviceGatewayEnabled =
+		env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true";
+	// Wave 19: non-GitHub incidents are read by the user's device, which holds
+	// the provider key. Built only with the device gateway; the queue transport
+	// is `connector_calls`, never a synchronous provider call in the worker.
+	const connectorContextLoader = deviceGatewayEnabled
+		? createConnectorContextLoader({
+				broker: createConnectorDeviceBroker({
+					devices: new PostgresConnectorDeviceRepository(sql),
+					credentials: new PostgresConnectorCredentialRepository(sql),
+					proxyFactory: createNullDeviceProxyFactory(),
+				}),
+				calls: new PostgresConnectorCallRepository(sql),
+				signals: new PostgresIncidentRepository(sql),
+			})
+		: undefined;
+	const githubContextLoader =
+		githubTokenProvider === null
+			? undefined
+			: createIncidentContextBundleLoader(githubTokenProvider, taskRepository);
+	// One router for both readers: `github:` stays server-side, every other
+	// recognized source goes to the device. Binding it only when at least one
+	// reader exists keeps a GitHub-less, gateway-less worker unbound.
+	if (
+		githubContextLoader !== undefined ||
+		connectorContextLoader !== undefined
+	) {
+		overrides.loadContextBundle = createRoutedContextLoader({
+			tasks: taskRepository,
+			...(githubContextLoader === undefined
+				? {}
+				: { github: githubContextLoader }),
+			...(connectorContextLoader === undefined
+				? {}
+				: { connector: connectorContextLoader }),
+		});
 	}
 
-	const connectorCallReaper =
-		env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true"
-			? createConnectorCallReaper(
-					new PostgresConnectorCallRepository(sql),
-					logger,
-				)
-			: undefined;
+	const connectorCallReaper = deviceGatewayEnabled
+		? createConnectorCallReaper(
+				new PostgresConnectorCallRepository(sql),
+				logger,
+			)
+		: undefined;
 
 	return {
 		queue,

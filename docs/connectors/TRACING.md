@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-31 |
-| Status | Primitives implemented; worker/device wiring lands after the hardening lanes |
+| Status | Primitives and opt-in OTLP/HTTP JSON exporter implemented; trace read model owned by another lane |
 | Scope | Every agent run, sandbox action and connector call |
 | Rule | Trace attributes are identifiers, counts, durations and outcomes only; never prompts, tool arguments, provider bodies or credentials |
 
@@ -17,7 +17,11 @@ records a 64-bit span id plus its parent. The shared primitives live in
 - `formatTraceparent()` / `parseTraceparent()` — W3C `00-<trace>-<span>-<flags>`;
 - `createRunTracer(root, {sink})` — spans bound to one run;
 - `boundedTraceAttributes()` — drops credential-shaped keys, nested values and long strings;
-- `createLoggerTraceSink()` — streams `isolate.trace` records through the redacting logger.
+- `createLoggerTraceSink()` — streams `isolate.trace` records through the redacting logger;
+- `createOtlpTraceSink({endpoint, headers?, timeoutMs?})` — opt-in OTLP/HTTP JSON exporter
+  (`packages/shared/src/observability/otlp.ts`);
+- `createMultiTraceSink([...])` — fans one event out to several sinks without letting one
+  failure silence the others.
 
 ## 2. Span inventory
 
@@ -70,8 +74,15 @@ result ──► gateway/worker close connector.result with queue wait + total
 - **Retention:** trace log lines follow the deployment log retention; `run_events` follows
   the database retention. No content is stored in trace attributes, so retention carries no
   secret risk.
-- **OTLP:** a future exporter can consume the same `TraceEvent` stream; no vendor SDK is
-  added now.
+- **OTLP (opt-in):** setting `OTEL_EXPORTER_OTLP_ENDPOINT` makes the worker compose the
+  OTLP/HTTP JSON exporter next to the logger sink. One span becomes one
+  `resourceSpans[0].scopeSpans[0].spans[0]` record with `traceId`, `spanId`,
+  `parentSpanId`, `startTimeUnixNano`/`endTimeUnixNano`, status and bounded attributes.
+  The base URL gets `/v1/traces`; https is required and http is accepted only for
+  localhost. `OTEL_EXPORTER_OTLP_HEADERS` (`key=value,...`) is sent on the request and
+  never copied into the payload; neither name's value is ever logged. Export is
+  fire-and-forget with a bounded abort timeout — a collector outage never changes a
+  task's outcome. With the endpoint unset the handler keeps its logger default.
 
 ## 5. Sampling
 
@@ -101,4 +112,8 @@ The existing worker metrics (`worker.turn.latency_ms`, `worker.sandbox.seconds`,
   trace id on turn events and the latency metric.
 - Gateway/daemon propagation: **done** — the worker stamps the run traceparent on the call,
   the claim returns it, and the daemon logs `connector call` with the same trace id.
-- Trace read model, OTLP exporter and dashboards: planned.
+- OTLP/HTTP JSON exporter: **done** — opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`; bounded
+  payload, validated endpoint, fire-and-forget with an abort timeout. Tests:
+  `packages/shared/src/observability/otlp.test.ts`.
+- Trace read model (`getTaskTrace`): **owned by another lane** — not part of this change.
+- Dashboards: planned.

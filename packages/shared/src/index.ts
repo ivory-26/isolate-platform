@@ -1,6 +1,7 @@
 export * from "./logging/console-logger";
 export * from "./logging/logger";
 export * from "./logging/redact";
+export * from "./observability/otlp";
 export * from "./observability/trace";
 export * from "./security/credential-scan";
 export * from "./types/acceptance";

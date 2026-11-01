@@ -13,6 +13,7 @@
 		"acceptance:offline": "bun scripts/acceptance-offline.ts",
 		"acceptance:live": "bun --env-file .env scripts/acceptance-live.ts",
 		"acceptance:github-write": "bun --env-file .env scripts/acceptance-live-github-write.ts",
+		"acceptance:connector-live": "bun --env-file .env scripts/acceptance-connector-live.ts",
 		"seed": "bun scripts/seed-workspace.ts",
 		"security:check": "bun scripts/security-check.ts",
 		"acceptance:k8s-local": "bun scripts/acceptance-k8s-local.ts",

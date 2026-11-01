@@ -18,7 +18,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { ApprovalRiskBadge } from "@/features/approvals/components/risk-badge";
-import { formatDurationMs, shortId } from "@/lib/format";
+import { shortId } from "@/lib/format";
 import type { ActiveRunSummary, PendingApprovalPreview } from "../contracts";
 
 export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
@@ -54,12 +54,11 @@ export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 					<Table>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="pl-5">Task</TableHead>
+								<TableHead className="w-[110px] pl-5">Task</TableHead>
 								<TableHead>Repository and branch</TableHead>
-								<TableHead className="w-[170px]">Status</TableHead>
+								<TableHead className="w-[160px]">Status</TableHead>
 								<TableHead className="w-[170px]">Latest stage</TableHead>
-								<TableHead className="w-[90px] text-right">Elapsed</TableHead>
-								<TableHead className="w-[130px] pr-5">Updated</TableHead>
+								<TableHead className="w-[110px] pr-5">Updated</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -94,9 +93,6 @@ export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 												Run {run.runStatus}
 											</p>
 										) : null}
-									</TableCell>
-									<TableCell className="text-right text-xs tabular-nums text-ink-secondary">
-										{formatDurationMs(run.elapsedMs)}
 									</TableCell>
 									<TableCell className="pr-5 text-xs text-ink-muted">
 										<RelativeTime value={run.latestUpdateAt} />

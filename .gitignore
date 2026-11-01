@@ -26,3 +26,6 @@ opencode.jsonc
 
 # Impeccable design-review artifacts (screenshots, comps)
 .impeccable/
+
+# Agent worktrees and local coordination state
+.qoder/

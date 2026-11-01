@@ -7,7 +7,7 @@ import { authStateOptions } from "../features/auth/queries";
 export const Route = createFileRoute("/signup")({
 	loader: async ({ context }) => {
 		const state = await context.queryClient.ensureQueryData(authStateOptions());
-		if (state.mode === "authenticated") throw redirect({ to: "/" });
+		if (state.mode === "authenticated") throw redirect({ to: "/overview" });
 		return state;
 	},
 	component: SignupPage,

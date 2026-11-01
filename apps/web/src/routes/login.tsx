@@ -8,7 +8,7 @@ import { authStateOptions } from "../features/auth/queries";
 export const Route = createFileRoute("/login")({
 	loader: async ({ context }) => {
 		const state = await context.queryClient.ensureQueryData(authStateOptions());
-		if (state.mode === "authenticated") throw redirect({ to: "/" });
+		if (state.mode === "authenticated") throw redirect({ to: "/overview" });
 		return state;
 	},
 	component: LoginPage,
@@ -50,7 +50,7 @@ function LoginPage() {
 							development identity.
 						</p>
 						<Button asChild variant="outline" size="sm">
-							<Link to="/">Open the control plane</Link>
+							<Link to="/overview">Open the control plane</Link>
 						</Button>
 					</div>
 				)}

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 import { useSession } from "@/components/auth/SessionProvider";
+import { BrandMark } from "@/components/brand/brand-mark";
 import {
 	type AppIconProps,
 	ChevronLeftIcon,
@@ -18,34 +19,6 @@ import { cn } from "@/lib/utils";
 import { NAV_GROUPS, type NavItem } from "./nav";
 import { OrganizationMenu } from "./organization-menu";
 
-function BrandMark() {
-	return (
-		<span
-			className="flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-elevated"
-			aria-hidden="true"
-		>
-			<svg viewBox="0 0 24 24" className="size-5" fill="none">
-				<title>Isolate</title>
-				<path
-					d="M8 4H5v16h3M16 4h3v16h-3"
-					stroke="currentColor"
-					strokeWidth="1.5"
-					strokeLinecap="round"
-					className="text-ink-secondary"
-				/>
-				<circle
-					cx="12"
-					cy="12"
-					r="2.5"
-					stroke="currentColor"
-					strokeWidth="1.5"
-					className="text-brand"
-				/>
-			</svg>
-		</span>
-	);
-}
-
 function NavLink({
 	item,
 	collapsed,
@@ -60,10 +33,7 @@ function NavLink({
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
-	const active =
-		item.to === "/"
-			? pathname === "/"
-			: pathname === item.to || pathname.startsWith(`${item.to}/`);
+	const active = pathname === item.to || pathname.startsWith(`${item.to}/`);
 	const Glyph: ComponentType<AppIconProps> = item.icon;
 	const link = (
 		<Link
@@ -134,7 +104,7 @@ export function AppSidebar({
 				)}
 			>
 				<Link
-					to="/"
+					to="/overview"
 					onClick={onNavigate}
 					className="flex min-w-0 items-center gap-2.5"
 					aria-label="Isolate overview"
@@ -196,16 +166,23 @@ export function AppSidebar({
 				)}
 			>
 				{!collapsed ? (
-					<div className="rounded-md border border-line-subtle bg-canvas/60 px-2.5 py-2">
-						<p className="font-mono text-[10px] text-ink-muted">Session</p>
-						<p className="mt-0.5 text-xs text-ink-secondary">
-							{session.mode === "demo"
-								? "Local demo"
-								: session.mode === "authenticated"
-									? "Signed in"
-									: "Unavailable"}
-						</p>
-					</div>
+					<p className="flex items-center gap-2 px-2.5 font-mono text-[10px] text-ink-muted">
+						<span
+							className={cn(
+								"size-1.5 rounded-full",
+								session.mode === "authenticated"
+									? "bg-success"
+									: session.mode === "demo"
+										? "bg-orange"
+										: "bg-ink-muted",
+							)}
+						/>
+						{session.mode === "demo"
+							? "Local demo"
+							: session.mode === "authenticated"
+								? "Signed in"
+								: "Unavailable"}
+					</p>
 				) : null}
 				{onToggleCollapsed ? (
 					<Tooltip>

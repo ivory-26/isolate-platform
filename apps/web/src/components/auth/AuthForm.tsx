@@ -46,7 +46,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 			}
 			setError(null);
 			await queryClient.invalidateQueries({ queryKey: authStateKeys.all });
-			await navigate({ to: "/" });
+			await navigate({ to: "/overview" });
 		},
 		onError: () => {
 			setError("Check the submitted fields and try again.");

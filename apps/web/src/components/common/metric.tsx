@@ -38,7 +38,7 @@ export function Metric({
 			</span>
 			<span
 				className={cn(
-					"flex items-baseline gap-1 text-2xl font-semibold tracking-tight tabular-nums",
+					"flex items-baseline gap-1 text-2xl font-medium tracking-tight tabular-nums",
 					TONE[tone],
 				)}
 			>

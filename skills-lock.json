@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "anatomy": {
+      "source": "wheresryan22/anatomy",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "39fee92648a17b9ae93c919f471f99f1a064accf1eba3ab3ecfd4ea1f89e032a"
+    },
     "mastra": {
       "source": "mastra-ai/skills",
       "sourceType": "github",
@@ -12,6 +18,12 @@
       "sourceType": "github",
       "skillPath": "skills/mastra-factory/SKILL.md",
       "computedHash": "2af192e14eca33ea9d9992e5f70dc0e8af663caba45fdb78d5fa66b42dbffdde"
+    },
+    "mobile-native": {
+      "source": "emilkowalski/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile-native/SKILL.md",
+      "computedHash": "8d77850a34ec20f745aed3215aa0d587e90438599bb09dc72d9d09ce896a5765"
     },
     "unslop": {
       "source": "heydamir/unslop",

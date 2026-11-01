@@ -86,6 +86,7 @@ if (isMain) {
 	const requestStop = (signal: string): void => {
 		if (stopping) return;
 		stopping = true;
+		composition.connectorCallReaper?.stop();
 		void loop.stop(`signal ${signal}`);
 	};
 	process.on("SIGINT", () => requestStop("SIGINT"));

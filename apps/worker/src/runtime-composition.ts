@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	type ArtifactRepository,
+	type ConnectorCallRepository,
 	createDb,
 	type PgSql,
 	PostgresArtifactRepository,
@@ -114,7 +115,32 @@ export type ConfiguredWorkerComposition = {
 	 * control plane wires its API consumer later.
 	 */
 	summarizeTask?: RunSummaryReader;
+	/** Periodic connector-call expiry sweep; present only with the device gateway. */
+	connectorCallReaper?: { stop(): void };
 };
+
+/** One bounded sweep per interval; failures are logged and retried next tick. */
+export function createConnectorCallReaper(
+	calls: Pick<ConnectorCallRepository, "expireStale">,
+	logger: Logger,
+	intervalMs = 60_000,
+): { stop(): void } {
+	const timer = setInterval(() => {
+		void calls.expireStale(new Date()).catch(() => {
+			logger.warn("connector call reaper failed");
+		});
+	}, intervalMs);
+	// Never keep the process alive for the reaper alone.
+	(timer as { unref?: () => void }).unref?.();
+	let stopped = false;
+	return {
+		stop() {
+			if (stopped) return;
+			stopped = true;
+			clearInterval(timer);
+		},
+	};
+}
 
 export type CompositionDependencies = {
 	createDb?: (databaseUrl: string) => PgSql;
@@ -705,12 +731,21 @@ export async function createConfiguredWorkerComposition(
 		);
 	}
 
+	const connectorCallReaper =
+		env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true"
+			? createConnectorCallReaper(
+					new PostgresConnectorCallRepository(sql),
+					logger,
+				)
+			: undefined;
+
 	return {
 		queue,
 		overrides,
 		providerName: sandbox.provider.name,
 		inferenceProvider,
 		githubAuth: githubTokenProvider !== null,
+		...(connectorCallReaper === undefined ? {} : { connectorCallReaper }),
 		// Wave 11: read-only rollup over durable rows; the consumer (API) is
 		// wired by the coordinator, not here.
 		summarizeTask: createRunSummaryReader({

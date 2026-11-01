@@ -54,6 +54,10 @@ import { type CallerScope, ControlPlaneError } from "./task-service.server";
  * (after trim), so a deployment that has not opted into the device gateway
  * answers a fixed 503. A missing database is the same 503. Every failure body
  * is fixed text: no request payload, repository message or token is serialized.
+ *
+ * `rotate` reuses the same guard, capability and rate-limit shape: it replaces
+ * a non-revoked device's hash and expiry, so the previous token stops
+ * authenticating on the next claim, result or heartbeat.
  */
 
 export const DEVICE_REGISTRATION_MAX_BODY_BYTES = 4 * 1024;
@@ -78,14 +82,26 @@ export const revokeDeviceSchema = z.strictObject({
 	deviceId: z.uuid(),
 });
 
+export const rotateDeviceSchema = z.strictObject({
+	deviceId: z.uuid(),
+});
+
 export type RegisterDeviceInput = z.infer<typeof registerDeviceSchema>;
 export type RevokeDeviceInput = z.infer<typeof revokeDeviceSchema>;
+export type RotateDeviceInput = z.infer<typeof rotateDeviceSchema>;
 
 /** Returned once, on the registration response only. */
 export type RegisteredDevice = {
 	readonly deviceId: string;
 	readonly token: string;
 	/** ISO expiry; the device must rotate before this instant. */
+	readonly expiresAt: string;
+};
+
+/** Returned once, on the rotation response only; the old token is dead. */
+export type RotatedDevice = {
+	readonly deviceId: string;
+	readonly token: string;
 	readonly expiresAt: string;
 };
 
@@ -122,6 +138,7 @@ export type DeviceRegistrationService = {
 	register(input: unknown): Promise<RegisteredDevice>;
 	list(): Promise<DeviceView[]>;
 	revoke(input: unknown): Promise<RevokedDevice>;
+	rotate(input: unknown): Promise<RotatedDevice>;
 };
 
 function validationError(): PlatformError {
@@ -229,6 +246,32 @@ export function createDeviceRegistrationService(
 			// `status = 'revoked'` is written unconditionally, so a replay answers
 			// 200 with the same body and changes nothing.
 			return { deviceId: revoked.id, status: "revoked" };
+		},
+
+		async rotate(input) {
+			const parsed = rotateDeviceSchema.safeParse(input);
+			if (!parsed.success) throw validationError();
+			const scope = await scoped(dependencies, "member:manage");
+			await throttled(dependencies, scope, "device:rotate");
+			const token = generateToken();
+			const tokenHash = hashConnectorDeviceToken(token);
+			const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
+			const rotated = await dependencies.devices.rotateToken(
+				scope.organizationId,
+				parsed.data.deviceId.toLowerCase(),
+				tokenHash,
+				expiresAt,
+			);
+			// Missing, foreign and revoked devices are one indistinguishable 404.
+			if (rotated === null) {
+				throw new PlatformError("NOT_FOUND", "device not found");
+			}
+			// The only place the replacement token ever leaves the service.
+			return {
+				deviceId: rotated.id,
+				token,
+				expiresAt: expiresAt.toISOString(),
+			};
 		},
 	};
 }
@@ -338,6 +381,7 @@ export type DeviceRegistrationRoutes = {
 	register(request: Request): Promise<Response>;
 	list(request: Request): Promise<Response>;
 	revoke(request: Request): Promise<Response>;
+	rotate(request: Request): Promise<Response>;
 };
 
 /** Route adapters over the pure service; every response is no-store. */
@@ -376,6 +420,18 @@ export function createDeviceRegistrationRoutes(
 				assertJsonRequest(request);
 				const input = await readBoundedJson(request);
 				return json(200, await service.revoke(input));
+			} catch (error) {
+				return failureResponse(error);
+			}
+		},
+
+		async rotate(request) {
+			if (request.method !== "POST") return methodNotAllowed();
+			try {
+				assertSameOrigin(request);
+				assertJsonRequest(request);
+				const input = await readBoundedJson(request);
+				return json(200, await service.rotate(input));
 			} catch (error) {
 				return failureResponse(error);
 			}
@@ -491,6 +547,17 @@ export async function handleDeviceRevokeRoute(
 ): Promise<Response> {
 	try {
 		return await getDeviceRegistrationRoutes(env).revoke(request);
+	} catch {
+		return unavailable();
+	}
+}
+
+export async function handleDeviceRotateRoute(
+	request: Request,
+	env: Record<string, string | undefined> = process.env,
+): Promise<Response> {
+	try {
+		return await getDeviceRegistrationRoutes(env).rotate(request);
 	} catch {
 		return unavailable();
 	}

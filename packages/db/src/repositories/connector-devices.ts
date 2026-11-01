@@ -67,6 +67,17 @@ export interface ConnectorDeviceRepository {
 		organizationId: OrganizationId,
 		deviceId: string,
 	): Promise<ConnectorDeviceSummary | null>;
+	/**
+	 * Replaces the token of an existing, non-revoked device: new hash, new
+	 * expiry, back to `active`. Returns null for a missing, foreign or revoked
+	 * device, which the caller must not distinguish.
+	 */
+	rotateToken(
+		organizationId: OrganizationId,
+		deviceId: string,
+		tokenHash: string,
+		expiresAt: Date,
+	): Promise<ConnectorDeviceSummary | null>;
 	listByOrganization(
 		organizationId: OrganizationId,
 	): Promise<ConnectorDeviceSummary[]>;
@@ -173,6 +184,20 @@ function normalizeExpiresAt(value: Date | null | undefined): Date | null {
 	return new Date(value.getTime());
 }
 
+/**
+ * A rotation always carries a finite, future expiry: an already-expired or
+ * unparseable instant is a boundary error, never a silently dead token.
+ */
+export function normalizeRotationExpiry(value: unknown): Date {
+	if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+		throw validationError("expiresAt must be a valid Date");
+	}
+	if (value.getTime() <= Date.now()) {
+		throw validationError("expiresAt must be in the future");
+	}
+	return new Date(value.getTime());
+}
+
 function toDate(value: unknown, field: string): Date {
 	if (value instanceof Date && !Number.isNaN(value.getTime())) {
 		return new Date(value.getTime());
@@ -264,6 +289,11 @@ const STMT = {
 		SET status = 'revoked', updated_at = now()
 		WHERE organization_id = $1 AND id = $2
 		RETURNING ${DEVICE_COLUMNS}`,
+	rotate: `UPDATE connector_devices
+		SET token_hash = $3, expires_at = $4::timestamptz, status = 'active',
+			updated_at = now()
+		WHERE organization_id = $1 AND id = $2 AND status <> 'revoked'
+		RETURNING ${DEVICE_COLUMNS}`,
 } as const;
 
 export class PostgresConnectorDeviceRepository
@@ -334,6 +364,23 @@ export class PostgresConnectorDeviceRepository
 		const rows = (await this.sql.unsafe(STMT.revoke, [
 			requireNotEmpty(organizationId, "organizationId"),
 			requireDeviceId(deviceId),
+		])) as unknown as Record<string, unknown>[];
+		return rows.length === 0
+			? null
+			: toConnectorDeviceSummary(mapConnectorDeviceRow(rows[0]));
+	}
+
+	async rotateToken(
+		organizationId: OrganizationId,
+		deviceId: string,
+		tokenHash: string,
+		expiresAt: Date,
+	): Promise<ConnectorDeviceSummary | null> {
+		const rows = (await this.sql.unsafe(STMT.rotate, [
+			requireNotEmpty(organizationId, "organizationId"),
+			requireDeviceId(deviceId),
+			normalizeConnectorDeviceTokenHash(tokenHash),
+			normalizeRotationExpiry(expiresAt).toISOString(),
 		])) as unknown as Record<string, unknown>[];
 		return rows.length === 0
 			? null

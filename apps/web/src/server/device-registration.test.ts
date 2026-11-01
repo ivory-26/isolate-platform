@@ -22,6 +22,7 @@ import {
 	handleDeviceListRoute,
 	handleDeviceRegisterRoute,
 	handleDeviceRevokeRoute,
+	handleDeviceRotateRoute,
 } from "./device-registration.server";
 import {
 	createUserRateLimitGate,
@@ -35,6 +36,12 @@ const USER_A = asUserId("33333333-3333-4333-8333-333333333333");
 const FOREIGN_DEVICE_ID = "44444444-4444-4444-8444-444444444444";
 /** Test fixture, not a credential: 43 base64url characters. */
 const FIXED_TOKEN = "A".repeat(43);
+
+/** A distinct, valid base64url token per call; a hash is never reused. */
+function tokenSequence(): () => string {
+	let index = 0;
+	return () => `A`.repeat(42) + String.fromCharCode(65 + index++);
+}
 
 class RecordingDeviceRepository extends InMemoryConnectorDeviceRepository {
 	readonly created: CreateConnectorDeviceInput[] = [];
@@ -383,6 +390,248 @@ describe("device registration", () => {
 	});
 });
 
+describe("device token rotation", () => {
+	test("returns a fresh token once, kills the old one and renews the expiry", async () => {
+		const h = setup({ generateToken: tokenSequence() });
+		const { deviceId, token: oldToken } = await registerDevice(h);
+		const before = (await h.devices.listByOrganization(ORG_A))[0];
+
+		const response = await h.routes.rotate(
+			post("/api/device/rotate", { deviceId }),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(response.headers.get("pragma")).toBe("no-cache");
+
+		const body = await jsonObject(response);
+		expect(Object.keys(body).sort()).toEqual([
+			"deviceId",
+			"expiresAt",
+			"token",
+		]);
+		expect(body.deviceId).toBe(deviceId);
+		const newToken = body.token;
+		if (typeof newToken !== "string") {
+			throw new Error("rotation response has no token");
+		}
+		expect(newToken).not.toBe(oldToken);
+		expect(isConnectorDeviceToken(newToken)).toBe(true);
+		expect(JSON.stringify(body)).not.toContain(
+			hashConnectorDeviceToken(newToken),
+		);
+
+		const newExpiry = Date.parse(String(body.expiresAt));
+		expect(newExpiry).toBeGreaterThan(Date.now());
+		expect(newExpiry).toBeGreaterThanOrEqual(before.expiresAt?.getTime() ?? 0);
+
+		const after = (await h.devices.listByOrganization(ORG_A))[0];
+		expect(after.status).toBe("active");
+		expect(after.expiresAt?.toISOString()).toBe(String(body.expiresAt));
+
+		// The old token stops authenticating immediately.
+		expect(
+			await h.devices.verifyByTokenHash(
+				ORG_A,
+				hashConnectorDeviceToken(oldToken),
+			),
+		).toBeNull();
+		expect(
+			(
+				await h.devices.verifyByTokenHash(
+					ORG_A,
+					hashConnectorDeviceToken(newToken),
+				)
+			)?.id,
+		).toBe(deviceId);
+	});
+
+	test("answers one 404 for a foreign, revoked or missing device", async () => {
+		const hA = setup({ generateToken: tokenSequence() });
+		const hB = setup({
+			organizationId: ORG_B,
+			generateToken: tokenSequence(),
+		});
+		const foreign = await registerDevice(hB);
+		const own = await registerDevice(hA);
+		await hA.routes.revoke(
+			post("/api/device/revoke", { deviceId: own.deviceId }),
+		);
+
+		const attempts: string[] = [
+			foreign.deviceId,
+			own.deviceId,
+			FOREIGN_DEVICE_ID,
+		];
+		for (const deviceId of attempts) {
+			const response = await hA.routes.rotate(
+				post("/api/device/rotate", { deviceId }),
+			);
+			expect(response.status).toBe(404);
+			expect(await jsonObject(response)).toEqual({ error: "device not found" });
+		}
+
+		// The foreign device still authenticates with its own token.
+		const verified = await hB.devices.verifyByTokenHash(
+			ORG_B,
+			hashConnectorDeviceToken(foreign.token),
+		);
+		expect(verified?.id).toBe(foreign.deviceId);
+		expect(verified?.status).toBe("active");
+	});
+
+	test("allows admin and owner, forbids member and viewer", async () => {
+		for (const role of ["member", "viewer"] as const) {
+			const h = setup({ role, generateToken: tokenSequence() });
+			const response = await h.routes.rotate(
+				post("/api/device/rotate", { deviceId: FOREIGN_DEVICE_ID }),
+			);
+			expect(response.status).toBe(403);
+			expect(await jsonObject(response)).toEqual({ error: "forbidden" });
+		}
+		for (const role of ["owner", "admin"] as const) {
+			const h = setup({ role, generateToken: tokenSequence() });
+			const { deviceId, token } = await registerDevice(h);
+			const response = await h.routes.rotate(
+				post("/api/device/rotate", { deviceId }),
+			);
+			expect(response.status).toBe(200);
+			const text = await response.text();
+			expect(text).not.toContain(token);
+		}
+	});
+
+	test("rejects an invalid body, a wrong method and a non-POST caller", async () => {
+		const h = setup({ generateToken: tokenSequence() });
+		const { deviceId, token } = await registerDevice(h);
+
+		for (const body of [
+			{},
+			{ deviceId: "not-a-uuid" },
+			{ deviceId, displayName: "Laptop A" },
+			{ deviceId: 42 },
+		]) {
+			const response = await h.routes.rotate(post("/api/device/rotate", body));
+			expect(response.status).toBe(400);
+			expect(await jsonObject(response)).toEqual({
+				error: "device request is invalid",
+			});
+		}
+
+		const wrongMethod = await h.routes.rotate(get("/api/device/rotate"));
+		expect(wrongMethod.status).toBe(405);
+
+		// Nothing above minted a token or changed the device.
+		expect(
+			(
+				await h.devices.verifyByTokenHash(
+					ORG_A,
+					hashConnectorDeviceToken(token),
+				)
+			)?.id,
+		).toBe(deviceId);
+	});
+
+	test("runs the same-origin and JSON guards before touching the device", async () => {
+		const h = setup({ generateToken: tokenSequence() });
+		const { deviceId, token } = await registerDevice(h);
+
+		const crossSite = new Request("http://localhost/api/device/rotate", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"sec-fetch-site": "cross-site",
+			},
+			body: JSON.stringify({ deviceId }),
+		});
+		const crossSiteResponse = await h.routes.rotate(crossSite);
+		expect(crossSiteResponse.status).toBe(403);
+		expect(await jsonObject(crossSiteResponse)).toEqual({
+			error: "request rejected",
+		});
+
+		const crossOrigin = new Request("http://localhost/api/device/rotate", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				origin: "https://evil.example",
+			},
+			body: JSON.stringify({ deviceId }),
+		});
+		expect((await h.routes.rotate(crossOrigin)).status).toBe(403);
+
+		const notJson = new Request("http://localhost/api/device/rotate", {
+			method: "POST",
+			headers: { "content-type": "text/plain" },
+			body: JSON.stringify({ deviceId }),
+		});
+		expect((await h.routes.rotate(notJson)).status).toBe(415);
+
+		// The token survived every rejected request.
+		expect(
+			(
+				await h.devices.verifyByTokenHash(
+					ORG_A,
+					hashConnectorDeviceToken(token),
+				)
+			)?.id,
+		).toBe(deviceId);
+	});
+
+	test("the eleventh rotation in a minute is a fixed 429 that mints nothing", async () => {
+		let minted = 0;
+		const next = tokenSequence();
+		const h = setup({
+			rateLimiter: createUserRateLimitGate(new InMemoryRateLimitRepository()),
+			generateToken: () => {
+				minted += 1;
+				return next();
+			},
+		});
+		const { deviceId } = await registerDevice(h);
+		for (let index = 0; index < 10; index += 1) {
+			const response = await h.routes.rotate(
+				post("/api/device/rotate", { deviceId }),
+			);
+			expect(response.status).toBe(200);
+		}
+		expect(minted).toBe(11);
+
+		const denied = await h.routes.rotate(
+			post("/api/device/rotate", { deviceId }),
+		);
+		expect(denied.status).toBe(429);
+		expect(denied.headers.get("cache-control")).toBe("no-store");
+		expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+		expect(await denied.json()).toEqual({ error: "too many requests" });
+		expect(minted).toBe(11);
+	});
+
+	test("never writes either token to a log", async () => {
+		const spies = [
+			spyOn(console, "log"),
+			spyOn(console, "warn"),
+			spyOn(console, "error"),
+		];
+		try {
+			const h = setup({ generateToken: tokenSequence() });
+			const { deviceId, token: oldToken } = await registerDevice(h);
+			const rotated = await h.routes.rotate(
+				post("/api/device/rotate", { deviceId }),
+			);
+			const newToken = (await jsonObject(rotated)).token;
+			for (const spy of spies) {
+				for (const call of spy.mock.calls) {
+					const serialized = JSON.stringify(call);
+					expect(serialized).not.toContain(oldToken);
+					expect(serialized).not.toContain(String(newToken));
+				}
+			}
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+});
+
 describe("device registration route adapters", () => {
 	test("return 503 when the device gateway is disabled", async () => {
 		const register = await handleDeviceRegisterRoute(
@@ -403,6 +652,13 @@ describe("device registration route adapters", () => {
 			{},
 		);
 		expect(revoke.status).toBe(503);
+
+		const rotate = await handleDeviceRotateRoute(
+			post("/api/device/rotate", { deviceId: FOREIGN_DEVICE_ID }),
+			{},
+		);
+		expect(rotate.status).toBe(503);
+		expect(rotate.headers.get("cache-control")).toBe("no-store");
 	});
 
 	test("return 503 when the database is not configured", async () => {
@@ -417,6 +673,14 @@ describe("device registration route adapters", () => {
 		).toBe(503);
 		expect(
 			(await handleDeviceListRoute(get("/api/device/list"), env)).status,
+		).toBe(503);
+		expect(
+			(
+				await handleDeviceRotateRoute(
+					post("/api/device/rotate", { deviceId: FOREIGN_DEVICE_ID }),
+					env,
+				)
+			).status,
 		).toBe(503);
 	});
 

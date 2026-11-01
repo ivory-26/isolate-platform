@@ -115,5 +115,5 @@ The existing worker metrics (`worker.turn.latency_ms`, `worker.sandbox.seconds`,
 - OTLP/HTTP JSON exporter: **done** — opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`; bounded
   payload, validated endpoint, fire-and-forget with an abort timeout. Tests:
   `packages/shared/src/observability/otlp.test.ts`.
-- Trace read model (`getTaskTrace`): **owned by another lane** — not part of this change.
+- Trace read model: **done** — `getTaskTrace` + `GET /api/traces/{taskId}` (tenant-scoped, bounded).
 - Dashboards: planned.

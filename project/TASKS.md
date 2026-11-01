@@ -31,11 +31,12 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 
 | Lane | Branch | Status |
 |---|---|---|
-| W19-ROTATE | `task/w19-rotate` | in flight — `rotateToken`, rotate route, expiry renewal, tests |
-| W19-TRACE | `task/w19-trace` | in flight — tenant-scoped `getTaskTrace` read model + `/api/traces/{taskId}` |
-| W19-OTLP | `task/w19-otlp` | in flight — OTLP/HTTP sink, worker sink composition, device-path SaaS live harness |
-| W19-CONTEXT | pending | non-GitHub context preloading (device `connector.context.fetch` + fingerprint parsers) |
-| W19-E2E | pending | route-level end-to-end flow covering every endpoint |
+| W19-ROTATE | `603f561` → merged | **done** — `rotateToken`, `/api/device/rotate`, expiry renewal, rate limit, tests |
+| W19-TRACE | `4c3fd9a` → merged | **done** — tenant-scoped trace read model + `/api/traces/{taskId}` |
+| W19-OTLP | `e78cb3b` → merged | **done** — OTLP/HTTP sink, worker sink composition, device-path SaaS live harness |
+| W19-CONTEXT-DEVICE | in flight | per-vendor `*.context.fetch` handlers in the daemon |
+| W19-CONTEXT-WORKER | in flight | fingerprint → device context call loader + composition |
+| W19-E2E | in flight | route-level end-to-end flow covering every endpoint |
 
 ## Wave 18 — connector hardening: limits, validation, batching, chunking (2026-11-01)
 

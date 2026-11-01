@@ -9,6 +9,8 @@ Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lan
 - **Hardening lanes**: DB-backed rate limiting/throttling + batched claims (`task/w18-rate`), per-tool Zod validation + request guard (`task/w18-batch`), bounded streaming response reads (`task/w18-stream`). `0012_rate_limits` and `0013_trace_context` are created, not applied.
 - **Tracing**: shared W3C-compatible trace primitives (`9f3140c`) and the design of record (`docs/connectors/TRACING.md`); worker/gateway/daemon wiring follows the hardening merges.
 - **Scaling record**: `docs/connectors/SCALING.md` documents the multi-replica model, limits, backpressure, batching and chunking.
+- **CI fix (`56ebea2`, pushed)**: the fixture rewrites needed formatting and the Biome schema was stale (2.2.4 vs CLI 2.4.5); `biome check` now exits 0 with only the 10 pre-existing warnings. GitHub Actions is **green** on `56ebea2`.
+- **Stalled lanes resumed**: the three wave-18 worktrees were salvaged (WIP committed, replayed onto the cleaned `main`), stray tsconfig/stash noise cleared, and fresh agents are finishing rate limiting, validation and streaming. Old pre-rewrite objects are purged locally; `gitleaks` reports **0 leaks** on `main`.
 
 ## Previous: wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
 

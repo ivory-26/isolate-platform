@@ -34,9 +34,10 @@ User request: full security audit plus rate limiting, throttling, validation, Ne
 | Lane | Branch | Status |
 |---|---|---|
 | W18-AUDIT | read-only | in flight — full connector/binding audit |
-| W18-PROTECT | `task/w18-rate` | in flight — migration `0012_rate_limits`, DB limiter, gateway/user/intake/worker limits, batch claim, daemon batching |
-| W18-VALID | `task/w18-batch` | in flight — per-tool Zod schemas in the worker, same-origin/JSON request guard module |
-| W18-STREAM | `task/w18-stream` | in flight — bounded chunked provider response reader across the ten adapters |
+| W18-PROTECT | `task/w18-rate` | **resumed** — WIP replayed onto cleaned main; gateway/user/intake/daemon limits + batch claim remaining |
+| W18-VALID | `task/w18-batch` | **resumed** — WIP replayed; request-guard module + tests remaining |
+| W18-STREAM | `task/w18-stream` | **resumed** — WIP replayed; adapter call sites + tests remaining |
+| W18-AUDIT-2 | read-only | in flight — fresh audit of the current main |
 | W18-DOCS | `main` `5ec2ee7` | **done** — `docs/connectors/SCALING.md` |
 
 Rules: migration `0012` is created by the lane and applied by the coordinator with approval; no provider keys; no live calls.

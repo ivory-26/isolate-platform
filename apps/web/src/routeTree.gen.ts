@@ -9,13 +9,14 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OrganizationsRouteRouteImport } from './routes/organizations/route'
 import { Route as SignupRouteImport } from './routes/signup'
-import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppApprovalsRouteImport } from './routes/_app.approvals'
 import { Route as AppDevicesRouteImport } from './routes/_app.devices'
+import { Route as AppOverviewRouteImport } from './routes/_app.overview'
 import { Route as AppRepositoriesRouteImport } from './routes/_app.repositories'
 import { Route as AppRunsRouteImport } from './routes/_app.runs'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
@@ -40,6 +41,11 @@ import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -59,11 +65,6 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppIndexRoute = AppIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppApprovalsRoute = AppApprovalsRouteImport.update({
   id: '/approvals',
   path: '/approvals',
@@ -72,6 +73,11 @@ const AppApprovalsRoute = AppApprovalsRouteImport.update({
 const AppDevicesRoute = AppDevicesRouteImport.update({
   id: '/devices',
   path: '/devices',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOverviewRoute = AppOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRepositoriesRoute = AppRepositoriesRouteImport.update({
@@ -191,12 +197,13 @@ const ApiDeviceCallsIdResultRoute = ApiDeviceCallsIdResultRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof IndexRoute
   '/organizations': typeof OrganizationsRouteRouteWithChildren
-  '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/approvals': typeof AppApprovalsRoute
   '/devices': typeof AppDevicesRoute
+  '/overview': typeof AppOverviewRoute
   '/repositories': typeof AppRepositoriesRoute
   '/runs': typeof AppRunsRouteWithChildren
   '/settings': typeof AppSettingsRoute
@@ -222,10 +229,12 @@ export interface FileRoutesByFullPath {
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/approvals': typeof AppApprovalsRoute
   '/devices': typeof AppDevicesRoute
+  '/overview': typeof AppOverviewRoute
   '/repositories': typeof AppRepositoriesRoute
   '/runs': typeof AppRunsRouteWithChildren
   '/settings': typeof AppSettingsRoute
@@ -234,7 +243,6 @@ export interface FileRoutesByTo {
   '/workflows': typeof AppWorkflowsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
-  '/': typeof AppIndexRoute
   '/organizations': typeof OrganizationsIndexRoute
   '/runs/$taskId': typeof AppRunsTaskIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -253,12 +261,14 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/organizations': typeof OrganizationsRouteRouteWithChildren
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/_app/approvals': typeof AppApprovalsRoute
   '/_app/devices': typeof AppDevicesRoute
+  '/_app/overview': typeof AppOverviewRoute
   '/_app/repositories': typeof AppRepositoriesRoute
   '/_app/runs': typeof AppRunsRouteWithChildren
   '/_app/settings': typeof AppSettingsRoute
@@ -267,7 +277,6 @@ export interface FileRoutesById {
   '/_app/workflows': typeof AppWorkflowsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
-  '/_app/': typeof AppIndexRoute
   '/organizations/': typeof OrganizationsIndexRoute
   '/_app/runs/$taskId': typeof AppRunsTaskIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -287,12 +296,13 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/organizations'
     | '/'
+    | '/organizations'
     | '/login'
     | '/signup'
     | '/approvals'
     | '/devices'
+    | '/overview'
     | '/repositories'
     | '/runs'
     | '/settings'
@@ -318,10 +328,12 @@ export interface FileRouteTypes {
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/login'
     | '/signup'
     | '/approvals'
     | '/devices'
+    | '/overview'
     | '/repositories'
     | '/runs'
     | '/settings'
@@ -330,7 +342,6 @@ export interface FileRouteTypes {
     | '/workflows'
     | '/auth/callback'
     | '/organizations/new'
-    | '/'
     | '/organizations'
     | '/runs/$taskId'
     | '/api/auth/$'
@@ -348,12 +359,14 @@ export interface FileRouteTypes {
     | '/api/device/calls/$id/result'
   id:
     | '__root__'
+    | '/'
     | '/organizations'
     | '/_app'
     | '/login'
     | '/signup'
     | '/_app/approvals'
     | '/_app/devices'
+    | '/_app/overview'
     | '/_app/repositories'
     | '/_app/runs'
     | '/_app/settings'
@@ -362,7 +375,6 @@ export interface FileRouteTypes {
     | '/_app/workflows'
     | '/auth/callback'
     | '/organizations/new'
-    | '/_app/'
     | '/organizations/'
     | '/_app/runs/$taskId'
     | '/api/auth/$'
@@ -381,6 +393,7 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   OrganizationsRouteRoute: typeof OrganizationsRouteRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
@@ -403,6 +416,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -431,13 +451,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/': {
-      id: '/_app/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/approvals': {
       id: '/_app/approvals'
       path: '/approvals'
@@ -450,6 +463,13 @@ declare module '@tanstack/react-router' {
       path: '/devices'
       fullPath: '/devices'
       preLoaderRoute: typeof AppDevicesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/overview': {
+      id: '/_app/overview'
+      path: '/overview'
+      fullPath: '/overview'
+      preLoaderRoute: typeof AppOverviewRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/repositories': {
@@ -643,30 +663,31 @@ const AppRunsRouteWithChildren =
 interface AppRouteChildren {
   AppApprovalsRoute: typeof AppApprovalsRoute
   AppDevicesRoute: typeof AppDevicesRoute
+  AppOverviewRoute: typeof AppOverviewRoute
   AppRepositoriesRoute: typeof AppRepositoriesRoute
   AppRunsRoute: typeof AppRunsRouteWithChildren
   AppSettingsRoute: typeof AppSettingsRoute
   AppSubmitRoute: typeof AppSubmitRoute
   AppUsageRoute: typeof AppUsageRoute
   AppWorkflowsRoute: typeof AppWorkflowsRoute
-  AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppApprovalsRoute: AppApprovalsRoute,
   AppDevicesRoute: AppDevicesRoute,
+  AppOverviewRoute: AppOverviewRoute,
   AppRepositoriesRoute: AppRepositoriesRoute,
   AppRunsRoute: AppRunsRouteWithChildren,
   AppSettingsRoute: AppSettingsRoute,
   AppSubmitRoute: AppSubmitRoute,
   AppUsageRoute: AppUsageRoute,
   AppWorkflowsRoute: AppWorkflowsRoute,
-  AppIndexRoute: AppIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   OrganizationsRouteRoute: OrganizationsRouteRouteWithChildren,
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,

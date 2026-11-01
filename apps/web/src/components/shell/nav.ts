@@ -12,7 +12,7 @@ import {
 } from "@/components/icons";
 
 export type NavPath =
-	| "/"
+	| "/overview"
 	| "/runs"
 	| "/approvals"
 	| "/workflows"
@@ -32,7 +32,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 	{
 		label: "Operate",
 		items: [
-			{ label: "Overview", to: "/", icon: OverviewIcon },
+			{ label: "Overview", to: "/overview", icon: OverviewIcon },
 			{ label: "Runs", to: "/runs", icon: RunsIcon, badge: "runs" },
 			{
 				label: "Approvals",

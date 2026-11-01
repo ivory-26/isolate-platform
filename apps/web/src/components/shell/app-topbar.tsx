@@ -1,21 +1,14 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ModShortcut } from "@/components/common/mod-shortcut";
-import {
-	ChevronRightIcon,
-	MenuIcon,
-	SearchIcon,
-	SubmitIcon,
-} from "@/components/icons";
+import { ChevronRightIcon, MenuIcon, SearchIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, NAV_ITEMS } from "./nav";
 import { UserMenu } from "./user-menu";
 
 function contextFor(pathname: string) {
-	const item = NAV_ITEMS.find((entry) =>
-		entry.to === "/"
-			? pathname === "/"
-			: pathname === entry.to || pathname.startsWith(`${entry.to}/`),
+	const item = NAV_ITEMS.find(
+		(entry) => pathname === entry.to || pathname.startsWith(`${entry.to}/`),
 	);
 	const group = NAV_GROUPS.find((entry) =>
 		entry.items.some((candidate) => candidate.to === item?.to),
@@ -65,7 +58,7 @@ export function AppTopbar({
 				<ol className="flex min-w-0 items-center gap-1.5 text-xs">
 					<li className="hidden shrink-0 sm:block">
 						<Link
-							to="/"
+							to="/overview"
 							className="text-ink-muted transition-colors hover:text-ink"
 						>
 							Isolate
@@ -104,18 +97,6 @@ export function AppTopbar({
 				aria-label="Search or jump to"
 			>
 				<SearchIcon />
-			</Button>
-
-			<Button
-				asChild
-				variant="outline"
-				size="sm"
-				className="hidden gap-1.5 sm:flex"
-			>
-				<Link to="/submit">
-					<SubmitIcon />
-					New task
-				</Link>
 			</Button>
 
 			<div className="flex items-center gap-2 border-l border-line-subtle pl-2">

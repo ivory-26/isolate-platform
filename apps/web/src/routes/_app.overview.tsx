@@ -18,7 +18,7 @@ import { OrganizationContextLine } from "@/features/overview/components/org-cont
 import { OverviewSkeleton } from "@/features/overview/components/overview-skeleton";
 import { overviewOptions } from "@/features/overview/queries";
 
-export const Route = createFileRoute("/_app/")({
+export const Route = createFileRoute("/_app/overview")({
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(overviewOptions()),
 	component: OverviewPage,
@@ -114,12 +114,12 @@ function OverviewPage() {
 						/>
 					</MetricStrip>
 
-					<div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+					<div className="grid gap-6 2xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
 						<ActiveRunsSection runs={snapshot.activeRuns} />
 						<PendingApprovalsPreview approvals={snapshot.pendingApprovals} />
 					</div>
 
-					<div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+					<div className="grid gap-6 2xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
 						<ActivityFeed items={snapshot.activity} />
 						<DeviceHealthSection devices={snapshot.devices} />
 					</div>

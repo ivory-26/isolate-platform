@@ -549,3 +549,52 @@ This document is expected to evolve as the UI is built. When using Reicon MCP, E
 5. Keep the landing shader configuration and three core brand colors stable unless an explicit design decision changes them.
 
 **North star:** A developer should be able to open Isolate and understand what is running, what needs attention, what is safe to approve, and what action to take next—without fighting the interface.
+
+## 18. Implementation record — wave 20 (2026-11-01)
+
+This section records durable decisions made while building the authenticated
+control plane. Sections 1–17 remain the design source of truth; this section
+must be updated rather than replaced when the implementation changes.
+
+- **Routes.** `/` is the public landing page. Authenticated and local-demo
+  callers are redirected to `/overview`; the protected surfaces are
+  `/overview`, `/runs`, `/runs/$taskId`, `/approvals`, `/repositories`,
+  `/workflows`, `/usage`, `/settings`, `/devices`, and `/submit`. The app shell
+  (sidebar + topbar + command palette) wraps every protected route.
+- **Landing composition.** The landing follows a product-led, Baseten-style
+  structure: quiet sticky header, centered hero, two actions, a large real
+  dashboard screenshot in a browser frame, a facts strip, alternating feature
+  sections, lifecycle, trust boundary, closing CTA and a column footer. Customer
+  logos and testimonials are deliberately absent because the project has no
+  verified customers or quotes to show.
+- **Shader placement.** The React Bits `GradientASCII` component from §8 is used
+  with the supplied configuration, but it sits behind the dashboard screenshot
+  as the hero's visual bed rather than behind the headline. The supplied
+  horizon is bright; full-bleed placement failed text contrast. This is the
+  Modal-style composition: text on calm canvas, shader and product view below.
+  Auth pages use a lower-intensity variant behind a solid card. The shader is
+  non-interactive (`mouseInteraction={false}`, `clickEffect="none"`) and
+  respects reduced motion through the component.
+- **Icons.** `reicon-react` is the only icon family. Its published package
+  exposes Outline and Filled weights, not a true duotone weight; the shared
+  `Icon` wrapper composes duotone from a 20% Filled layer beneath the Outline
+  glyph. Control glyphs opt out at 16px. The Reicon MCP is installed in the Qoder
+  app for icon selection; generated shadcn icons are replaced with this wrapper.
+- **Typography and tokens.** Inter carries UI and display; JetBrains Mono carries
+  IDs, timestamps, logs and technical metadata. The fixed brand anchors remain
+  Midnight Black `#02070A`, Electric Blue `#0297DE`, and Cantaloupe Orange
+  `#FC734D`. The extended dark ramp lives in `apps/web/src/styles.css`.
+- **Data surfaces.** Every page reads real tenant-scoped server projections
+  through `uiRead`, with capability checks before storage, bounded rows and
+  `no-store`. Empty, unavailable and error states are explicit. The workflow
+  canvas builder remains deferred; the Workflows page is a read-only library.
+- **Charts and numbers.** Usage charts use Dither Kit area/bar/sparkline
+  components with one accent per chart; metrics use NumberFlow with tabular
+  figures. A null cost is shown as `—`, never as zero.
+- **Screenshot assets.** `apps/web/public/images/dashboard-overview.png` and
+  the two panel clips are real UI captures with synthetic data. Their provenance
+  is recorded in `apps/web/public/images/PROVENANCE.md`; the landing labels them
+  illustrative.
+- **Licensing.** See [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). The
+  Dither Kit source had no LICENSE file when vendored; verify rights before
+  commercial redistribution.

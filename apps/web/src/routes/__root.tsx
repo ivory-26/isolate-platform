@@ -45,7 +45,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 					Retry the request. No execution happens in this browser.
 				</p>
 				<Button asChild variant="outline">
-					<Link to="/">Return to overview</Link>
+					<Link to="/">Return home</Link>
 				</Button>
 			</main>
 		),
@@ -61,7 +61,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 					This route does not exist in the control plane.
 				</p>
 				<Button asChild variant="outline">
-					<Link to="/">Return to overview</Link>
+					<Link to="/">Return home</Link>
 				</Button>
 			</main>
 		),

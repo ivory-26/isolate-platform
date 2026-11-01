@@ -19,7 +19,10 @@ type StreamHooks = {
 };
 
 /** Pull-based fake so the reader controls exactly how much is produced. */
-function streamResponse(chunks: Uint8Array[], hooks: StreamHooks = {}): Response {
+function streamResponse(
+	chunks: Uint8Array[],
+	hooks: StreamHooks = {},
+): Response {
 	let index = 0;
 	const stream = new ReadableStream<Uint8Array>(
 		{
@@ -59,7 +62,7 @@ describe("readBoundedText", () => {
 			streamResponse(bytes("alpha", "beta", "gamma")),
 			{ maxBytes: 64 },
 		);
-		expect(result).toEqual({ ok: true, text: "alphabetagamma", bytes: 15 });
+		expect(result).toEqual({ ok: true, text: "alphabetagamma", bytes: 14 });
 	});
 
 	test("accepts a body at exactly the cap", async () => {
@@ -175,10 +178,9 @@ describe("readBoundedText", () => {
 
 describe("readBoundedJson", () => {
 	test("parses a streamed JSON body under the cap", async () => {
-		const result = await readBoundedJson(
-			streamResponse(bytes('{"a":', "1}")),
-			{ maxBytes: 64 },
-		);
+		const result = await readBoundedJson(streamResponse(bytes('{"a":', "1}")), {
+			maxBytes: 64,
+		});
 		expect(result).toEqual({ ok: true, data: { a: 1 }, bytes: 7 });
 	});
 

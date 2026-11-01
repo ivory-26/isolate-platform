@@ -254,7 +254,35 @@ describe("pagerduty read tools", () => {
 type WriteRouterOptions = {
 	status?: number;
 	body?: unknown;
+	stream?: { chunks: readonly string[]; onCancel: () => void };
 };
+
+/** Pull-based body: the adapter decides consumption; `onCancel` proves the cap. */
+function streamed(chunks: readonly string[], onCancel: () => void): Response {
+	const encoder = new TextEncoder();
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				const next = chunks[index];
+				if (next === undefined) {
+					controller.close();
+					return;
+				}
+				index += 1;
+				controller.enqueue(encoder.encode(next));
+			},
+			cancel() {
+				onCancel();
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return new Response(body, {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
 
 function writeRouter(options: WriteRouterOptions = {}): {
 	impl: typeof fetch;
@@ -269,6 +297,9 @@ function writeRouter(options: WriteRouterOptions = {}): {
 		calls.push({ url, init: init ?? {} });
 		const status = options.status ?? 200;
 		if (status !== 200) return json(status, { error: "nope" });
+		if (options.stream !== undefined) {
+			return streamed(options.stream.chunks, options.stream.onCancel);
+		}
 		return json(
 			200,
 			options.body ?? {
@@ -411,6 +442,54 @@ describe("pagerduty scoped writes", () => {
 		if (result.ok) return;
 		expect(result.code).toBe("INTEGRATION_UNAVAILABLE");
 		expect(audits[0]?.outcome).toBe("FAILED");
+	});
+
+	test("reads a multi-chunk write confirmation and never cancels it", async () => {
+		const body = JSON.stringify({
+			incidents: [{ id: "PABC123", status: "acknowledged" }],
+		});
+		const midpoint = Math.floor(body.length / 2);
+		let cancelled = 0;
+		const { impl } = writeRouter({
+			stream: {
+				chunks: [body.slice(0, midpoint), body.slice(midpoint)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const audits: PagerDutyWriteAuditEntry[] = [];
+		const result = await acknowledgePagerDutyIncident(writeDeps(impl, audits), {
+			incidentId: "PABC123",
+		});
+		expect(result).toEqual({
+			ok: true,
+			incidentId: "PABC123",
+			status: "acknowledged",
+		});
+		expect(cancelled).toBe(0);
+	});
+
+	test("cancels an oversized write confirmation at the cap and fails closed", async () => {
+		const secret = "STREAMED-PROVIDER-SECRET";
+		let cancelled = 0;
+		const { impl } = writeRouter({
+			stream: {
+				chunks: ['{"incidents":', secret, "x".repeat(100 * 1024)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const audits: PagerDutyWriteAuditEntry[] = [];
+		const result = await acknowledgePagerDutyIncident(writeDeps(impl, audits), {
+			incidentId: "PABC123",
+		});
+		expect(cancelled).toBe(1);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.code).toBe("INTEGRATION_UNAVAILABLE");
+		expect(audits[0]?.outcome).toBe("FAILED");
+		expect(JSON.stringify(audits)).not.toContain(secret);
 	});
 
 	test("a missing write credential blocks without calling the provider", async () => {

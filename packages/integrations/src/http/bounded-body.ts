@@ -16,7 +16,10 @@ import { PlatformError } from "@isolate/shared";
  * own existing outcome vocabulary (`skipped`, `failed`, `denied`, ...).
  */
 
-export type BoundedBodyFailureReason = "too-large" | "read-failed" | "invalid-json";
+export type BoundedBodyFailureReason =
+	| "too-large"
+	| "read-failed"
+	| "invalid-json";
 
 export type BoundedTextResult =
 	| { readonly ok: true; readonly text: string; readonly bytes: number }
@@ -52,9 +55,10 @@ function assertCap(options: BoundedBodyOptions): number {
 	return maxBytes;
 }
 
-async function cancelQuietly(
-	reader: ReadableStreamDefaultReader<Uint8Array>,
-): Promise<void> {
+/** Structural reader shape: the DOM and Node stream typings disagree on extras. */
+type CancellableReader = { cancel(reason?: unknown): Promise<void> };
+
+async function cancelQuietly(reader: CancellableReader): Promise<void> {
 	try {
 		await reader.cancel();
 	} catch {

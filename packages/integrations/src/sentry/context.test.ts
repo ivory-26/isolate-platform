@@ -29,6 +29,38 @@ function json(status: number, body: unknown): Response {
 	});
 }
 
+/**
+ * Pull-based stream body so the adapter — not the test — decides how much of
+ * the payload is consumed; `onCancel` proves the reader is abandoned at the cap.
+ */
+function streamed(chunks: readonly string[], onCancel: () => void): Response {
+	const encoder = new TextEncoder();
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				const next = chunks[index];
+				if (next === undefined) {
+					controller.close();
+					return;
+				}
+				index += 1;
+				controller.enqueue(encoder.encode(next));
+			},
+			cancel() {
+				onCancel();
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return new Response(body, {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
+type StreamOption = { chunks: readonly string[]; onCancel: () => void };
+
 const ISSUE = {
 	id: ISSUE_ID,
 	shortId: "CHECKOUT-1",
@@ -121,6 +153,7 @@ type RouterOptions = {
 	releaseStatus?: number;
 	deployStatus?: number;
 	eventOversize?: boolean;
+	eventStream?: StreamOption;
 	throwOn?: string;
 	event?: unknown;
 };
@@ -140,6 +173,12 @@ function router(options: RouterOptions = {}): {
 			throw new TypeError("fetch failed");
 		}
 		if (url.includes("/events/latest/")) {
+			if (options.eventStream !== undefined) {
+				return streamed(
+					options.eventStream.chunks,
+					options.eventStream.onCancel,
+				);
+			}
 			if (options.eventOversize === true) {
 				return new Response("x".repeat(300 * 1024), { status: 200 });
 			}
@@ -348,6 +387,49 @@ describe("fetchSentryContext", () => {
 		});
 		expect(bundle.items.map((item) => item.kind)).toEqual(["issue"]);
 		expect(bundle.truncated).toBe(true);
+	});
+
+	test("reads a multi-chunk provider body and never cancels a bounded stream", async () => {
+		const body = JSON.stringify(eventBody());
+		const midpoint = Math.floor(body.length / 2);
+		let cancelled = 0;
+		const { impl } = router({
+			eventStream: {
+				chunks: [body.slice(0, midpoint), body.slice(midpoint)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchSentryContext(dependencies(impl), {
+			orgSlug: ORG,
+			issueId: ISSUE_ID,
+		});
+		const event = bundle.items.find((item) => item.kind === "event");
+		expect(event?.excerpt).toContain("Exception: TypeError");
+		expect(bundle.truncated).toBe(false);
+		expect(cancelled).toBe(0);
+	});
+
+	test("cancels a provider stream the moment it crosses the response cap", async () => {
+		const secret = "STREAMED-PROVIDER-SECRET";
+		let cancelled = 0;
+		const { impl } = router({
+			eventStream: {
+				chunks: ['{"eventID":"', secret, "x".repeat(300 * 1024)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchSentryContext(dependencies(impl), {
+			orgSlug: ORG,
+			issueId: ISSUE_ID,
+		});
+		expect(cancelled).toBe(1);
+		expect(bundle.items.map((item) => item.kind)).toEqual(["issue"]);
+		expect(bundle.truncated).toBe(true);
+		expect(JSON.stringify(bundle)).not.toContain(secret);
 	});
 
 	test("maps a missing foreign issue to NOT_FOUND", async () => {

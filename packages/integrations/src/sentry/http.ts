@@ -1,4 +1,5 @@
 import { PlatformError } from "@isolate/shared";
+import { readBoundedJson } from "../http/bounded-body";
 
 /**
  * Bounded HTTP surface shared by the Sentry reader and tools.
@@ -36,14 +37,6 @@ export type SentryHttpOptions = {
 };
 
 const encoder = new TextEncoder();
-
-function parseJson(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-}
 
 /** https origin only: no credentials, query, fragment or path prefix. */
 export function normalizeSentryBaseUrl(value: string | undefined): string {
@@ -147,18 +140,12 @@ export function createSentryHttpClient(
 			if (Number.isFinite(declared) && declared > SENTRY_MAX_RESPONSE_BYTES) {
 				return { kind: "skipped" };
 			}
-			let text: string;
-			try {
-				text = await response.text();
-			} catch {
-				return { kind: "skipped" };
-			}
-			if (encoder.encode(text).byteLength > SENTRY_MAX_RESPONSE_BYTES) {
-				return { kind: "skipped" };
-			}
-			const body = parseJson(text);
-			if (body === undefined) return { kind: "skipped" };
-			return { kind: "ok", body };
+			// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+			const read = await readBoundedJson(response, {
+				maxBytes: SENTRY_MAX_RESPONSE_BYTES,
+			});
+			if (!read.ok) return { kind: "skipped" };
+			return { kind: "ok", body: read.data };
 		},
 	};
 }

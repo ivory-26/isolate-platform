@@ -33,6 +33,7 @@ type RouterOptions = {
 	points?: number;
 	logLines?: string[];
 	oversized?: boolean;
+	metricsStream?: StreamOption;
 	throwOn?: "rule" | "metrics" | "logs";
 };
 
@@ -42,6 +43,38 @@ function json(status: number, body: unknown): Response {
 		headers: { "Content-Type": "application/json" },
 	});
 }
+
+/**
+ * Pull-based stream body so the adapter — not the test — decides how much of
+ * the payload is consumed; `onCancel` proves the reader is abandoned at the cap.
+ */
+function streamed(chunks: readonly string[], onCancel: () => void): Response {
+	const encoder = new TextEncoder();
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				const next = chunks[index];
+				if (next === undefined) {
+					controller.close();
+					return;
+				}
+				index += 1;
+				controller.enqueue(encoder.encode(next));
+			},
+			cancel() {
+				onCancel();
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return new Response(body, {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
+type StreamOption = { chunks: readonly string[]; onCancel: () => void };
 
 function metricFrames(series: number, points: number): unknown[] {
 	const times = Array.from(
@@ -129,6 +162,12 @@ function router(options: RouterOptions = {}): {
 			if (status !== 200) return json(status, { message: "unavailable" });
 			if (options.oversized === true) {
 				return new Response("x".repeat(300 * 1024), { status: 200 });
+			}
+			if (step === "metrics" && options.metricsStream !== undefined) {
+				return streamed(
+					options.metricsStream.chunks,
+					options.metricsStream.onCancel,
+				);
 			}
 			if (step === "logs") {
 				return json(200, {
@@ -382,6 +421,59 @@ describe("fetchGrafanaContext", () => {
 			"metrics",
 		]);
 		expect(bundle.truncated).toBe(true);
+	});
+
+	test("reads a multi-chunk provider body and never cancels a bounded stream", async () => {
+		const body = JSON.stringify({
+			results: { metrics: { status: 200, frames: metricFrames(2, 3) } },
+		});
+		const midpoint = Math.floor(body.length / 2);
+		let cancelled = 0;
+		const { impl } = router({
+			metricsStream: {
+				chunks: [body.slice(0, midpoint), body.slice(midpoint)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchGrafanaContext(dependencies(impl), {
+			incidentFingerprint: `grafana:${RULE_UID}:abc`,
+			service: "checkout",
+			alertRuleUid: RULE_UID,
+		});
+		expect(bundle.items.map((item) => item.kind)).toEqual([
+			"alert_rule",
+			"metrics",
+			"logs",
+		]);
+		expect(bundle.truncated).toBe(false);
+		expect(cancelled).toBe(0);
+	});
+
+	test("cancels a provider stream the moment it crosses the response cap", async () => {
+		const secret = "STREAMED-PROVIDER-SECRET";
+		let cancelled = 0;
+		const { impl } = router({
+			metricsStream: {
+				chunks: ['{"results":', secret, "x".repeat(300 * 1024)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchGrafanaContext(dependencies(impl), {
+			incidentFingerprint: `grafana:${RULE_UID}:abc`,
+			service: "checkout",
+			alertRuleUid: RULE_UID,
+		});
+		expect(cancelled).toBe(1);
+		expect(bundle.items.map((item) => item.kind)).toEqual([
+			"alert_rule",
+			"logs",
+		]);
+		expect(bundle.truncated).toBe(true);
+		expect(JSON.stringify(bundle)).not.toContain(secret);
 	});
 
 	test("maps 429, 401, timeouts and oversized responses without leaking secrets", async () => {

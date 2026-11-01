@@ -541,6 +541,34 @@ describe("wave-13 incident context seam", () => {
 		expect(withGitHub.githubAuth).toBe(true);
 		expect(typeof withGitHub.overrides.loadContextBundle).toBe("function");
 	});
+
+	test("wave 19 binds the routed loader when only the device gateway is enabled", async () => {
+		const composed = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{ DEVICE_GATEWAY_ENABLED: "true" },
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(composed.githubAuth).toBe(false);
+		expect(typeof composed.overrides.loadContextBundle).toBe("function");
+		expect(composed.connectorCallReaper).toBeDefined();
+	});
+
+	test("wave 19 keeps one routed loader when both readers are configured", async () => {
+		const composed = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{
+				DEVICE_GATEWAY_ENABLED: "true",
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_INSTALLATION_ID: "2",
+				GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+			},
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(composed.githubAuth).toBe(true);
+		expect(typeof composed.overrides.loadContextBundle).toBe("function");
+	});
 });
 
 describe("wave-8 review reads", () => {

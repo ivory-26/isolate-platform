@@ -13,6 +13,7 @@ export function DeviceHealthSection({
 }) {
 	return (
 		<Section
+			variant="plain"
 			title="Registered devices"
 			description="Rows registered to this organization. A listing is not a live health check."
 			action={
@@ -23,7 +24,7 @@ export function DeviceHealthSection({
 					</Link>
 				</Button>
 			}
-			contentClassName={devices.length === 0 ? "p-5" : "p-0"}
+			contentClassName="p-0"
 		>
 			{devices.length === 0 ? (
 				<output className="flex items-start gap-3">

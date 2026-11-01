@@ -3,7 +3,7 @@ import { useState } from "react";
 import { CopyButton } from "@/components/common/copy-button";
 import { KeyValue } from "@/components/common/key-value";
 import { RelativeTime } from "@/components/common/relative-time";
-import { StatusBadge } from "@/components/common/status-badge";
+import { StatusMark } from "@/components/console/status-mark";
 import { TriangleAlertIcon } from "@/components/icons";
 import {
 	AlertDialog,
@@ -76,7 +76,7 @@ export function ApprovalDetailSheet({
 						<SheetHeader className="gap-2 border-b border-line-subtle pr-12">
 							<div className="flex flex-wrap items-center gap-2">
 								<ApprovalRiskBadge risk={item.risk} />
-								<StatusBadge status={item.status} />
+								<StatusMark status={item.status} />
 							</div>
 							<SheetTitle className="text-lg">{item.actionLabel}</SheetTitle>
 							<SheetDescription>{item.target.summary}</SheetDescription>
@@ -86,10 +86,10 @@ export function ApprovalDetailSheet({
 							<div
 								role="note"
 								className={cn(
-									"rounded-md border px-3 py-2.5",
+									"border-l-2 py-1 pl-3",
 									item.risk.level === "high"
-										? "border-orange/30 bg-orange/5"
-										: "border-line-subtle bg-elevated",
+										? "border-orange/60"
+										: "border-line-strong",
 								)}
 							>
 								<p className="flex items-center gap-1.5 text-xs font-medium text-ink">
@@ -122,7 +122,7 @@ export function ApprovalDetailSheet({
 												>
 													{shortId(item.taskId, 12)}
 												</Link>
-												<StatusBadge status={item.taskStatus} />
+												<StatusMark status={item.taskStatus} />
 											</span>
 										),
 									},

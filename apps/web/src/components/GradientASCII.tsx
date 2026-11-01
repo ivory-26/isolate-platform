@@ -893,7 +893,10 @@ const GradientASCII = ({
       if (atlas) gl.deleteTexture(atlas.texture);
       gl.deleteVertexArray(vao);
       [field, halo, blur, composite].forEach(item => gl.deleteProgram(item.program));
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      // Never force-lose the context here. React's development double-mount
+      // runs this cleanup and then re-mounts the same canvas; a forced loss
+      // makes the second mount reuse a dead context and the canvas paints
+      // solid white. Let the browser reclaim it with the element instead.
     };
   }, []);
 

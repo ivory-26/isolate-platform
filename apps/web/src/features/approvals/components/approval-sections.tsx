@@ -1,9 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { EmptyState } from "@/components/common/empty-state";
 import { RelativeTime } from "@/components/common/relative-time";
-import { Section } from "@/components/common/section";
-import { StatusBadge } from "@/components/common/status-badge";
-import { ApprovalsIcon, ArrowRightIcon } from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
+import { ConsoleSection } from "@/components/console/section";
+import { StatusMark } from "@/components/console/status-mark";
+import { ArrowRightIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	Table,
@@ -25,7 +25,8 @@ export function PendingApprovalsSection({
 	onReview: (item: ApprovalItem) => void;
 }) {
 	return (
-		<Section
+		<ConsoleSection
+			id="pending-approvals"
 			title="Waiting for a decision"
 			description={
 				items.length === 0
@@ -34,80 +35,60 @@ export function PendingApprovalsSection({
 			}
 		>
 			{items.length === 0 ? (
-				<EmptyState
-					icon={ApprovalsIcon}
+				<EmptyRow
 					title="No approvals waiting"
 					description="Runs pause at approval gates before pushing a branch or opening a pull request."
 				/>
 			) : (
-				<ul className="grid gap-3 lg:grid-cols-2">
+				<ul className="divide-y divide-line-subtle border-y border-line-subtle">
 					{items.map((item) => (
 						<li
 							key={item.id}
-							className="flex flex-col gap-3 rounded-md border border-line-subtle bg-elevated/40 p-4"
+							className="grid gap-4 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
 						>
-							<div className="flex flex-wrap items-start justify-between gap-2">
-								<div className="min-w-0">
+							<div className="min-w-0 space-y-2">
+								<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
 									<p className="text-sm font-medium text-ink">
 										{item.actionLabel}
 									</p>
-									<p className="mt-0.5 truncate text-xs text-ink-secondary">
-										{item.target.summary}
-									</p>
-								</div>
-								<div className="flex flex-wrap items-center justify-end gap-2">
-									<StatusBadge status={item.status} />
 									<ApprovalRiskBadge risk={item.risk} />
+									<StatusMark status={item.status} />
+								</div>
+								<p className="truncate text-xs text-ink-secondary">
+									{item.target.summary}
+								</p>
+								<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-muted">
+									<Link
+										to="/runs/$taskId"
+										params={{ taskId: item.taskId }}
+										className="font-mono text-brand transition-colors hover:text-info"
+									>
+										{shortId(item.taskId, 12)}
+									</Link>
+									<span>by {item.requestedBy}</span>
+									<span>
+										waiting <RelativeTime value={item.createdAt} />
+									</span>
+									<span>
+										expires <RelativeTime value={item.expiresAt} />
+									</span>
 								</div>
 							</div>
-							<dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-[11px]">
-								<div className="min-w-0">
-									<dt className="text-ink-muted">Task</dt>
-									<dd>
-										<Link
-											to="/runs/$taskId"
-											params={{ taskId: item.taskId }}
-											className="font-mono text-brand transition-colors hover:text-info"
-										>
-											{shortId(item.taskId, 12)}
-										</Link>
-									</dd>
-								</div>
-								<div className="min-w-0">
-									<dt className="text-ink-muted">Requested by</dt>
-									<dd className="truncate text-ink-secondary">
-										{item.requestedBy}
-									</dd>
-								</div>
-								<div className="min-w-0">
-									<dt className="text-ink-muted">Waiting</dt>
-									<dd className="text-ink-secondary">
-										<RelativeTime value={item.createdAt} />
-									</dd>
-								</div>
-								<div className="min-w-0">
-									<dt className="text-ink-muted">Expires</dt>
-									<dd className="text-ink-secondary">
-										<RelativeTime value={item.expiresAt} />
-									</dd>
-								</div>
-							</dl>
-							<div className="mt-auto flex justify-end">
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onClick={() => onReview(item)}
-								>
-									Review approval
-									<ArrowRightIcon />
-								</Button>
-							</div>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="justify-self-start md:justify-self-end"
+								onClick={() => onReview(item)}
+							>
+								Review approval
+								<ArrowRightIcon />
+							</Button>
 						</li>
 					))}
 				</ul>
 			)}
-		</Section>
+		</ConsoleSection>
 	);
 }
 
@@ -119,38 +100,43 @@ export function DecidedApprovalsSection({
 	onReview: (item: ApprovalItem) => void;
 }) {
 	return (
-		<Section
+		<ConsoleSection
+			id="decided-approvals"
 			title="Decided and expired"
 			description="Recent decisions, plus approvals that expired before anyone decided."
-			contentClassName="p-0"
 		>
 			{items.length === 0 ? (
-				<div className="p-4">
-					<EmptyState
-						icon={ApprovalsIcon}
-						title="No decisions yet"
-						description="Approved, rejected and expired approvals are kept here with their decision record."
-					/>
-				</div>
+				<EmptyRow
+					title="No decisions yet"
+					description="Approved, rejected and expired approvals are kept here with their decision record."
+				/>
 			) : (
-				<div className="overflow-x-auto">
+				<div className="border-y border-line-subtle">
 					<Table>
+						<caption className="sr-only">
+							Decided and expired approvals with their task, target, status and
+							decision time.
+						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="pl-5">Action</TableHead>
-								<TableHead>Task</TableHead>
-								<TableHead>Target</TableHead>
-								<TableHead className="w-[130px]">Status</TableHead>
-								<TableHead className="w-[150px]">Closed</TableHead>
-								<TableHead className="w-[110px] pr-5">
+								<TableHead scope="col">Action</TableHead>
+								<TableHead scope="col">Task</TableHead>
+								<TableHead scope="col">Target</TableHead>
+								<TableHead scope="col" className="w-[130px]">
+									Status
+								</TableHead>
+								<TableHead scope="col" className="w-[150px]">
+									Closed
+								</TableHead>
+								<TableHead scope="col" className="w-[100px] text-right">
 									<span className="sr-only">Review</span>
 								</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{items.map((item) => (
-								<TableRow key={item.id} className="border-line-subtle">
-									<TableCell className="pl-5">
+								<TableRow key={item.id} className="h-11 border-line-subtle">
+									<TableCell className="py-1">
 										<p className="text-xs font-medium text-ink">
 											{item.actionLabel}
 										</p>
@@ -158,7 +144,7 @@ export function DecidedApprovalsSection({
 											{item.decidedBy ?? "No decided-by record"}
 										</p>
 									</TableCell>
-									<TableCell>
+									<TableCell className="py-1">
 										<Link
 											to="/runs/$taskId"
 											params={{ taskId: item.taskId }}
@@ -167,7 +153,7 @@ export function DecidedApprovalsSection({
 											{shortId(item.taskId, 12)}
 										</Link>
 									</TableCell>
-									<TableCell className="max-w-[260px]">
+									<TableCell className="max-w-[260px] py-1">
 										<p className="truncate text-xs text-ink-secondary">
 											{item.target.repositoryName}
 										</p>
@@ -175,17 +161,17 @@ export function DecidedApprovalsSection({
 											{item.target.branch}
 										</p>
 									</TableCell>
-									<TableCell>
-										<StatusBadge status={item.status} />
+									<TableCell className="py-1">
+										<StatusMark status={item.status} />
 									</TableCell>
-									<TableCell className="text-xs text-ink-muted">
+									<TableCell className="py-1 text-xs text-ink-muted">
 										<RelativeTime value={item.decidedAt ?? item.expiresAt} />
 									</TableCell>
-									<TableCell className="pr-5 text-right">
+									<TableCell className="py-1 text-right">
 										<Button
 											type="button"
 											variant="ghost"
-											size="sm"
+											size="xs"
 											onClick={() => onReview(item)}
 										>
 											Review
@@ -197,6 +183,6 @@ export function DecidedApprovalsSection({
 					</Table>
 				</div>
 			)}
-		</Section>
+		</ConsoleSection>
 	);
 }

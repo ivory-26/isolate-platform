@@ -26,7 +26,6 @@ function OrganizationsPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Manage"
 				title="Your organizations"
 				description="You only see organizations where you hold a membership. Every task, run, device and connector belongs to exactly one of them."
 				actions={

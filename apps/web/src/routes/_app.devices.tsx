@@ -35,13 +35,12 @@ function DevicesPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Manage"
 				title="Devices and connectors"
 				description="Register the devices that run connector calls, then connect the ten supported vendors. Vendor keys stay on the device; the server stores a token hash and metadata only."
 				actions={
 					<Button
 						type="button"
-						variant="outline"
+						variant="ghost"
 						size="sm"
 						disabled={refreshing}
 						onClick={() => {
@@ -56,11 +55,35 @@ function DevicesPage() {
 			/>
 
 			<Tabs defaultValue="devices">
-				<TabsList aria-label="Device and connector sections">
-					<TabsTrigger value="devices">Devices</TabsTrigger>
-					<TabsTrigger value="connectors">Connectors</TabsTrigger>
+				<TabsList
+					variant="line"
+					aria-label="Device and connector sections"
+					className="w-full justify-start gap-6 border-b border-line-subtle p-0"
+				>
+					<TabsTrigger
+						value="devices"
+						className="flex-none px-0 pb-2 after:bottom-[-1px] after:bg-brand"
+					>
+						Devices
+						{devicesQuery.data ? (
+							<span className="font-mono text-[11px] text-ink-muted tabular-nums">
+								{devicesQuery.data.length}
+							</span>
+						) : null}
+					</TabsTrigger>
+					<TabsTrigger
+						value="connectors"
+						className="flex-none px-0 pb-2 after:bottom-[-1px] after:bg-brand"
+					>
+						Connectors
+						{connectorsQuery.data ? (
+							<span className="font-mono text-[11px] text-ink-muted tabular-nums">
+								{connectorsQuery.data.length}
+							</span>
+						) : null}
+					</TabsTrigger>
 				</TabsList>
-				<TabsContent value="devices" className="mt-4">
+				<TabsContent value="devices" className="mt-2">
 					<DevicesPanel
 						devices={devicesQuery.data}
 						isLoading={devicesQuery.isPending}
@@ -75,7 +98,7 @@ function DevicesPage() {
 						}}
 					/>
 				</TabsContent>
-				<TabsContent value="connectors" className="mt-4">
+				<TabsContent value="connectors" className="mt-2">
 					<ConnectorsPanel
 						credentials={connectorsQuery.data}
 						isLoading={connectorsQuery.isPending}

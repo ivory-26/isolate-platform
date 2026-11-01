@@ -24,6 +24,7 @@ import type { ActiveRunSummary, PendingApprovalPreview } from "../contracts";
 export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 	return (
 		<Section
+			variant="plain"
 			title="Active runs"
 			description="Work in flight for this organization, newest update first."
 			action={
@@ -37,7 +38,7 @@ export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 			contentClassName="p-0"
 		>
 			{runs.length === 0 ? (
-				<div className="p-4">
+				<div className="py-8">
 					<EmptyState
 						icon={ShieldCheckIcon}
 						title="No active runs"
@@ -54,47 +55,63 @@ export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 					<Table>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="w-[110px] pl-5">Task</TableHead>
-								<TableHead>Repository and branch</TableHead>
-								<TableHead className="w-[160px]">Status</TableHead>
-								<TableHead className="w-[170px]">Latest stage</TableHead>
-								<TableHead className="w-[110px] pr-5">Updated</TableHead>
+								<TableHead className="h-9 w-[112px] pl-0 text-[10px] font-medium">
+									Task
+								</TableHead>
+								<TableHead className="text-[10px] font-medium">
+									Repository and branch
+								</TableHead>
+								<TableHead className="w-[150px] text-[10px] font-medium">
+									Status
+								</TableHead>
+								<TableHead className="w-[170px] text-[10px] font-medium">
+									Latest stage
+								</TableHead>
+								<TableHead
+									className="w-[100px] text-[10px] font-medium"
+									style={{ textAlign: "right" }}
+								>
+									Updated
+								</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{runs.map((run) => (
-								<TableRow key={run.taskId} className="border-line-subtle">
-									<TableCell className="pl-5">
+								<TableRow
+									key={run.taskId}
+									className="group border-line-subtle/70 hover:bg-elevated/50"
+								>
+									<TableCell className="py-3 pl-0">
 										<Link
 											to="/runs/$taskId"
 											params={{ taskId: run.taskId }}
-											className="font-mono text-xs text-brand transition-colors hover:text-info"
+											className="font-mono text-[11px] text-brand transition-colors hover:text-info"
 										>
 											{shortId(run.taskId, 12)}
 										</Link>
 									</TableCell>
-									<TableCell className="max-w-[240px]">
-										<p className="truncate text-xs text-ink-secondary">
+									<TableCell className="max-w-[260px] py-3">
+										<p className="truncate text-[13px] text-ink">
 											{run.repositoryName}
 										</p>
-										<p className="truncate font-mono text-[11px] text-ink-muted">
+										<p className="truncate font-mono text-[10px] text-ink-muted">
 											{run.branch}
 										</p>
 									</TableCell>
-									<TableCell>
+									<TableCell className="py-3">
 										<StatusBadge status={run.status} />
 									</TableCell>
-									<TableCell className="max-w-[170px]">
-										<p className="truncate text-xs text-ink-secondary">
+									<TableCell className="max-w-[170px] py-3">
+										<p className="truncate text-[12px] text-ink-secondary">
 											{run.stageLabel}
 										</p>
 										{run.runStatus ? (
-											<p className="text-[11px] text-ink-muted">
+											<p className="text-[10px] text-ink-muted">
 												Run {run.runStatus}
 											</p>
 										) : null}
 									</TableCell>
-									<TableCell className="pr-5 text-xs text-ink-muted">
+									<TableCell className="py-3 text-right text-[11px] text-ink-muted">
 										<RelativeTime value={run.latestUpdateAt} />
 									</TableCell>
 								</TableRow>
@@ -114,6 +131,7 @@ export function PendingApprovalsPreview({
 }) {
 	return (
 		<Section
+			variant="plain"
 			title="Pending approvals"
 			description="Sensitive actions paused for a person."
 			action={
@@ -127,7 +145,7 @@ export function PendingApprovalsPreview({
 			contentClassName="p-0"
 		>
 			{approvals.length === 0 ? (
-				<div className="p-4">
+				<div className="py-8">
 					<EmptyState
 						icon={ApprovalsIcon}
 						title="No approvals waiting"
@@ -135,22 +153,25 @@ export function PendingApprovalsPreview({
 					/>
 				</div>
 			) : (
-				<ul className="divide-y divide-line-subtle">
+				<ul className="divide-y divide-line-subtle/70">
 					{approvals.map((approval) => (
-						<li key={approval.approvalId} className="space-y-2 px-5 py-4">
+						<li
+							key={approval.approvalId}
+							className="space-y-1.5 py-3.5 hover:bg-elevated/40"
+						>
 							<div className="flex flex-wrap items-center justify-between gap-2">
-								<span className="text-sm font-medium text-ink">
+								<span className="text-[13px] font-medium text-ink">
 									{approval.actionLabel}
 								</span>
 								<ApprovalRiskBadge risk={approval.risk} />
 							</div>
-							<p className="truncate text-xs text-ink-secondary">
+							<p className="truncate text-[11px] text-ink-secondary">
 								{approval.repositoryName}{" "}
-								<span className="font-mono text-[11px] text-ink-muted">
+								<span className="font-mono text-[10px] text-ink-muted">
 									{approval.branch}
 								</span>
 							</p>
-							<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-muted">
+							<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-ink-muted">
 								<Link
 									to="/runs/$taskId"
 									params={{ taskId: approval.taskId }}

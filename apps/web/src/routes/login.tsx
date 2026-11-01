@@ -18,7 +18,6 @@ function LoginPage() {
 	const state = Route.useLoaderData();
 	return (
 		<AuthLayout
-			eyebrow="Sign in"
 			title="Access your organization"
 			description="Your organization and role are resolved on the server from your membership, never from this form."
 			footer={

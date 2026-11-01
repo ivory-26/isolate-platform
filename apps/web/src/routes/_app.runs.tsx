@@ -67,14 +67,14 @@ function isFiltered(search: RunsSearch): boolean {
 function RunsListPending() {
 	return (
 		<PageContainer>
-			<div className="h-9 w-40 animate-pulse rounded-md bg-elevated" />
-			<div className="grid gap-px overflow-hidden rounded-lg border border-line-subtle bg-line-subtle sm:grid-cols-2 lg:grid-cols-4">
+			<div className="h-8 w-40 rounded bg-elevated/60" />
+			<div className="grid divide-x divide-line-subtle border-y border-line-subtle sm:grid-cols-2 lg:grid-cols-4">
 				{SKELETON_SLOTS.map((slot) => (
-					<div key={slot} className="h-[92px] bg-surface/60" />
+					<div key={slot} className="h-[88px] bg-elevated/20" />
 				))}
 			</div>
-			<div className="h-[52px] animate-pulse rounded-lg border border-line-subtle bg-surface/40" />
-			<div className="h-[320px] animate-pulse rounded-lg border border-line-subtle bg-surface/40" />
+			<div className="h-9 w-full rounded bg-elevated/40" />
+			<div className="h-[320px] w-full rounded bg-elevated/20" />
 		</PageContainer>
 	);
 }
@@ -83,7 +83,6 @@ function RunsListError({ reset }: { reset: () => void }) {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Runs"
 				description="Execution history for the active organization."
 			/>
@@ -117,14 +116,13 @@ function RunsPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Runs"
 				description="Every task in the active organization with its latest workflow run. Filter, sort and open a run to inspect its timeline, tool decisions, usage and approvals."
 				actions={
 					<>
 						<Button
 							type="button"
-							variant="outline"
+							variant="ghost"
 							size="sm"
 							disabled={query.isFetching}
 							onClick={() => void query.refetch()}
@@ -143,7 +141,7 @@ function RunsPage() {
 			/>
 
 			{data ? (
-				<MetricStrip>
+				<MetricStrip variant="bare">
 					<Metric
 						label="Active"
 						value={summary.active}
@@ -223,31 +221,51 @@ function RunsPage() {
 					/>
 				)
 			) : (
-				<div className="overflow-x-auto rounded-lg border border-line-subtle">
+				<div className="overflow-x-auto border-y border-line-subtle">
 					<Table>
 						<caption className="sr-only">
 							Tasks in the active organization, newest first
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="w-[260px] pl-4">Task</TableHead>
-								<TableHead>Branch</TableHead>
-								<TableHead className="w-[180px]">Status</TableHead>
-								<TableHead className="w-[180px]">Latest run</TableHead>
-								<TableHead className="w-[110px]">Retry depth</TableHead>
-								<TableHead className="w-[160px]">Created</TableHead>
-								<TableHead className="w-[160px] pr-4">Updated</TableHead>
+								<TableHead className="h-9 w-[260px] pl-0 text-[10px] font-medium">
+									Task
+								</TableHead>
+								<TableHead className="text-[10px] font-medium">
+									Branch
+								</TableHead>
+								<TableHead className="w-[170px] text-[10px] font-medium">
+									Status
+								</TableHead>
+								<TableHead className="w-[170px] text-[10px] font-medium">
+									Latest run
+								</TableHead>
+								<TableHead className="w-[110px] text-[10px] font-medium">
+									Retry depth
+								</TableHead>
+								<TableHead className="w-[130px] text-[10px] font-medium">
+									Created
+								</TableHead>
+								<TableHead
+									className="w-[130px] text-[10px] font-medium"
+									style={{ textAlign: "right" }}
+								>
+									Updated
+								</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{data.rows.map((row) => (
-								<TableRow key={row.taskId} className="border-line-subtle">
-									<TableCell className="max-w-[320px] pl-2">
+								<TableRow
+									key={row.taskId}
+									className="border-line-subtle/70 hover:bg-elevated/50"
+								>
+									<TableCell className="max-w-[320px] py-2.5 pl-0">
 										<Link
 											to="/runs/$taskId"
 											params={{ taskId: row.taskId }}
 											aria-label={`Open run ${row.taskId}`}
-											className="group inline-flex max-w-full flex-col rounded-sm px-2 py-1 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+											className="group inline-flex max-w-full flex-col rounded-sm py-0.5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
 										>
 											<span className="font-mono text-xs text-brand transition-colors group-hover:text-info">
 												{shortId(row.taskId, 12)}
@@ -257,7 +275,7 @@ function RunsPage() {
 											</span>
 										</Link>
 									</TableCell>
-									<TableCell className="max-w-[220px] truncate font-mono text-xs text-ink-secondary">
+									<TableCell className="max-w-[220px] truncate font-mono text-[11px] text-ink-secondary">
 										{row.branch}
 									</TableCell>
 									<TableCell>
@@ -277,7 +295,7 @@ function RunsPage() {
 											</span>
 										)}
 									</TableCell>
-									<TableCell className="font-mono text-xs tabular-nums">
+									<TableCell className="font-mono text-[11px] tabular-nums">
 										<span
 											className={
 												row.retryDepth > 0 ? "text-orange" : "text-ink-muted"
@@ -286,10 +304,10 @@ function RunsPage() {
 											{row.retryDepth} / {RUN_MAX_RETRY_DEPTH}
 										</span>
 									</TableCell>
-									<TableCell className="text-xs text-ink-secondary">
+									<TableCell className="text-[11px] text-ink-secondary">
 										<RelativeTime value={row.createdAt} />
 									</TableCell>
-									<TableCell className="pr-4 text-xs text-ink-muted">
+									<TableCell className="pr-0 text-right text-[11px] text-ink-muted">
 										<RelativeTime value={row.updatedAt} />
 									</TableCell>
 								</TableRow>

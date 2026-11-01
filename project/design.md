@@ -598,3 +598,60 @@ must be updated rather than replaced when the implementation changes.
 - **Licensing.** See [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). The
   Dither Kit source had no LICENSE file when vendored; verify rights before
   commercial redistribution.
+
+### Wave 21 implementation record (2026-11-01)
+
+- **Shader placement.** The supplied GradientASCII configuration is now the
+  landing background exactly: fixed to the viewport at `z-index: -1`, the eleven
+  visual props unchanged, no scrim, mask or transform over the copy. The hero
+  copy sits on the field; the console begins 56px below the actions. The
+  component's `loseContext()` cleanup call was removed because React's dev
+  double-mount reused a dead context and painted the canvas white.
+- **Landing composition.** Centered display headline with one Electric Blue
+  phrase, two pill actions, the 1600×1200 console capture at 1200px wide with
+  three masked `backdrop-blur` bands at its bottom edge, a four-cell facts
+  strip, three alternating product rows, a lifecycle rail with a drawn
+  blue→orange trace, one bounded trust diagram, a closing statement and a
+  four-column footer.
+- **Page frame.** Below the hero, two vertical hairlines run at the content
+  edges of the 1200px column, with 6px Electric Blue squares at every section
+  intersection. The frame starts at the facts strip and ends at the closing
+  CTA; it is hidden on mobile.
+- **Product captures.** The hero capture and both capability captures blur and
+  fade from their lower third, so the bottom of the console is never shown.
+  Panel captures carry 20px of page background around the section so headings
+  are not clipped. Visible synthetic captions were removed; the `alt` text
+  remains for accessibility.
+- **Footer.** Four columns with square-marked category headers, hairline rules,
+  hover rules and arrows on links, a local-first status chip, a large ghost
+  `ISOLATE` wordmark and a legal row with a back-to-top control.
+- **Auth.** Sign-in and sign-up reuse the same shader field: split brand panel
+  on desktop, short band on mobile, solid card on canvas, and a static
+  blue/orange fallback behind the canvas. The Google action uses the official
+  four-colour mark. No auth-specific shader configuration exists.
+- **Console refit.** `PageHeader` stopped rendering a kicker; `Section` and
+  `MetricStrip` gained plain variants; `StatusBadge` is a dot plus label.
+  Overview and Runs use hairline bands, dense tables and a single primary
+  action. The secondary pages use full-width hairline sections rather than card
+  grids.
+- **Motion.** One vocabulary: 150/200/300ms with
+  `cubic-bezier(0.23, 1, 0.32, 1)`. The landing keeps the shader as its
+  signature continuous motion plus one scroll reveal per section; the app keeps
+  state feedback only. Skeleton pulses were removed, the sheet timing was
+  corrected, and reduced motion disables the entrance and reveal while leaving
+  the static trace complete.
+- **Mobile.** `viewport-fit=cover`, `interactive-widget=resizes-content`,
+  theme color, tap-highlight removal, `touch-action: manipulation`,
+  control-only `user-select`, 16px inputs on coarse pointers, root overscroll,
+  and safe-area padding on the topbar, sidebar and auth. Every route was
+  measured at 390px with zero horizontal overflow.
+
+### Wave 21 open items
+
+- Chart canvases still run a continuous `requestAnimationFrame`; park them and
+  wake on interaction.
+- The run-timeline gate animation from the motion plan is not implemented.
+- Real-device QA for sticky hover, tap delay, safe areas with the keyboard and
+  pull-to-refresh.
+- The landing's scroll reveal arms after hydration; below-fold sections are
+  hidden until scrolled (by design) and a full-page capture must scroll first.

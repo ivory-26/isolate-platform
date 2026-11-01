@@ -134,7 +134,7 @@ export function AppSidebar({
 				{NAV_GROUPS.map((group) => (
 					<div key={group.label} className="space-y-1">
 						{!collapsed ? (
-							<p className="px-2 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-ink-muted/80 uppercase">
+							<p className="px-2 pb-1 text-[10px] text-ink-muted/80">
 								{group.label}
 							</p>
 						) : (
@@ -161,7 +161,7 @@ export function AppSidebar({
 
 			<div
 				className={cn(
-					"space-y-2 border-t border-line-subtle p-2",
+					"space-y-2 border-t border-line-subtle p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
 					collapsed && "px-1.5",
 				)}
 			>

@@ -10,7 +10,9 @@ import { useSession } from "@/components/auth/SessionProvider";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { RetryIcon, ShieldIcon } from "@/components/icons";
+import { RelativeTime } from "@/components/common/relative-time";
+import { ConsoleNote } from "@/components/console/note";
+import { ArrowRightIcon, RetryIcon, ShieldIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { ApprovalDetailSheet } from "@/features/approvals/components/approval-detail-sheet";
 import {
@@ -80,6 +82,7 @@ function ApprovalsPage() {
 	const snapshot = result.ok ? result.value : null;
 	const items = snapshot ? [...snapshot.pending, ...snapshot.decided] : [];
 	const selected = items.find((item) => item.id === selectedId) ?? null;
+	const nextPending = snapshot?.pending[0] ?? null;
 	const mutationError =
 		mutation.data && !mutation.data.ok
 			? mutation.data.error.message
@@ -95,34 +98,47 @@ function ApprovalsPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Approvals"
 				description="Human decisions that unblock a run. Each approval is bound to the exact action, target and payload hash it authorizes."
 				actions={
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						disabled={query.isFetching}
-						onClick={() => void query.refetch()}
-					>
-						<RetryIcon />
-						{query.isFetching ? "Refreshing…" : "Refresh"}
-					</Button>
+					<>
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							disabled={query.isFetching}
+							onClick={() => void query.refetch()}
+						>
+							<RetryIcon />
+							{query.isFetching ? "Refreshing…" : "Refresh"}
+						</Button>
+						{nextPending ? (
+							<Button
+								type="button"
+								size="sm"
+								onClick={() => openApproval(nextPending)}
+							>
+								Review next
+								<ArrowRightIcon />
+							</Button>
+						) : null}
+					</>
 				}
-			/>
+			>
+				{snapshot ? (
+					<p className="text-xs text-ink-muted">
+						Snapshot <RelativeTime value={snapshot.generatedAt} /> ·{" "}
+						{snapshot.pending.length} waiting · {snapshot.decided.length}{" "}
+						decided
+					</p>
+				) : null}
+			</PageHeader>
 
 			{!canDecide ? (
-				<div
-					role="alert"
-					className="flex items-start gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2 text-sm text-ink-secondary"
-				>
-					<ShieldIcon size={16} className="mt-0.5 text-ink-muted" />
-					<span>
-						Your role can review approvals but cannot decide them. Ask an owner,
-						admin or member to act on this queue.
-					</span>
-				</div>
+				<ConsoleNote role="note" icon={ShieldIcon}>
+					Your role can review approvals but cannot decide them. Ask an owner,
+					admin or member to act on this queue.
+				</ConsoleNote>
 			) : null}
 
 			{snapshot === null ? (
@@ -136,12 +152,12 @@ function ApprovalsPage() {
 					onRetry={() => void query.refetch()}
 				/>
 			) : (
-				<>
+				<div className="flex flex-col gap-8">
 					{query.isRefetchError ? (
-						<output className="block rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+						<ConsoleNote role="status" tone="warning">
 							Refresh failed. The queue below may be stale; re-read before
 							deciding.
-						</output>
+						</ConsoleNote>
 					) : null}
 
 					<PendingApprovalsSection
@@ -152,7 +168,7 @@ function ApprovalsPage() {
 						items={snapshot.decided}
 						onReview={openApproval}
 					/>
-				</>
+				</div>
 			)}
 
 			<ApprovalDetailSheet

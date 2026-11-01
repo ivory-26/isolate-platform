@@ -34,14 +34,13 @@ function OverviewPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Overview"
 				description="What is running, what is waiting for a person, and what changed recently in this organization."
 				actions={
 					<>
 						<Button
 							type="button"
-							variant="outline"
+							variant="ghost"
 							size="sm"
 							disabled={query.isFetching}
 							onClick={() => void query.refetch()}
@@ -86,7 +85,7 @@ function OverviewPage() {
 						</output>
 					) : null}
 
-					<MetricStrip>
+					<MetricStrip variant="bare">
 						<Metric
 							label="Active tasks"
 							value={snapshot.metrics.activeTasks}
@@ -114,12 +113,12 @@ function OverviewPage() {
 						/>
 					</MetricStrip>
 
-					<div className="grid gap-6 2xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+					<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
 						<ActiveRunsSection runs={snapshot.activeRuns} />
 						<PendingApprovalsPreview approvals={snapshot.pendingApprovals} />
 					</div>
 
-					<div className="grid gap-6 2xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+					<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
 						<ActivityFeed items={snapshot.activity} />
 						<DeviceHealthSection devices={snapshot.devices} />
 					</div>

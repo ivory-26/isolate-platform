@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { Metric } from "@/components/common/metric";
-import { Section } from "@/components/common/section";
+import { MetricBand } from "@/components/console/metric-band";
+import { ConsoleSection } from "@/components/console/section";
 import { Area } from "@/components/dither-kit/area";
 import { AreaChart } from "@/components/dither-kit/area-chart";
 import { Bar } from "@/components/dither-kit/bar";
@@ -11,7 +12,6 @@ import { Sparkline } from "@/components/dither-kit/sparkline";
 import { Tooltip as ChartTooltip } from "@/components/dither-kit/tooltip";
 import { XAxis } from "@/components/dither-kit/x-axis";
 import { YAxis } from "@/components/dither-kit/y-axis";
-import { InfoIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -23,6 +23,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatTokens } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { formatUsd } from "./aggregate";
 import {
 	USAGE_TIME_ZONE,
@@ -46,26 +47,27 @@ function dayLabel(day: string): string {
 
 export function UsagePeriodSelector({ period }: { period: UsagePeriod }) {
 	return (
-		<nav
-			aria-label="Usage period"
-			className="flex items-center gap-1 rounded-lg border border-line-subtle bg-surface/55 p-1"
-		>
-			{usagePeriods.map((option) => (
-				<Button
-					key={option}
-					asChild
-					size="xs"
-					variant={option === period ? "secondary" : "ghost"}
-				>
-					<Link
-						to="/usage"
-						search={{ period: option }}
-						aria-current={option === period ? "page" : undefined}
+		<nav aria-label="Usage period" className="flex items-center gap-1">
+			{usagePeriods.map((option) => {
+				const active = option === period;
+				return (
+					<Button
+						key={option}
+						asChild
+						size="xs"
+						variant={active ? "secondary" : "ghost"}
+						className={cn(!active && "text-ink-muted hover:text-ink")}
 					>
-						{option} days
-					</Link>
-				</Button>
-			))}
+						<Link
+							to="/usage"
+							search={{ period: option }}
+							aria-current={active ? "page" : undefined}
+						>
+							{option} days
+						</Link>
+					</Button>
+				);
+			})}
 		</nav>
 	);
 }
@@ -84,7 +86,7 @@ export function UsageMetrics({ model }: { model: UsageReadModel }) {
 		[model.days],
 	);
 	return (
-		<div className="grid divide-y divide-line-subtle overflow-hidden rounded-lg border border-line-subtle bg-surface/50 sm:grid-cols-2 lg:grid-cols-5 lg:divide-x lg:divide-y-0">
+		<MetricBand columns={5}>
 			<Metric
 				label="Prompt tokens"
 				value={model.totals.promptTokens}
@@ -124,7 +126,7 @@ export function UsageMetrics({ model }: { model: UsageReadModel }) {
 				value={model.totals.tasks}
 				hint="Distinct tasks in this period"
 			/>
-		</div>
+		</MetricBand>
 	);
 }
 
@@ -152,11 +154,12 @@ export function UsageCharts({ model }: { model: UsageReadModel }) {
 	)}`;
 
 	return (
-		<div className="grid gap-4 lg:grid-cols-2">
-			<Section
+		<div className="grid gap-8 lg:grid-cols-2 lg:gap-0 lg:divide-x lg:divide-line-subtle">
+			<ConsoleSection
+				id="usage-token-trend"
 				title="Token trend"
 				description={`Total tokens per day · ${range} · ${USAGE_TIME_ZONE}`}
-				contentClassName="p-4 pt-2"
+				className="lg:pr-6"
 			>
 				<figure aria-labelledby="usage-token-chart-caption">
 					<figcaption id="usage-token-chart-caption" className="sr-only">
@@ -185,21 +188,17 @@ export function UsageCharts({ model }: { model: UsageReadModel }) {
 						table.
 					</p>
 				</figure>
-			</Section>
+			</ConsoleSection>
 
-			<Section
+			<ConsoleSection
+				id="usage-cost-trend"
 				title="Recorded cost"
 				description={`Known prices only · ${range} · ${USAGE_TIME_ZONE}`}
-				contentClassName="p-4 pt-2"
+				className="lg:pl-6"
 			>
 				{model.totals.costUsd === null ? (
-					<div className="flex min-h-56 items-center justify-center rounded-md border border-dashed border-line px-6 text-center">
+					<div className="flex min-h-56 items-center">
 						<div className="max-w-sm space-y-1">
-							<InfoIcon
-								size={18}
-								className="mx-auto text-ink-muted"
-								aria-hidden="true"
-							/>
 							<p className="text-sm text-ink-secondary">
 								No trusted price was recorded for this period.
 							</p>
@@ -240,7 +239,7 @@ export function UsageCharts({ model }: { model: UsageReadModel }) {
 						</p>
 					</figure>
 				)}
-			</Section>
+			</ConsoleSection>
 		</div>
 	);
 }
@@ -248,23 +247,21 @@ export function UsageCharts({ model }: { model: UsageReadModel }) {
 export function UsageTable({ model }: { model: UsageReadModel }) {
 	const days = useMemo(() => [...model.days].reverse(), [model.days]);
 	return (
-		<Section
+		<ConsoleSection
+			id="usage-daily-breakdown"
 			title="Daily breakdown"
 			description={`Measured usage per UTC day for the last ${model.period} days. A dash means no trusted price.`}
-			contentClassName="p-0"
 		>
-			<div className="max-h-[460px] overflow-auto">
+			<div className="max-h-[460px] overflow-auto border-y border-line-subtle">
 				<Table>
 					<caption className="sr-only">
 						Daily measured usage for the active organization: prompt and
 						completion tokens, sandbox seconds and recorded cost in USD, newest
 						first. Times are UTC.
 					</caption>
-					<TableHeader className="sticky top-0 z-10 bg-surface">
+					<TableHeader className="sticky top-0 z-10 bg-canvas">
 						<TableRow className="border-line-subtle hover:bg-transparent">
-							<TableHead scope="col" className="pl-5">
-								Day (UTC)
-							</TableHead>
+							<TableHead scope="col">Day (UTC)</TableHead>
 							<TableHead scope="col" className="text-right">
 								Prompt tokens
 							</TableHead>
@@ -277,15 +274,15 @@ export function UsageTable({ model }: { model: UsageReadModel }) {
 							<TableHead scope="col" className="text-right">
 								Sandbox seconds
 							</TableHead>
-							<TableHead scope="col" className="pr-5 text-right">
+							<TableHead scope="col" className="text-right">
 								Recorded cost
 							</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
 						{days.map((day) => (
-							<TableRow key={day.day} className="border-line-subtle">
-								<TableCell className="pl-5 font-mono text-xs text-ink-secondary">
+							<TableRow key={day.day} className="h-11 border-line-subtle">
+								<TableCell className="font-mono text-xs text-ink-secondary">
 									{day.day}
 								</TableCell>
 								<TableCell className="text-right font-mono text-xs tabular-nums">
@@ -300,7 +297,7 @@ export function UsageTable({ model }: { model: UsageReadModel }) {
 								<TableCell className="text-right font-mono text-xs tabular-nums">
 									{Math.round(day.sandboxSeconds)}
 								</TableCell>
-								<TableCell className="pr-5 text-right font-mono text-xs tabular-nums">
+								<TableCell className="text-right font-mono text-xs tabular-nums">
 									{formatUsd(day.costUsd)}
 									{day.costCoverage === "partial" ? (
 										<span
@@ -316,25 +313,28 @@ export function UsageTable({ model }: { model: UsageReadModel }) {
 					</TableBody>
 				</Table>
 			</div>
-			<p className="border-t border-line-subtle px-5 py-3 text-[11px] text-ink-muted">
+			<p className="text-[11px] text-ink-muted">
 				* Partial cost: at least one row that day had no trusted price. Sandbox
 				seconds come from measured task attempts for tasks created in the
 				window.
 			</p>
-		</Section>
+		</ConsoleSection>
 	);
 }
 
 export function UsageSkeleton() {
 	return (
-		<div className="space-y-6">
-			<div className="h-8 w-40 animate-pulse rounded-md bg-elevated" />
-			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+		<div className="flex flex-col gap-6">
+			<div className="space-y-2 border-b border-line-subtle pb-6">
+				<Skeleton className="h-7 w-40" />
+				<Skeleton className="h-4 w-full max-w-xl" />
+			</div>
+			<div className="grid divide-y divide-line-subtle border-y border-line-subtle lg:grid-cols-5 lg:divide-x lg:divide-y-0">
 				{SKELETON_CELLS.map((cell) => (
-					<Skeleton key={cell} className="h-24 w-full" />
+					<Skeleton key={cell} className="h-20 w-full" />
 				))}
 			</div>
-			<div className="grid gap-4 lg:grid-cols-2">
+			<div className="grid gap-8 lg:grid-cols-2">
 				<Skeleton className="h-64 w-full" />
 				<Skeleton className="h-64 w-full" />
 			</div>

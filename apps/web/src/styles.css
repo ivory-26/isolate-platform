@@ -184,12 +184,34 @@
 	html {
 		@apply font-sans;
 		-webkit-text-size-adjust: 100%;
+		-webkit-tap-highlight-color: transparent;
+		overscroll-behavior: none;
 	}
 	body {
 		@apply bg-background text-foreground antialiased;
 		margin: 0;
 		font-size: 0.875rem;
 		line-height: 1.5;
+		overscroll-behavior-y: none;
+	}
+	/* Touch controls: instant taps, no long-press callout, no text selection. */
+	button,
+	[role="button"] {
+		touch-action: manipulation;
+		user-select: none;
+		-webkit-user-select: none;
+		-webkit-touch-callout: none;
+	}
+	a {
+		touch-action: manipulation;
+	}
+	/* iOS zooms any focused control under 16px. Scale only where it matters. */
+	@media (pointer: coarse) {
+		input,
+		textarea,
+		select {
+			font-size: 16px;
+		}
 	}
 	:focus-visible {
 		outline: 2px solid var(--brand);

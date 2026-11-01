@@ -17,7 +17,6 @@ function SignupPage() {
 	const state = Route.useLoaderData();
 	return (
 		<AuthLayout
-			eyebrow="Create account"
 			title="Join the platform"
 			description="Create a credential, then an organization. You become its owner; organization and role are resolved on the server."
 			footer={

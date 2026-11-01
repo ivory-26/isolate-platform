@@ -1,15 +1,7 @@
-import type { ComponentType } from "react";
 import { RelativeTime } from "@/components/common/relative-time";
-import {
-	type AppIconProps,
-	CheckIcon,
-	ClockIcon,
-	InfoIcon,
-	LayersIcon,
-	TriangleAlertIcon,
-	WorkflowsIcon,
-} from "@/components/icons";
-import { Badge } from "@/components/ui/badge";
+import { ConsoleNote } from "@/components/console/note";
+import { StatusMark } from "@/components/console/status-mark";
+import { LayersIcon } from "@/components/icons";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
 	Table,
@@ -19,58 +11,9 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import type { WorkflowSummary, WorkflowValidationState } from "./contracts";
-
-type StateMeta = {
-	label: string;
-	tone: string;
-	icon: ComponentType<AppIconProps>;
-	hint: string;
-};
+import type { WorkflowSummary } from "./contracts";
 
 const SKELETON_ROWS = ["one", "two", "three", "four", "five"];
-
-const STATE: Record<WorkflowValidationState, StateMeta> = {
-	validated: {
-		label: "Validated",
-		tone: "border-success/30 bg-success/10 text-success",
-		icon: CheckIcon,
-		hint: "Latest version has a compiled plan.",
-	},
-	rejected: {
-		label: "Rejected",
-		tone: "border-danger/30 bg-danger/10 text-danger",
-		icon: TriangleAlertIcon,
-		hint: "Latest version failed compilation.",
-	},
-	not_compiled: {
-		label: "Not compiled",
-		tone: "border-line bg-elevated text-ink-secondary",
-		icon: ClockIcon,
-		hint: "Latest version has no compiled plan yet.",
-	},
-	draft: {
-		label: "Draft",
-		tone: "border-orange/35 bg-orange/10 text-orange",
-		icon: ClockIcon,
-		hint: "No immutable version exists yet.",
-	},
-};
-
-function ValidationBadge({ state }: { state: WorkflowValidationState }) {
-	const meta = STATE[state];
-	const Glyph = meta.icon;
-	return (
-		<Badge
-			variant="outline"
-			className={`h-6 gap-1.5 rounded-full px-2.5 text-[11px] font-medium ${meta.tone}`}
-			title={meta.hint}
-		>
-			<Glyph size={12} />
-			{meta.label}
-		</Badge>
-	);
-}
 
 export function WorkflowsTable({
 	workflows,
@@ -81,7 +24,7 @@ export function WorkflowsTable({
 }) {
 	return (
 		<div className="space-y-2">
-			<div className="overflow-x-auto rounded-lg border border-line-subtle">
+			<div className="border-y border-line-subtle">
 				<Table>
 					<caption className="sr-only">
 						Workflow definitions for the active organization with their latest
@@ -93,87 +36,77 @@ export function WorkflowsTable({
 							<TableHead scope="col" className="min-w-[220px]">
 								Definition
 							</TableHead>
-							<TableHead scope="col" className="w-[160px]">
+							<TableHead scope="col" className="w-[150px]">
 								Created by
 							</TableHead>
-							<TableHead scope="col" className="w-[150px]">
+							<TableHead scope="col" className="w-[140px]">
 								Versions
 							</TableHead>
-							<TableHead scope="col" className="w-[120px]">
+							<TableHead scope="col" className="w-[120px] text-right">
 								Compiled plans
 							</TableHead>
-							<TableHead scope="col" className="min-w-[170px]">
+							<TableHead scope="col" className="min-w-[190px]">
 								Latest rejection
 							</TableHead>
 							<TableHead scope="col" className="w-[150px]">
 								Validation
 							</TableHead>
-							<TableHead scope="col" className="w-[150px]">
+							<TableHead scope="col" className="w-[140px]">
 								Created
 							</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
 						{workflows.map((workflow) => (
-							<TableRow key={workflow.id} className="border-line-subtle">
-								<TableCell className="align-top">
-									<div className="flex items-center gap-2">
-										<WorkflowsIcon
-											size={15}
-											className="shrink-0 text-ink-muted"
-										/>
-										<span className="truncate text-sm text-ink">
-											{workflow.name}
-										</span>
-									</div>
-									<p className="mt-0.5 font-mono text-[10px] text-ink-muted">
+							<TableRow key={workflow.id} className="h-11 border-line-subtle">
+								<TableCell className="py-1 align-top">
+									<span className="block truncate text-sm text-ink">
+										{workflow.name}
+									</span>
+									<p className="mt-1 font-mono text-[10px] text-ink-muted">
 										{workflow.id.slice(0, 8)}…
 									</p>
 								</TableCell>
-								<TableCell className="align-top text-xs text-ink-secondary">
+								<TableCell className="py-1 align-top text-xs text-ink-secondary">
 									{workflow.createdBy ?? "—"}
 								</TableCell>
-								<TableCell className="align-top">
+								<TableCell className="py-1 align-top">
 									{workflow.latestVersion === null ? (
-										<span className="text-xs text-ink-muted">No versions</span>
+										<span className="text-xs text-ink-muted">—</span>
 									) : (
-										<div className="space-y-0.5">
-											<span className="font-mono text-xs text-ink">
+										<div className="space-y-1">
+											<span className="font-mono text-xs text-ink tabular-nums">
 												v{workflow.latestVersion}
 											</span>
-											<p className="text-[11px] text-ink-muted">
+											<p className="text-[11px] text-ink-muted tabular-nums">
 												{workflow.versionCount} total
 											</p>
 										</div>
 									)}
 								</TableCell>
-								<TableCell className="align-top font-mono text-xs text-ink-secondary">
+								<TableCell className="py-3 text-right align-top font-mono text-xs text-ink-secondary tabular-nums">
 									{workflow.compiledPlanCount}
 								</TableCell>
-								<TableCell className="align-top">
+								<TableCell className="py-1 align-top">
 									{workflow.latestRejection === null ? (
 										<span className="text-xs text-ink-muted">
 											None recorded
 										</span>
 									) : (
-										<div className="space-y-0.5">
-											<span className="flex items-center gap-1 text-xs text-ink-secondary">
-												<TriangleAlertIcon size={12} className="text-orange" />
-												{workflow.latestRejection.issueCount}{" "}
-												{workflow.latestRejection.issueCount === 1
+										<StatusMark
+											status="rejected"
+											label={`${workflow.latestRejection.issueCount} ${
+												workflow.latestRejection.issueCount === 1
 													? "issue"
-													: "issues"}
-											</span>
-											<p className="text-[11px] text-ink-muted">
-												on v{workflow.latestRejection.version}
-											</p>
-										</div>
+													: "issues"
+											} on v${workflow.latestRejection.version}`}
+										/>
 									)}
 								</TableCell>
-								<TableCell className="align-top">
-									<ValidationBadge state={workflow.validationState} />
+								<TableCell className="py-1 align-top">
+									<StatusMark status={workflow.validationState} />
 								</TableCell>
-								<TableCell className="align-top text-xs text-ink-secondary">
+								<TableCell className="py-1 align-top text-xs text-ink-secondary">
 									<RelativeTime value={workflow.createdAt} />
 								</TableCell>
 							</TableRow>
@@ -192,26 +125,23 @@ export function WorkflowsTable({
 
 export function BuilderUnavailableNote() {
 	return (
-		<div className="flex items-start gap-2.5 rounded-lg border border-line-subtle bg-surface/55 px-4 py-3 text-xs leading-5 text-ink-secondary">
-			<LayersIcon size={15} className="mt-0.5 shrink-0 text-ink-muted" />
-			<p>
-				The visual workflow builder is not available in this wave. Definitions
-				and immutable versions shown here are read-only; publishing happens
-				outside this surface.
-			</p>
-		</div>
+		<ConsoleNote role="note" icon={LayersIcon}>
+			The visual workflow builder is not available in this wave. Definitions and
+			immutable versions shown here are read-only; publishing happens outside
+			this surface.
+		</ConsoleNote>
 	);
 }
 
 export function WorkflowsSkeleton() {
 	return (
-		<div className="space-y-6">
-			<div className="h-8 w-44 animate-pulse rounded-md bg-elevated" />
-			<div className="flex items-start gap-2.5 rounded-lg border border-line-subtle px-4 py-3">
-				<InfoIcon size={15} className="mt-0.5 text-ink-muted" />
-				<Skeleton className="h-4 w-3/4" />
+		<div className="flex flex-col gap-6">
+			<div className="space-y-2 border-b border-line-subtle pb-6">
+				<Skeleton className="h-7 w-44" />
+				<Skeleton className="h-4 w-full max-w-xl" />
 			</div>
-			<div className="space-y-2 rounded-lg border border-line-subtle p-3">
+			<Skeleton className="h-9 w-full" />
+			<div className="divide-y divide-line-subtle border-y border-line-subtle">
 				{SKELETON_ROWS.map((row) => (
 					<Skeleton key={row} className="h-12 w-full" />
 				))}

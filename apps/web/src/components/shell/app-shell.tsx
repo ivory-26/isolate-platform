@@ -78,7 +78,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 				<SheetContent
 					side="left"
 					showCloseButton={false}
-					className="w-64 gap-0 border-r border-line-subtle bg-elevated p-0"
+					className="w-64 gap-0 border-r border-line-subtle bg-elevated p-0 pb-[env(safe-area-inset-bottom)]"
 				>
 					<SheetTitle className="sr-only">Navigation</SheetTitle>
 					<AppSidebar onNavigate={() => setMobileOpen(false)} />

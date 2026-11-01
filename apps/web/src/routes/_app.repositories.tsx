@@ -5,11 +5,11 @@ import {
 	useRouter,
 } from "@tanstack/react-router";
 import { useCallback } from "react";
-import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { InfoIcon, RepositoriesIcon } from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
+import { ConsoleNote } from "@/components/console/note";
 import { Button } from "@/components/ui/button";
 import {
 	parseRepositoriesSearch,
@@ -44,7 +44,6 @@ function RepositoriesError() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Repositories"
 				description="Connected repositories, default branches, validation commands and registration state."
 			/>
@@ -76,7 +75,6 @@ function RepositoriesPage() {
 		return (
 			<PageContainer>
 				<PageHeader
-					eyebrow="Operate"
 					title="Repositories"
 					description="Connected repositories, default branches, validation commands and registration state."
 				/>
@@ -94,28 +92,31 @@ function RepositoriesPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Repositories"
 				description="Connected repositories, default branches, validation commands and registration state for the active organization."
-				actions={canManage ? <RegisterRepositoryDialog /> : undefined}
-			>
-				<p className="flex items-center gap-1.5 text-xs text-ink-muted">
-					<InfoIcon size={13} />
-					Integration health is not reported by the server in this wave; rows
-					show only stored configuration.
-				</p>
-			</PageHeader>
+				actions={
+					canManage && repositories.length > 0 ? (
+						<RegisterRepositoryDialog />
+					) : undefined
+				}
+			/>
+
+			<ConsoleNote role="note">
+				Integration health is not reported by the server in this wave; rows show
+				only stored configuration.
+			</ConsoleNote>
 
 			<RepositoryFilters
 				search={search}
+				count={repositories.length}
+				filtered={filtered}
 				onQueryChange={(q) => updateSearch({ q, provider: search.provider })}
 				onProviderChange={(provider) => updateSearch({ q: search.q, provider })}
 			/>
 
 			{repositories.length === 0 ? (
 				filtered ? (
-					<EmptyState
-						icon={RepositoriesIcon}
+					<EmptyRow
 						title="No repositories match this filter"
 						description="Try a different full name or clear the provider filter."
 						action={
@@ -130,8 +131,7 @@ function RepositoriesPage() {
 						}
 					/>
 				) : (
-					<EmptyState
-						icon={RepositoriesIcon}
+					<EmptyRow
 						title="No repositories registered yet"
 						description="Register a GitHub repository to give tasks a default branch and an optional validation gate."
 						action={canManage ? <RegisterRepositoryDialog /> : undefined}

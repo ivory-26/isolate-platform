@@ -16,6 +16,7 @@ file current when a dependency or vendored component changes.
 | TanStack Start / Router / Query | MIT | app dependencies | Application framework. |
 | React | MIT | app dependency | UI runtime. |
 | unslop skill | CC BY 4.0 | `.agents/skills/unslop` | Credit retained in the skill; used as the final design audit. |
+| Anatomy isometric kit | MIT | `apps/web/scripts/iso/iso-kit.mjs`, generated `apps/web/public/iso/workflow-machine.svg` | Source: [wheresryan22/anatomy](https://github.com/wheresryan22/anatomy). Geometry and shading helpers only; the workflow machine drawing is original and remapped to Isolate brand tokens. |
 
 No font files, illustrations, or CSS from the supplied Fireworks, Baseten, or
 Modal reference archives are shipped. Those archives remain reference material.

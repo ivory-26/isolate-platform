@@ -547,6 +547,9 @@ function incidentRepository(
 			recorded.add(key);
 			return { ok: true, signalId: crypto.randomUUID(), created: true };
 		},
+		async getLatestSignal() {
+			return null;
+		},
 		async reserveIfNewUnderCap(input) {
 			capCalls.push({
 				organizationId: input.organizationId,

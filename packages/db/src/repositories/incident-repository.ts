@@ -97,7 +97,24 @@ export type CountActiveIncidentTasksInput = {
 	sources: readonly string[];
 };
 
+export type IncidentSignalLookupInput = {
+	organizationId: OrganizationId;
+	source: string;
+	fingerprint: string;
+};
+
+export type IncidentSignalSummary = {
+	kind: string;
+	severity: IncidentSeverity;
+	service: string;
+	receivedAt: Date;
+};
+
 export interface IncidentRepository {
+	/** Latest signal for a fingerprint, used to build device context calls. */
+	getLatestSignal(
+		input: IncidentSignalLookupInput,
+	): Promise<IncidentSignalSummary | null>;
 	recordIfNew(input: IncidentSignalInput): Promise<RecordIncidentSignalResult>;
 	/**
 	 * Admission in one transaction: take a per-org transaction-scoped advisory
@@ -270,6 +287,11 @@ const STMT = {
 		      = floor(extract(epoch from $4::timestamptz) / ${INCIDENT_DEDUPE_WINDOW_SECONDS})
 		ORDER BY received_at DESC
 		LIMIT 1`,
+	latestSignal: `SELECT kind, severity, service, received_at
+		FROM incident_signals
+		WHERE organization_id = $1 AND source = $2 AND fingerprint = $3
+		ORDER BY received_at DESC
+		LIMIT 1`,
 	countActive: `SELECT count(*)::int AS n FROM tasks
 		WHERE organization_id = $1
 		  AND incident_fingerprint IS NOT NULL
@@ -316,6 +338,34 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			);
 		}
 		return { ok: true, signalId: String(existing[0].id), created: false };
+	}
+
+	async getLatestSignal(
+		input: IncidentSignalLookupInput,
+	): Promise<IncidentSignalSummary | null> {
+		if (
+			typeof input.organizationId !== "string" ||
+			input.organizationId.trim().length === 0 ||
+			typeof input.source !== "string" ||
+			input.source.trim().length === 0 ||
+			typeof input.fingerprint !== "string" ||
+			input.fingerprint.trim().length === 0
+		) {
+			throw new Error("signal lookup input is invalid");
+		}
+		const rows = (await this.sql.unsafe(STMT.latestSignal, [
+			input.organizationId,
+			input.source,
+			input.fingerprint,
+		])) as unknown as Record<string, unknown>[];
+		if (rows.length === 0) return null;
+		const row = rows[0];
+		return {
+			kind: String(row.kind),
+			severity: row.severity as IncidentSeverity,
+			service: String(row.service),
+			receivedAt: new Date(String(row.received_at)),
+		};
 	}
 
 	async reserveIfNewUnderCap(

@@ -34,6 +34,8 @@ import {
 	type CountActiveIncidentTasksInput,
 	type IncidentRepository,
 	type IncidentSignalInput,
+	type IncidentSignalLookupInput,
+	type IncidentSignalSummary,
 	incidentDedupeBucketStart,
 	type NormalizedIncidentSignal,
 	normalizeIncidentMetadata,
@@ -373,6 +375,28 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		const id = crypto.randomUUID();
 		this.signals.push({ id, ...signal });
 		return { ok: true, signalId: id, created: true };
+	}
+
+	async getLatestSignal(
+		input: IncidentSignalLookupInput,
+	): Promise<IncidentSignalSummary | null> {
+		const matches = this.signals
+			.filter(
+				(row) =>
+					row.organizationId === input.organizationId &&
+					row.source === input.source &&
+					row.fingerprint === input.fingerprint,
+			)
+			.sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
+		const row = matches[0];
+		return row === undefined
+			? null
+			: {
+					kind: row.kind,
+					severity: row.severity,
+					service: row.service,
+					receivedAt: new Date(row.receivedAt),
+				};
 	}
 
 	async reserveIfNewUnderCap(

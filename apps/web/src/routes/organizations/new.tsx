@@ -1,6 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
+import { PageContainer } from "@/components/common/page-container";
+import { PageHeader } from "@/components/common/page-header";
+import { Section } from "@/components/common/section";
+import { ChevronLeftIcon, PlusIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { createOrganization } from "../../features/auth/auth.functions";
 import { createOrganizationSchema } from "../../features/auth/contracts";
 import { authStateKeys } from "../../features/auth/queries";
@@ -42,37 +49,71 @@ function NewOrganizationPage() {
 		mutation.mutate(new FormData(event.currentTarget));
 	}
 	return (
-		<main>
-			<p className="eyebrow">Tenants</p>
-			<h1>Create an organization</h1>
-			<p>
-				You become the owner. Owners can add members and manage the
-				organization&rsquo;s repositories and workflows.
-			</p>
-			<form onSubmit={handleSubmit}>
-				<label htmlFor="name">Organization name</label>
-				<input id="name" name="name" required maxLength={120} />
-				<label htmlFor="slug">Organization address</label>
-				<input
-					id="slug"
-					name="slug"
-					required
-					maxLength={64}
-					pattern="[a-z0-9]+(-[a-z0-9]+)*"
-					placeholder="acme-labs"
-				/>
-				<button type="submit" disabled={mutation.isPending}>
-					{mutation.isPending ? "Creating..." : "Create organization"}
-				</button>
-				{error && (
-					<p role="alert" className="form-error">
-						{error}
-					</p>
-				)}
-			</form>
-			<p>
-				<Link to="/organizations">Back to organizations</Link>
-			</p>
-		</main>
+		<PageContainer>
+			<PageHeader
+				eyebrow="Manage"
+				title="Create an organization"
+				description="You become the owner. Owners can manage members through the API and configure repositories and workflows."
+			/>
+			<Section
+				title="Organization details"
+				description="The address is unique and cannot be changed later."
+				className="max-w-2xl"
+			>
+				<form onSubmit={handleSubmit} className="space-y-5">
+					<div className="space-y-1.5">
+						<Label htmlFor="name">Organization name</Label>
+						<Input
+							id="name"
+							name="name"
+							required
+							maxLength={120}
+							autoComplete="organization"
+							placeholder="Acme Labs"
+						/>
+					</div>
+					<div className="space-y-1.5">
+						<Label htmlFor="slug">Organization address</Label>
+						<Input
+							id="slug"
+							name="slug"
+							required
+							maxLength={64}
+							pattern="[a-z0-9]+(-[a-z0-9]+)*"
+							placeholder="acme-labs"
+							autoComplete="off"
+							spellCheck={false}
+							aria-describedby="organization-slug-hint"
+						/>
+						<p
+							id="organization-slug-hint"
+							className="text-xs leading-5 text-ink-muted"
+						>
+							Lowercase words separated by single hyphens.
+						</p>
+					</div>
+					{error ? (
+						<p
+							role="alert"
+							className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+						>
+							{error}
+						</p>
+					) : null}
+					<div className="flex flex-wrap items-center gap-2">
+						<Button type="submit" disabled={mutation.isPending}>
+							<PlusIcon />
+							{mutation.isPending ? "Creating…" : "Create organization"}
+						</Button>
+						<Button asChild variant="outline">
+							<Link to="/organizations">
+								<ChevronLeftIcon />
+								Back to organizations
+							</Link>
+						</Button>
+					</div>
+				</form>
+			</Section>
+		</PageContainer>
 	);
 }

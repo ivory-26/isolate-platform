@@ -1,5 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
+import { GlobeIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { startGoogleSignIn } from "../../features/auth/auth.functions";
 
 /**
@@ -22,19 +24,25 @@ export function GoogleSignInButton() {
 		onError: () => setError("Google sign-in could not be started. Try again."),
 	});
 	return (
-		<div className="social-sign-in">
-			<button
+		<div className="space-y-2">
+			<Button
 				type="button"
+				variant="outline"
+				className="w-full"
 				disabled={mutation.isPending}
 				onClick={() => {
 					setError(null);
 					mutation.mutate();
 				}}
 			>
-				{mutation.isPending ? "Redirecting..." : "Continue with Google"}
-			</button>
+				<GlobeIcon />
+				{mutation.isPending ? "Redirecting…" : "Continue with Google"}
+			</Button>
 			{error && (
-				<p role="alert" className="form-error">
+				<p
+					role="alert"
+					className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+				>
 					{error}
 				</p>
 			)}

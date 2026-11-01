@@ -21,8 +21,11 @@ export const DEVICE_ERROR_CODES = [
 ] as const;
 export type DeviceErrorCode = (typeof DEVICE_ERROR_CODES)[number];
 
-/** Server caps the result at 16 KiB; the daemon never sends more. */
-export const DEVICE_MAX_RESULT_BYTES = 16 * 1024;
+/**
+ * The gateway accepts a 256 KiB result body; context bundles may reach that
+ * cap, so the daemon must not reject them earlier.
+ */
+export const DEVICE_MAX_RESULT_BYTES = 262_144;
 export const DEVICE_MAX_PARAMS_BYTES = 16 * 1024;
 export const DEVICE_CALL_MAX_PARAM_KEYS = 64;
 
@@ -92,7 +95,7 @@ export type ToolHandler = (params: ToolParams) => Promise<DispatchOutcome>;
 
 export type DeviceDispatcher = (call: DeviceCall) => Promise<DispatchOutcome>;
 
-/** JSON byte length of a candidate result body (for the 16 KiB cap). */
+/** JSON byte length of a candidate result body (for the 256 KiB cap). */
 export function jsonByteLength(value: unknown): number {
 	let text: string | undefined;
 	try {

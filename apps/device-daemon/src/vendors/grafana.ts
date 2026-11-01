@@ -1,4 +1,5 @@
 import {
+	fetchGrafanaContext,
 	type GrafanaContextDependencies,
 	getGrafanaAlertRule,
 	queryGrafanaLogs,
@@ -6,7 +7,12 @@ import {
 } from "@isolate/integrations";
 import { type Env, type GrafanaVendorConfig, resolveSecret } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import {
+	parseContextFingerprint,
+	readContextParams,
+	requiredService,
+} from "./context";
+import { failure, withDependencies } from "./shared";
 
 /**
  * Grafana handlers. The datasource UIDs are configuration, not tool input: the
@@ -49,5 +55,24 @@ export function createGrafanaHandlers(
 			withDependencies(dependencies(), (deps) =>
 				getGrafanaAlertRule(deps, params),
 			),
+		"grafana.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(
+				parsed.incidentFingerprint,
+				"grafana",
+			);
+			const service = requiredService(parsed);
+			if (ref === null || service === null) {
+				return failure("VALIDATION_FAILED");
+			}
+			return withDependencies(dependencies(), (deps) =>
+				fetchGrafanaContext(deps, {
+					incidentFingerprint: parsed.incidentFingerprint,
+					service,
+					alertRuleUid: ref.ruleUid,
+				}),
+			);
+		},
 	};
 }

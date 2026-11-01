@@ -25,19 +25,27 @@ import { createSignozHandlers } from "./vendors/signoz";
 /**
  * The daemon's complete connector tool table.
  *
- * Every name in `CONNECTOR_TOOL_RISKS` has an entry whether or not the vendor is
- * configured. A configured vendor builds its adapter dependencies from the
- * device-local config/env on each call; an unconfigured vendor fails closed as
- * `INTEGRATION_UNAVAILABLE` without touching the network. A name outside this
- * table fails `VALIDATION_FAILED` without executing.
+ * Every name in `CONNECTOR_TOOL_RISKS` has an entry whether or not the vendor
+ * is configured, plus one `*.context.fetch` preloading tool per vendor (nine
+ * names the model cannot request). A configured vendor builds its adapter
+ * dependencies from the device-local config/env on each call; an unconfigured
+ * vendor fails closed as `INTEGRATION_UNAVAILABLE` without touching the
+ * network. A name outside this table fails `VALIDATION_FAILED` without
+ * executing.
  */
 
 export const DEVICE_TOOL_NAMES_BY_VENDOR = {
-	sentry: ["sentry.list_issues", "sentry.get_issue", "sentry.latest_event"],
+	sentry: [
+		"sentry.list_issues",
+		"sentry.get_issue",
+		"sentry.latest_event",
+		"sentry.context.fetch",
+	],
 	grafana: [
 		"grafana.query_metrics",
 		"grafana.query_logs",
 		"grafana.get_alert_rule",
+		"grafana.context.fetch",
 	],
 	pagerduty: [
 		"pagerduty.list_incidents",
@@ -45,30 +53,45 @@ export const DEVICE_TOOL_NAMES_BY_VENDOR = {
 		"pagerduty.list_log_entries",
 		"pagerduty.acknowledge",
 		"pagerduty.resolve",
+		"pagerduty.context.fetch",
 	],
 	kubernetes: [
 		"k8s.list_events",
 		"k8s.get_pod",
 		"k8s.get_deployment",
 		"k8s.logs_tail",
+		"k8s.context.fetch",
 	],
 	datadog: [
 		"datadog.query_metrics",
 		"datadog.search_logs",
 		"datadog.get_incident",
 		"datadog.get_monitor",
+		"datadog.context.fetch",
 	],
-	axiom: ["axiom.query_apl", "axiom.get_monitor", "axiom.list_datasets"],
-	signoz: ["signoz.query_range", "signoz.get_rule", "signoz.list_rules"],
+	axiom: [
+		"axiom.query_apl",
+		"axiom.get_monitor",
+		"axiom.list_datasets",
+		"axiom.context.fetch",
+	],
+	signoz: [
+		"signoz.query_range",
+		"signoz.get_rule",
+		"signoz.list_rules",
+		"signoz.context.fetch",
+	],
 	newrelic: [
 		"newrelic.run_nrql",
 		"newrelic.get_entity",
 		"newrelic.list_alert_policies",
+		"newrelic.context.fetch",
 	],
 	honeycomb: [
 		"honeycomb.run_query",
 		"honeycomb.get_trigger",
 		"honeycomb.list_slos",
+		"honeycomb.context.fetch",
 	],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -90,7 +113,7 @@ function unavailableStubs(
 	return handlers;
 }
 
-/** Builds the 31-entry table; config decides which vendors are live. */
+/** Builds the 40-entry table; config decides which vendors are live. */
 export function createHandlerTable(
 	options: DispatcherOptions,
 ): Record<string, ToolHandler> {

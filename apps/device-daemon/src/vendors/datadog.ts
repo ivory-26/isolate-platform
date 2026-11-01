@@ -1,5 +1,6 @@
 import {
 	type DatadogContextDependencies,
+	fetchDatadogContext,
 	getDatadogIncident,
 	getDatadogMonitor,
 	queryDatadogMetrics,
@@ -7,7 +8,12 @@ import {
 } from "@isolate/integrations";
 import { type DatadogVendorConfig, type Env, resolveSecret } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import {
+	parseContextFingerprint,
+	readContextParams,
+	requiredService,
+} from "./context";
+import { failure, withDependencies } from "./shared";
 
 /** Datadog handlers: API key + scoped application key, both device-local. */
 export function createDatadogHandlers(
@@ -49,5 +55,24 @@ export function createDatadogHandlers(
 			withDependencies(dependencies(), (deps) =>
 				getDatadogMonitor(deps, params),
 			),
+		"datadog.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(
+				parsed.incidentFingerprint,
+				"datadog",
+			);
+			const service = requiredService(parsed);
+			if (ref === null || service === null) {
+				return failure("VALIDATION_FAILED");
+			}
+			return withDependencies(dependencies(), (deps) =>
+				fetchDatadogContext(deps, {
+					incidentFingerprint: parsed.incidentFingerprint,
+					service,
+					monitorId: ref.monitorId,
+				}),
+			);
+		},
 	};
 }

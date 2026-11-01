@@ -1,5 +1,6 @@
 import {
 	createKubernetesReadTools,
+	fetchKubernetesContext,
 	type KubernetesContextDependencies,
 	type KubernetesHttpClient,
 	type KubernetesToolName,
@@ -10,6 +11,11 @@ import {
 	resolveSecret,
 } from "../config";
 import type { ToolHandler } from "../contracts";
+import {
+	canonicalKubernetesKind,
+	parseContextFingerprint,
+	readContextParams,
+} from "./context";
 import { failure, runAdapter } from "./shared";
 
 export type KubernetesClientOptions = {
@@ -92,5 +98,41 @@ export function createKubernetesHandlers(
 		"k8s.get_pod": handlerFor("k8s.get_pod"),
 		"k8s.get_deployment": handlerFor("k8s.get_deployment"),
 		"k8s.logs_tail": handlerFor("k8s.logs_tail"),
+		"k8s.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(
+				parsed.incidentFingerprint,
+				"kubernetes",
+			);
+			if (ref === null) return failure("VALIDATION_FAILED");
+			const fingerprintKind = canonicalKubernetesKind(ref.kind);
+			const requestedKind =
+				parsed.kind === undefined ? null : canonicalKubernetesKind(parsed.kind);
+			if (parsed.kind !== undefined && requestedKind === null) {
+				return failure("VALIDATION_FAILED");
+			}
+			if (
+				requestedKind !== null &&
+				fingerprintKind !== null &&
+				requestedKind !== fingerprintKind
+			) {
+				return failure("VALIDATION_FAILED");
+			}
+			const kind = requestedKind ?? fingerprintKind;
+			if (kind === null) return failure("VALIDATION_FAILED");
+			const deps = dependencies();
+			if (deps === null) return failure("INTEGRATION_UNAVAILABLE");
+			return runAdapter(() =>
+				fetchKubernetesContext(deps, {
+					incidentFingerprint: parsed.incidentFingerprint,
+					namespace: ref.namespace,
+					kind,
+					name: ref.name,
+					...(kind === "Pod" ? { podName: ref.name } : {}),
+					includeLogs: true,
+				}),
+			);
+		},
 	};
 }

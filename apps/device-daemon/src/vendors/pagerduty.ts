@@ -1,5 +1,6 @@
 import {
 	acknowledgePagerDutyIncident,
+	fetchPagerDutyContext,
 	type PagerDutyToolDependencies,
 	type PagerDutyWriteDependencies,
 	pagerDutyReadFunctions,
@@ -7,7 +8,8 @@ import {
 } from "@isolate/integrations";
 import { type Env, type PagerDutyVendorConfig, resolveSecret } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import { parseContextFingerprint, readContextParams } from "./context";
+import { failure, withDependencies } from "./shared";
 
 /**
  * PagerDuty handlers. Reads use the configured token; acknowledge/resolve are
@@ -74,5 +76,20 @@ export function createPagerDutyHandlers(
 			withDependencies(writeDependencies(), (deps) =>
 				resolvePagerDutyIncident(deps, params),
 			),
+		"pagerduty.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(
+				parsed.incidentFingerprint,
+				"pagerduty",
+			);
+			if (ref === null) return failure("VALIDATION_FAILED");
+			return withDependencies(readDependencies(), (deps) =>
+				fetchPagerDutyContext(deps, {
+					incidentId: ref.incidentId,
+					incidentFingerprint: parsed.incidentFingerprint,
+				}),
+			);
+		},
 	};
 }

@@ -1,4 +1,5 @@
 import {
+	fetchSentryContext,
 	getSentryIssue,
 	getSentryLatestEvent,
 	listSentryIssues,
@@ -6,7 +7,8 @@ import {
 } from "@isolate/integrations";
 import { type Env, resolveSecret, type SentryVendorConfig } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import { parseContextFingerprint, readContextParams } from "./context";
+import { failure, withDependencies } from "./shared";
 
 /** Sentry handlers: token and optional origin come from device-local config. */
 export function createSentryHandlers(
@@ -37,5 +39,17 @@ export function createSentryHandlers(
 			withDependencies(dependencies(), (deps) =>
 				getSentryLatestEvent(deps, params),
 			),
+		"sentry.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(parsed.incidentFingerprint, "sentry");
+			if (ref === null) return failure("VALIDATION_FAILED");
+			return withDependencies(dependencies(), (deps) =>
+				fetchSentryContext(deps, {
+					orgSlug: ref.orgSlug,
+					issueId: ref.issueId,
+				}),
+			);
+		},
 	};
 }

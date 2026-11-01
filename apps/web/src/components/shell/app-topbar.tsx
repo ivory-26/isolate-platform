@@ -39,7 +39,7 @@ export function AppTopbar({
 	return (
 		<header
 			className={cn(
-				"sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line-subtle bg-canvas px-4 lg:px-6",
+				"sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-3 border-b border-line-subtle bg-canvas px-4 pt-[env(safe-area-inset-top)] lg:px-6",
 				className,
 			)}
 		>

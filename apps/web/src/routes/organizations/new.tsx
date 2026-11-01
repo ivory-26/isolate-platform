@@ -51,7 +51,6 @@ function NewOrganizationPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Manage"
 				title="Create an organization"
 				description="You become the owner. Owners can manage members through the API and configure repositories and workflows."
 			/>

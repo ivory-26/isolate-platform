@@ -161,7 +161,7 @@ export function AppSidebar({
 
 			<div
 				className={cn(
-					"space-y-2 border-t border-line-subtle p-2",
+					"space-y-2 border-t border-line-subtle p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
 					collapsed && "px-1.5",
 				)}
 			>

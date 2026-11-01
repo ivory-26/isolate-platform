@@ -12,8 +12,8 @@ export const Route = createFileRoute("/_app")({
 	component: AppLayout,
 	pendingComponent: () => (
 		<PageContainer>
-			<div className="h-8 w-48 animate-pulse rounded-md bg-elevated" />
-			<div className="h-64 w-full animate-pulse rounded-lg bg-elevated" />
+			<div className="h-8 w-48 rounded bg-elevated/60" />
+			<div className="h-64 w-full rounded bg-elevated/20" />
 		</PageContainer>
 	),
 	errorComponent: () => (

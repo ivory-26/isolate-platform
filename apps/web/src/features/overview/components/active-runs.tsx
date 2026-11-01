@@ -67,7 +67,10 @@ export function ActiveRunsSection({ runs }: { runs: ActiveRunSummary[] }) {
 								<TableHead className="w-[170px] text-[10px] font-medium">
 									Latest stage
 								</TableHead>
-								<TableHead className="w-[100px] text-[10px] font-medium [text-align:right]">
+								<TableHead
+									className="w-[100px] text-[10px] font-medium"
+									style={{ textAlign: "right" }}
+								>
 									Updated
 								</TableHead>
 							</TableRow>

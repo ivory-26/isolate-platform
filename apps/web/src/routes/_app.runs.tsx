@@ -246,7 +246,10 @@ function RunsPage() {
 								<TableHead className="w-[130px] text-[10px] font-medium">
 									Created
 								</TableHead>
-								<TableHead className="w-[130px] text-[10px] font-medium [text-align:right]">
+								<TableHead
+									className="w-[130px] text-[10px] font-medium"
+									style={{ textAlign: "right" }}
+								>
 									Updated
 								</TableHead>
 							</TableRow>

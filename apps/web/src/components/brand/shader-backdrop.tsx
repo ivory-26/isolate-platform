@@ -1,11 +1,11 @@
 import GradientASCII from "@/components/GradientASCII";
 
 /**
- * The supplied landing configuration from project/design.md §8, used exactly:
- * fixed to the viewport, behind every page that opts in.
+ * The supplied landing configuration from project/design.md §8, used exactly.
  *
- * The same shader is used on the auth screens; those pages lay their own scrim
- * and solid card over it so the form stays readable.
+ * One field, reused by the landing backdrop and by the auth brand panel.
+ * `mouseInteraction` and `clickEffect` are off because the component listens on
+ * `window`; they do not change the rendered horizon.
  */
 export function ShaderField() {
 	return (
@@ -21,15 +21,26 @@ export function ShaderField() {
 			flicker={0.17}
 			softness={0.43}
 			flow={0.4}
+			mouseInteraction={false}
+			clickEffect="none"
 		/>
 	);
 }
 
+/**
+ * The landing background: fixed to the viewport, behind every section, and
+ * non-interactive. Sections that need legibility paint their own solid canvas.
+ */
 export function ShaderBackdrop() {
 	return (
 		<div
 			aria-hidden="true"
-			className="pointer-events-none fixed inset-0 -z-10 bg-canvas"
+			style={{
+				position: "fixed",
+				inset: 0,
+				zIndex: -1,
+				pointerEvents: "none",
+			}}
 		>
 			{/* Static fallback if WebGL2 is unavailable; the canvas covers it. */}
 			<div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_72%,rgba(2,151,222,0.22),transparent_70%)]" />

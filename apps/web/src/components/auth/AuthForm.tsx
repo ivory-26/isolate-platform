@@ -1,6 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { signIn, signUp } from "../../features/auth/auth.functions";
 import { signInSchema, signUpSchema } from "../../features/auth/contracts";
 import { authStateKeys } from "../../features/auth/queries";
@@ -56,47 +59,62 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 		mutation.mutate(new FormData(event.currentTarget));
 	}
 	return (
-		<form onSubmit={handleSubmit}>
+		<form onSubmit={handleSubmit} className="space-y-4">
 			{mode === "sign-up" && (
-				<>
-					<label htmlFor="name">Name</label>
-					<input
+				<div className="space-y-1.5">
+					<Label htmlFor="name">Name</Label>
+					<Input
 						id="name"
 						name="name"
 						required
 						maxLength={120}
 						autoComplete="name"
 					/>
-				</>
+				</div>
 			)}
-			<label htmlFor="email">Email address</label>
-			<input
-				id="email"
-				name="email"
-				type="email"
-				required
-				maxLength={320}
-				autoComplete="email"
-			/>
-			<label htmlFor="password">Password</label>
-			<input
-				id="password"
-				name="password"
-				type="password"
-				required
-				minLength={8}
-				maxLength={200}
-				autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
-			/>
-			<button type="submit" disabled={mutation.isPending}>
+			<div className="space-y-1.5">
+				<Label htmlFor="email">Email address</Label>
+				<Input
+					id="email"
+					name="email"
+					type="email"
+					required
+					maxLength={320}
+					autoComplete="email"
+					spellCheck={false}
+				/>
+			</div>
+			<div className="space-y-1.5">
+				<Label htmlFor="password">Password</Label>
+				<Input
+					id="password"
+					name="password"
+					type="password"
+					required
+					minLength={8}
+					maxLength={200}
+					autoComplete={
+						mode === "sign-up" ? "new-password" : "current-password"
+					}
+				/>
+				{mode === "sign-up" ? (
+					<p className="text-xs leading-5 text-ink-muted">
+						At least 8 characters. Never reuse a vendor credential here.
+					</p>
+				) : null}
+			</div>
+			<Button type="submit" className="w-full" disabled={mutation.isPending}>
 				{mutation.isPending
-					? "Working..."
+					? "Working…"
 					: mode === "sign-up"
 						? "Create account"
 						: "Sign in"}
-			</button>
+			</Button>
 			{error && (
-				<p role="alert" className="form-error">
+				<p
+					role="alert"
+					className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+				>
 					{error}
 				</p>
 			)}

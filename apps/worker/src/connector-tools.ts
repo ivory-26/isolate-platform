@@ -26,13 +26,15 @@ import {
 	type OrganizationId,
 	PlatformError,
 } from "@isolate/shared";
-import { z } from "zod";
+import { validateConnectorToolArguments } from "./connector-schemas";
 
 /**
  * Wave 17 connector tools over the device poll queue.
  *
  * The worker never holds a provider key. For one call it:
- * 1. validates bounded, credential-free arguments (recursive scan),
+ * 1. bounds the raw arguments, parses them with the adapter's own strict
+ *    input schema (unknown tool name and unknown keys fail here), then runs
+ *    the recursive credential scan,
  * 2. resolves the organization's active device + credential through the
  *    `ConnectorDeviceBroker` (metadata only; no secret),
  * 3. refuses a `scoped_write` tool unless the credential carries a write scope,
@@ -55,12 +57,6 @@ const DEFAULT_POLL_MS = 250;
  * acknowledge/resolve must never ride a read scope.
  */
 const CONNECTOR_WRITE_SCOPE = "connector:write";
-
-/** Strict JSON object at the boundary; unknown keys are forwarded as data. */
-const connectorArgumentsSchema = z.record(
-	z.string().min(1).max(64),
-	z.unknown(),
-);
 
 /** Fixed, credential-free mapping from a device-reported code to a platform code. */
 const DEVICE_ERROR_CODES: Readonly<Record<string, ErrorCode>> = {

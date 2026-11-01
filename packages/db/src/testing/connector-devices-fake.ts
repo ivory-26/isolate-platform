@@ -7,6 +7,7 @@ import {
 	constantTimeEqualTokenHash,
 	normalizeConnectorDeviceCreate,
 	normalizeConnectorDeviceTokenHash,
+	normalizeRotationExpiry,
 	toConnectorDeviceSummary,
 } from "../repositories/connector-devices";
 
@@ -103,6 +104,38 @@ export class InMemoryConnectorDeviceRepository
 			return null;
 		}
 		row.status = "revoked";
+		row.updatedAt = new Date();
+		return toConnectorDeviceSummary(row);
+	}
+
+	async rotateToken(
+		organizationId: OrganizationId,
+		deviceId: string,
+		tokenHash: string,
+		expiresAt: Date,
+	): Promise<ConnectorDeviceSummary | null> {
+		const hash = normalizeConnectorDeviceTokenHash(tokenHash);
+		const expiry = normalizeRotationExpiry(expiresAt);
+		const row = this.rows.get(deviceId);
+		if (
+			row === undefined ||
+			row.organizationId !== organizationId ||
+			row.status === "revoked"
+		) {
+			return null;
+		}
+		// Mirrors the global unique index on `token_hash`.
+		for (const other of this.rows.values()) {
+			if (other.id !== row.id && other.tokenHash === hash) {
+				throw new PlatformError(
+					"VALIDATION_FAILED",
+					"this connector device token is already registered",
+				);
+			}
+		}
+		row.tokenHash = hash;
+		row.expiresAt = expiry;
+		row.status = "active";
 		row.updatedAt = new Date();
 		return toConnectorDeviceSummary(row);
 	}

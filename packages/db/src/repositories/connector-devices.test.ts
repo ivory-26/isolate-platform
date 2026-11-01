@@ -223,6 +223,136 @@ describe("Postgres connector device repository", () => {
 	});
 });
 
+describe("device token rotation", () => {
+	const future = (): Date => new Date(Date.now() + 60_000);
+
+	test("replaces the hash, re-activates and renews the expiry", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		const created = await repo.create(
+			createInput({
+				status: "pending",
+				expiresAt: new Date(Date.now() + 1_000),
+			}),
+		);
+		const expiresAt = future();
+		const rotated = await repo.rotateToken(
+			ORG_A,
+			created.id,
+			HASH_B,
+			expiresAt,
+		);
+		expect(rotated?.id).toBe(created.id);
+		expect(rotated?.status).toBe("active");
+		expect(rotated?.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+		expect(Object.keys(rotated ?? {})).not.toContain("tokenHash");
+		expect(JSON.stringify(rotated)).not.toContain(HASH_B);
+
+		// The old token stops verifying immediately; the new one authenticates.
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_A)).toBeNull();
+		const verified = await repo.verifyByTokenHash(ORG_A, HASH_B);
+		expect(verified?.id).toBe(created.id);
+		expect(verified?.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+	});
+
+	test("refuses a foreign or revoked device and leaves the row untouched", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		const created = await repo.create(createInput());
+		expect(
+			await repo.rotateToken(ORG_B, created.id, HASH_B, future()),
+		).toBeNull();
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_A)).not.toBeNull();
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_B)).toBeNull();
+
+		await repo.revoke(ORG_A, created.id);
+		expect(
+			await repo.rotateToken(ORG_A, created.id, HASH_B, future()),
+		).toBeNull();
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_B)).toBeNull();
+	});
+
+	test("rejects a malformed hash, an invalid Date and an expired Date", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		const created = await repo.create(createInput());
+		const invalids: [string, Date][] = [
+			["not-a-hash", future()],
+			[HASH_B, new Date(Number.NaN)],
+			[HASH_B, new Date(Date.now() - 1_000)],
+		];
+		for (const [hash, expiresAt] of invalids) {
+			await expect(
+				repo.rotateToken(ORG_A, created.id, hash, expiresAt),
+			).rejects.toBeInstanceOf(PlatformError);
+		}
+		// Nothing was written by a rejected call.
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_A)).not.toBeNull();
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_B)).toBeNull();
+	});
+
+	test("refuses a hash already registered to another device", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		await repo.create(createInput());
+		const second = await repo.create(
+			createInput({ displayName: "Second", tokenHash: HASH_B }),
+		);
+		await expect(
+			repo.rotateToken(ORG_A, second.id, HASH_A, future()),
+		).rejects.toBeInstanceOf(PlatformError);
+	});
+
+	test("Postgres writes one tenant-scoped UPDATE ... RETURNING", async () => {
+		const calls: { query: string; params: readonly unknown[] }[] = [];
+		const expiresAt = future();
+		const sql = {
+			unsafe: async (query: string, params: readonly unknown[] = []) => {
+				calls.push({ query, params });
+				return [{ ...row, token_hash: HASH_B, expires_at: expiresAt }];
+			},
+		} as unknown as PgSql;
+		const repo = new PostgresConnectorDeviceRepository(sql);
+		const rotated = await repo.rotateToken(ORG_A, DEVICE_ID, HASH_B, expiresAt);
+		expect(rotated?.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+		expect(calls).toHaveLength(1);
+		expect(calls[0].query).toContain("UPDATE connector_devices");
+		expect(calls[0].query).toContain("token_hash = $3");
+		expect(calls[0].query).toContain("expires_at = $4::timestamptz");
+		expect(calls[0].query).toContain("status = 'active'");
+		expect(calls[0].query).toContain("status <> 'revoked'");
+		expect(calls[0].query).toContain("WHERE organization_id = $1 AND id = $2");
+		expect(calls[0].query).toContain("updated_at = now()");
+		expect(calls[0].query).toContain("RETURNING");
+		expect(calls[0].params).toEqual([
+			ORG_A,
+			DEVICE_ID,
+			HASH_B,
+			expiresAt.toISOString(),
+		]);
+	});
+
+	test("Postgres returns null when no row matches and validates before SQL", async () => {
+		const calls: { query: string; params: readonly unknown[] }[] = [];
+		const sql = {
+			unsafe: async (query: string, params: readonly unknown[] = []) => {
+				calls.push({ query, params });
+				return [];
+			},
+		} as unknown as PgSql;
+		const repo = new PostgresConnectorDeviceRepository(sql);
+		expect(
+			await repo.rotateToken(ORG_A, DEVICE_ID, HASH_B, future()),
+		).toBeNull();
+		expect(calls).toHaveLength(1);
+
+		calls.length = 0;
+		await expect(
+			repo.rotateToken(ORG_A, DEVICE_ID, "not-a-hash", future()),
+		).rejects.toBeInstanceOf(PlatformError);
+		await expect(
+			repo.rotateToken(ORG_A, DEVICE_ID, HASH_B, new Date(Date.now() - 1_000)),
+		).rejects.toBeInstanceOf(PlatformError);
+		expect(calls).toHaveLength(0);
+	});
+});
+
 describe("device token expiry", () => {
 	test("rejects an expired token", async () => {
 		const repo = new InMemoryConnectorDeviceRepository();

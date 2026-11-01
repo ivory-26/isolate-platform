@@ -26,6 +26,7 @@ import { Route as ApiDeviceHeartbeatRouteImport } from './routes/api.device.hear
 import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
 import { Route as ApiDeviceRegisterRouteImport } from './routes/api.device.register'
 import { Route as ApiDeviceRevokeRouteImport } from './routes/api.device.revoke'
+import { Route as ApiDeviceRotateRouteImport } from './routes/api.device.rotate'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
@@ -114,6 +115,11 @@ const ApiDeviceRevokeRoute = ApiDeviceRevokeRouteImport.update({
   path: '/api/device/revoke',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDeviceRotateRoute = ApiDeviceRotateRouteImport.update({
+  id: '/api/device/rotate',
+  path: '/api/device/rotate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWebhooksSplatRoute = ApiWebhooksSplatRouteImport.update({
   id: '/api/webhooks/$',
   path: '/api/webhooks/$',
@@ -143,6 +149,7 @@ export interface FileRoutesByFullPath {
   '/api/device/list': typeof ApiDeviceListRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
+  '/api/device/rotate': typeof ApiDeviceRotateRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -163,6 +170,7 @@ export interface FileRoutesByTo {
   '/api/device/list': typeof ApiDeviceListRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
+  '/api/device/rotate': typeof ApiDeviceRotateRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -185,6 +193,7 @@ export interface FileRoutesById {
   '/api/device/list': typeof ApiDeviceListRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
+  '/api/device/rotate': typeof ApiDeviceRotateRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -208,6 +217,7 @@ export interface FileRouteTypes {
     | '/api/device/list'
     | '/api/device/register'
     | '/api/device/revoke'
+    | '/api/device/rotate'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
@@ -228,6 +238,7 @@ export interface FileRouteTypes {
     | '/api/device/list'
     | '/api/device/register'
     | '/api/device/revoke'
+    | '/api/device/rotate'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   id:
@@ -249,6 +260,7 @@ export interface FileRouteTypes {
     | '/api/device/list'
     | '/api/device/register'
     | '/api/device/revoke'
+    | '/api/device/rotate'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesById: FileRoutesById
@@ -269,6 +281,7 @@ export interface RootRouteChildren {
   ApiDeviceListRoute: typeof ApiDeviceListRoute
   ApiDeviceRegisterRoute: typeof ApiDeviceRegisterRoute
   ApiDeviceRevokeRoute: typeof ApiDeviceRevokeRoute
+  ApiDeviceRotateRoute: typeof ApiDeviceRotateRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
   ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
 }
@@ -394,6 +407,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDeviceRevokeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/device/rotate': {
+      id: '/api/device/rotate'
+      path: '/api/device/rotate'
+      fullPath: '/api/device/rotate'
+      preLoaderRoute: typeof ApiDeviceRotateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/webhooks/$': {
       id: '/api/webhooks/$'
       path: '/api/webhooks/$'
@@ -440,6 +460,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDeviceListRoute: ApiDeviceListRoute,
   ApiDeviceRegisterRoute: ApiDeviceRegisterRoute,
   ApiDeviceRevokeRoute: ApiDeviceRevokeRoute,
+  ApiDeviceRotateRoute: ApiDeviceRotateRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
   ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,
 }

@@ -96,6 +96,7 @@ export type UserRateLimitAction =
 	| "device:register"
 	| "device:list"
 	| "device:revoke"
+	| "device:rotate"
 	| "connector:connect"
 	| "connector:list"
 	| "connector:revoke";
@@ -105,6 +106,7 @@ export const USER_RATE_LIMITS = {
 	"device:register": 10,
 	"device:list": 120,
 	"device:revoke": 30,
+	"device:rotate": 10,
 	"connector:connect": 30,
 	"connector:list": 120,
 	"connector:revoke": 30,

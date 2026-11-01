@@ -16,7 +16,7 @@ import {
 } from "./context";
 
 const REPOSITORY = "acme/widgets";
-const TOKEN = ["ghs","fixture","token"].join("_");
+const TOKEN = ["ghs", "fixture", "token"].join("_");
 const EXPIRES_AT = new Date(Date.now() + 3_600_000).toISOString();
 const SHA_MAIN = "1111111111111111111111111111111111111111";
 const SHA_RUN = "2222222222222222222222222222222222222222";

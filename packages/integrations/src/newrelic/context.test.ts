@@ -10,7 +10,7 @@ import {
 	NEWRELIC_US_ENDPOINT,
 } from "./context";
 
-const API_KEY = ["NRAK","test","key"].join("-");
+const API_KEY = ["NRAK", "test", "key"].join("-");
 const ACCOUNT = "1234567";
 const NOW_MS = Date.parse("2026-10-31T00:00:00.000Z");
 const STARTS_AT = "2026-10-30T23:45:00.000Z";

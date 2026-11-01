@@ -14,8 +14,8 @@ import {
 } from "./tools";
 
 const NOW_MS = Date.parse("2026-10-31T00:00:00.000Z");
-const API_KEY = ["test","api","key"].join("-");
-const APP_KEY = ["test","app","key"].join("-");
+const API_KEY = ["test", "api", "key"].join("-");
+const APP_KEY = ["test", "app", "key"].join("-");
 
 type Call = { url: string; init: RequestInit };
 

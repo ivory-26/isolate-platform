@@ -20,8 +20,8 @@ import {
 
 const NOW_MS = Date.parse("2026-10-31T00:00:00.000Z");
 const BASE = "https://api.datadoghq.com";
-const API_KEY = ["test","api","key"].join("-");
-const APP_KEY = ["test","app","key"].join("-");
+const API_KEY = ["test", "api", "key"].join("-");
+const APP_KEY = ["test", "app", "key"].join("-");
 const INCIDENT_ID = "incident-abc-123";
 const MONITOR_ID = "1234567890";
 

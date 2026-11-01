@@ -1,15 +1,11 @@
 import { useState } from "react";
-import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { RelativeTime } from "@/components/common/relative-time";
-import { Section } from "@/components/common/section";
-import { StatusBadge } from "@/components/common/status-badge";
-import {
-	ConnectorsIcon,
-	KeyIcon,
-	TrashIcon,
-	WarningIcon,
-} from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
+import { ConsoleNote } from "@/components/console/note";
+import { ConsoleSection } from "@/components/console/section";
+import { StatusMark } from "@/components/console/status-mark";
+import { ConnectorsIcon, KeyIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -30,6 +26,8 @@ import {
 } from "../contracts";
 import { ConnectConnectorDialog } from "./connect-connector-dialog";
 import { RevokeConnectorDialog } from "./revoke-connector-dialog";
+
+const SKELETON_ROWS = ["one", "two", "three"];
 
 export function ConnectorsPanel({
 	credentials,
@@ -53,56 +51,57 @@ export function ConnectorsPanel({
 		useState<ConnectorCredentialView | null>(null);
 	const activeDevices = devices.filter((device) => device.status === "active");
 	const canConnect = canManage && activeDevices.length > 0;
+	const connectAction = canManage ? (
+		<Button
+			type="button"
+			size="sm"
+			disabled={!canConnect}
+			onClick={() => setConnectOpen(true)}
+		>
+			<ConnectorsIcon />
+			Connect connector
+		</Button>
+	) : null;
 
 	return (
-		<Section
+		<ConsoleSection
+			id="connectors"
 			title="Connectors"
 			description="Metadata for the ten supported vendors. The credential itself is read from the device keychain at call time."
 			action={
-				canManage ? (
-					<Button
-						type="button"
-						size="sm"
-						disabled={!canConnect}
-						onClick={() => setConnectOpen(true)}
-					>
-						<ConnectorsIcon />
-						Connect connector
-					</Button>
-				) : null
+				canManage && credentials && credentials.length > 0
+					? connectAction
+					: null
 			}
 		>
-			<div className="mb-4 flex items-start gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs text-ink-secondary">
-				<KeyIcon size={14} className="mt-0.5 shrink-0 text-brand" />
-				<p className="leading-5">
-					Device-held credentials: the vendor key lives in the operating-system
-					keychain on the selected device. Isolate stores an opaque keychain
-					name, scopes and metadata, never the key.
-				</p>
-			</div>
+			<ConsoleNote role="note" icon={KeyIcon} className="mb-3">
+				Device-held credentials: the vendor key lives in the operating-system
+				keychain on the selected device. Isolate stores an opaque keychain name,
+				scopes and metadata, never the key.
+			</ConsoleNote>
 
 			{!canManage ? (
-				<div className="mb-4 flex items-start gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs text-ink-secondary">
-					<WarningIcon size={14} className="mt-0.5 shrink-0 text-ink-muted" />
-					<p className="leading-5">
-						Your role can read connectors but not connect or disconnect them.
-						Owners and admins manage connectors.
-					</p>
-				</div>
+				<ConsoleNote role="note" className="mb-3">
+					Your role can read connectors but not connect or disconnect them.
+					Owners and admins manage connectors.
+				</ConsoleNote>
 			) : activeDevices.length === 0 ? (
-				<div className="mb-4 flex items-start gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs text-ink-secondary">
-					<WarningIcon size={14} className="mt-0.5 shrink-0 text-ink-muted" />
-					<p className="leading-5">
-						Register an active device first. A connector needs a device to hold
-						its credential.
-					</p>
-				</div>
+				<ConsoleNote role="note" tone="warning" className="mb-3">
+					Register an active device first. A connector needs a device to hold
+					its credential.
+				</ConsoleNote>
 			) : null}
 
 			{isLoading ? (
-				<div className="space-y-2" aria-busy="true" aria-live="polite">
-					<Skeleton className="h-10 w-full" />
-					<Skeleton className="h-10 w-full" />
+				<div
+					className="divide-y divide-line-subtle border-y border-line-subtle"
+					aria-busy="true"
+					aria-live="polite"
+				>
+					<span className="sr-only">Loading connectors</span>
+					{SKELETON_ROWS.map((row) => (
+						<Skeleton key={row} className="h-12 w-full" />
+					))}
 				</div>
 			) : error ? (
 				<ErrorState
@@ -111,39 +110,38 @@ export function ConnectorsPanel({
 					onRetry={onRetry}
 				/>
 			) : credentials === undefined || credentials.length === 0 ? (
-				<EmptyState
-					icon={ConnectorsIcon}
+				<EmptyRow
 					title="No connectors yet"
 					description="Connect one of the ten supported vendors to run its read tools from your device."
-					action={
-						canManage ? (
-							<Button
-								type="button"
-								size="sm"
-								disabled={!canConnect}
-								onClick={() => setConnectOpen(true)}
-							>
-								<ConnectorsIcon />
-								Connect the first connector
-							</Button>
-						) : null
-					}
+					action={connectAction}
 				/>
 			) : (
-				<div className="overflow-x-auto rounded-lg border border-line-subtle">
+				<div className="border-y border-line-subtle">
 					<Table>
 						<caption className="sr-only">
 							Connectors connected in the active organization
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead>Connection</TableHead>
-								<TableHead className="w-[130px]">Connector</TableHead>
-								<TableHead className="w-[150px]">Device</TableHead>
-								<TableHead className="w-[180px]">Auth kind</TableHead>
-								<TableHead className="w-[150px]">Status</TableHead>
-								<TableHead className="w-[150px]">Last used</TableHead>
-								<TableHead className="w-[130px]">
+								<TableHead scope="col" className="min-w-[220px]">
+									Connection
+								</TableHead>
+								<TableHead scope="col" className="w-[120px]">
+									Connector
+								</TableHead>
+								<TableHead scope="col" className="w-[150px]">
+									Device
+								</TableHead>
+								<TableHead scope="col" className="w-[170px]">
+									Auth kind
+								</TableHead>
+								<TableHead scope="col" className="w-[150px]">
+									Status
+								</TableHead>
+								<TableHead scope="col" className="w-[130px]">
+									Last used
+								</TableHead>
+								<TableHead scope="col" className="w-[120px] text-right">
 									<span className="sr-only">Actions</span>
 								</TableHead>
 							</TableRow>
@@ -152,44 +150,53 @@ export function ConnectorsPanel({
 							{credentials.map((credential) => {
 								const revoked = credential.status === "revoked";
 								return (
-									<TableRow key={credential.id} className="border-line-subtle">
-										<TableCell>
-											<span className="text-sm font-medium text-ink">
+									<TableRow
+										key={credential.id}
+										className="h-11 border-line-subtle"
+									>
+										<TableCell className="py-1">
+											<span className="text-sm text-ink">
 												{credential.displayName}
 											</span>
-											<p className="mt-0.5 break-all font-mono text-[11px] text-ink-muted">
+											<p
+												className="mt-1 truncate font-mono text-[11px] text-ink-muted"
+												title={
+													credential.scopes.length > 0
+														? `${credential.credentialRef} · ${credential.scopes.join(", ")}`
+														: credential.credentialRef
+												}
+											>
 												{credential.credentialRef}
+												{credential.scopes.length > 0 ? (
+													<span className="font-sans">
+														{" "}
+														· {credential.scopes.join(", ")}
+													</span>
+												) : null}
 											</p>
-											{credential.scopes.length > 0 ? (
-												<p className="mt-0.5 text-[11px] text-ink-muted">
-													Scopes: {credential.scopes.join(", ")}
-												</p>
-											) : null}
 										</TableCell>
-										<TableCell className="text-xs text-ink-secondary">
+										<TableCell className="py-1 text-xs text-ink-secondary">
 											{connectorLabel(credential.connectorId)}
 										</TableCell>
-										<TableCell className="text-xs text-ink-secondary">
+										<TableCell className="py-1 text-xs text-ink-secondary">
 											{deviceNameFor(devices, credential.deviceId)}
 										</TableCell>
-										<TableCell className="text-xs text-ink-secondary">
+										<TableCell className="py-1 text-xs text-ink-secondary">
 											{authKindLabel(credential.authKind)}
 										</TableCell>
-										<TableCell>
-											<StatusBadge status={credential.status} />
+										<TableCell className="py-1">
+											<StatusMark status={credential.status} />
 										</TableCell>
-										<TableCell className="text-xs text-ink-secondary">
+										<TableCell className="py-1 text-xs text-ink-secondary">
 											{credential.lastUsedAt ? (
 												<RelativeTime value={credential.lastUsedAt} />
 											) : (
 												<span className="text-ink-muted">Never used</span>
 											)}
 										</TableCell>
-										<TableCell>
+										<TableCell className="py-1 text-right">
 											{revoked ? (
-												<span className="text-xs text-ink-muted">
-													Disconnected
-												</span>
+												<span className="text-xs text-ink-muted">—</span>
 											) : canManage ? (
 												<Button
 													type="button"
@@ -198,7 +205,6 @@ export function ConnectorsPanel({
 													className="text-danger hover:text-danger"
 													onClick={() => setRevokeTarget(credential)}
 												>
-													<TrashIcon />
 													Disconnect
 													<span className="sr-only">
 														{" "}
@@ -231,6 +237,6 @@ export function ConnectorsPanel({
 				}}
 				onRevoked={onChanged}
 			/>
-		</Section>
+		</ConsoleSection>
 	);
 }

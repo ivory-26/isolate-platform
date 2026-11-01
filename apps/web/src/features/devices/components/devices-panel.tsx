@@ -1,15 +1,11 @@
 import { useState } from "react";
-import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { RelativeTime } from "@/components/common/relative-time";
-import { Section } from "@/components/common/section";
-import { StatusBadge } from "@/components/common/status-badge";
-import {
-	CpuIcon,
-	RefreshIcon,
-	TrashIcon,
-	WarningIcon,
-} from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
+import { ConsoleNote } from "@/components/console/note";
+import { ConsoleSection } from "@/components/console/section";
+import { StatusMark } from "@/components/console/status-mark";
+import { PlusIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -25,6 +21,8 @@ import type { DeviceView } from "../contracts";
 import { RegisterDeviceDialog } from "./register-device-dialog";
 import { RevokeDeviceDialog } from "./revoke-device-dialog";
 import { RotateDeviceDialog } from "./rotate-device-dialog";
+
+const SKELETON_ROWS = ["one", "two", "three"];
 
 export function DevicesPanel({
 	devices,
@@ -44,35 +42,39 @@ export function DevicesPanel({
 	const [registerOpen, setRegisterOpen] = useState(false);
 	const [rotateTarget, setRotateTarget] = useState<DeviceView | null>(null);
 	const [revokeTarget, setRevokeTarget] = useState<DeviceView | null>(null);
+	const registerAction = canManage ? (
+		<Button type="button" size="sm" onClick={() => setRegisterOpen(true)}>
+			<PlusIcon />
+			Register device
+		</Button>
+	) : null;
 
 	return (
-		<Section
+		<ConsoleSection
+			id="registered-devices"
 			title="Registered devices"
 			description="Each device authenticates with its own token. The token is stored only as a hash on the server."
 			action={
-				canManage ? (
-					<Button type="button" size="sm" onClick={() => setRegisterOpen(true)}>
-						<CpuIcon />
-						Register device
-					</Button>
-				) : null
+				canManage && devices && devices.length > 0 ? registerAction : null
 			}
 		>
 			{!canManage ? (
-				<div className="mb-4 flex items-start gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs text-ink-secondary">
-					<WarningIcon size={14} className="mt-0.5 shrink-0 text-ink-muted" />
-					<p className="leading-5">
-						Your role can read devices but not register, rotate or revoke them.
-						Owners and admins manage devices.
-					</p>
-				</div>
+				<ConsoleNote role="note" className="mb-3">
+					Your role can read devices but not register, rotate or revoke them.
+					Owners and admins manage devices.
+				</ConsoleNote>
 			) : null}
 
 			{isLoading ? (
-				<div className="space-y-2" aria-busy="true" aria-live="polite">
-					<Skeleton className="h-10 w-full" />
-					<Skeleton className="h-10 w-full" />
-					<Skeleton className="h-10 w-3/4" />
+				<div
+					className="divide-y divide-line-subtle border-y border-line-subtle"
+					aria-busy="true"
+					aria-live="polite"
+				>
+					<span className="sr-only">Loading devices</span>
+					{SKELETON_ROWS.map((row) => (
+						<Skeleton key={row} className="h-12 w-full" />
+					))}
 				</div>
 			) : error ? (
 				<ErrorState
@@ -81,35 +83,27 @@ export function DevicesPanel({
 					onRetry={onRetry}
 				/>
 			) : devices === undefined || devices.length === 0 ? (
-				<EmptyState
-					icon={CpuIcon}
+				<EmptyRow
 					title="No devices registered"
 					description="Register a device to run connector calls from its own keychain. The server never receives a vendor key."
-					action={
-						canManage ? (
-							<Button
-								type="button"
-								size="sm"
-								onClick={() => setRegisterOpen(true)}
-							>
-								<CpuIcon />
-								Register the first device
-							</Button>
-						) : null
-					}
+					action={registerAction}
 				/>
 			) : (
-				<div className="overflow-x-auto rounded-lg border border-line-subtle">
+				<div className="border-y border-line-subtle">
 					<Table>
 						<caption className="sr-only">
 							Devices registered in the active organization
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead>Device</TableHead>
-								<TableHead className="w-[140px]">Status</TableHead>
-								<TableHead className="w-[180px]">Last seen</TableHead>
-								<TableHead className="w-[220px]">
+								<TableHead scope="col">Device</TableHead>
+								<TableHead scope="col" className="w-[140px]">
+									Status
+								</TableHead>
+								<TableHead scope="col" className="w-[180px]">
+									Last seen
+								</TableHead>
+								<TableHead scope="col" className="w-[200px] text-right">
 									<span className="sr-only">Actions</span>
 								</TableHead>
 							</TableRow>
@@ -118,17 +112,17 @@ export function DevicesPanel({
 							{devices.map((device) => {
 								const revoked = device.status === "revoked";
 								return (
-									<TableRow key={device.id} className="border-line-subtle">
+									<TableRow key={device.id} className="h-12 border-line-subtle">
 										<TableCell>
-											<span className="text-sm font-medium text-ink">
+											<span className="text-sm text-ink">
 												{device.displayName}
 											</span>
-											<p className="mt-0.5 font-mono text-[11px] text-ink-muted">
+											<p className="mt-1 font-mono text-[11px] text-ink-muted">
 												{device.id.slice(0, 12)}…
 											</p>
 										</TableCell>
 										<TableCell>
-											<StatusBadge status={device.status} />
+											<StatusMark status={device.status} />
 										</TableCell>
 										<TableCell className="text-xs text-ink-secondary">
 											{device.lastSeenAt ? (
@@ -137,18 +131,17 @@ export function DevicesPanel({
 												<span className="text-ink-muted">Never seen</span>
 											)}
 										</TableCell>
-										<TableCell>
+										<TableCell className="text-right">
 											{revoked ? (
-												<span className="text-xs text-ink-muted">Revoked</span>
+												<span className="text-xs text-ink-muted">—</span>
 											) : canManage ? (
-												<div className="flex items-center gap-2">
+												<div className="flex items-center justify-end gap-2">
 													<Button
 														type="button"
 														variant="outline"
 														size="xs"
 														onClick={() => setRotateTarget(device)}
 													>
-														<RefreshIcon />
 														Rotate
 														<span className="sr-only">
 															{" "}
@@ -162,7 +155,6 @@ export function DevicesPanel({
 														className="text-danger hover:text-danger"
 														onClick={() => setRevokeTarget(device)}
 													>
-														<TrashIcon />
 														Revoke
 														<span className="sr-only">
 															{" "}
@@ -203,6 +195,6 @@ export function DevicesPanel({
 				}}
 				onRevoked={onChanged}
 			/>
-		</Section>
+		</ConsoleSection>
 	);
 }

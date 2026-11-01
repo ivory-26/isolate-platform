@@ -367,6 +367,7 @@ function claimPayload(call: ConnectorCallRecord, credentialRef: string) {
 		credentialRef: ref.data,
 		toolName: call.toolName,
 		params,
+		traceparent: call.traceparent,
 		deadlineAt: call.expiresAt.toISOString(),
 	};
 }

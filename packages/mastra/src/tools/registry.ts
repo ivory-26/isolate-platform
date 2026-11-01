@@ -65,6 +65,8 @@ export type ToolCallContext = {
 	 * persisted task row, never by the model.
 	 */
 	fileOwnership?: readonly string[];
+	/** W3C traceparent of the run, stamped on connector calls for correlation. */
+	traceparent?: string;
 };
 
 /**

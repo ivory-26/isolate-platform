@@ -133,6 +133,8 @@ export type CodingAgentRuntimeFactoryOptions = {
 		scopes?: readonly string[];
 		/** Wave 7: authored paths the task may modify; empty means no writes. */
 		fileOwnership?: readonly string[];
+		/** W3C traceparent propagated onto connector calls for correlation. */
+		traceparent?: string;
 	};
 	/**
 	 * Wave 9: audit hook for every gated tool call (executed, denied or

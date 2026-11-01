@@ -73,6 +73,7 @@ export class InMemoryConnectorCallRepository
 			connectorId: normalized.connectorId,
 			toolName: normalized.toolName,
 			params: normalized.params,
+			traceparent: normalized.traceparent,
 			status: "queued",
 			result: null,
 			errorCode: null,

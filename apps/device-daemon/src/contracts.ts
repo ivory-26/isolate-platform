@@ -42,6 +42,11 @@ export const deviceCallSchema = z.strictObject({
 			"too many params",
 		)
 		.default({}),
+	traceparent: z
+		.string()
+		.regex(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/)
+		.nullable()
+		.optional(),
 	deadlineAt: z.iso.datetime({ offset: true }),
 });
 

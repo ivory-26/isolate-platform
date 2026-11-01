@@ -40,6 +40,7 @@ import {
 	createLoggerTraceSink,
 	createRunTracer,
 	errorCodeOf,
+	formatTraceparent,
 	isPlatformError,
 	type Logger,
 	modelCallCostUsd,
@@ -1060,6 +1061,7 @@ function createHandler(
 										organizationId: job.organizationId,
 										taskId: job.taskId,
 										scopes: [],
+										traceparent: formatTraceparent(runTrace),
 										// Wave 7: the tool gate only permits writes inside
 										// the authored ownership list.
 										...(mode === null

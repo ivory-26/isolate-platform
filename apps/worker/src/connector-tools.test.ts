@@ -148,6 +148,7 @@ function recordFor(input: EnqueueInput, index: number): ConnectorCallRecord {
 		connectorId: input.connectorId,
 		toolName: input.toolName,
 		params: input.params,
+		traceparent: input.traceparent ?? null,
 		status: "queued",
 		result: null,
 		errorCode: null,

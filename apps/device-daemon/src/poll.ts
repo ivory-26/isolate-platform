@@ -288,6 +288,8 @@ async function executeCall(
 		connector: call.connectorId,
 		outcome: result.ok ? "ok" : "error",
 		durationMs,
+		// Correlate the device-side provider call with the enqueuing run.
+		traceId: call.traceparent?.split("-")[1] ?? null,
 	});
 	return posted;
 }

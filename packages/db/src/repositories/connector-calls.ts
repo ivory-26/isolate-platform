@@ -68,6 +68,7 @@ export type ConnectorCallRecord = {
 	connectorId: string;
 	toolName: string;
 	params: Record<string, unknown>;
+	traceparent: string | null;
 	status: ConnectorCallStatus;
 	result: Record<string, unknown> | null;
 	errorCode: string | null;
@@ -88,6 +89,8 @@ export type EnqueueConnectorCallInput = {
 	/** Typed tool arguments only; never a provider secret. */
 	params: Record<string, unknown>;
 	ttlMs?: number;
+	/** W3C traceparent for the run that enqueued this call. */
+	traceparent?: string | null;
 };
 
 export type ConnectorCallWriteResult =
@@ -250,6 +253,7 @@ export function normalizeConnectorCallEnqueueInput(
 	connectorId: string;
 	toolName: string;
 	params: Record<string, unknown>;
+	traceparent: string | null;
 	ttlMs: number;
 } {
 	const organizationId = requireBoundedId(
@@ -294,7 +298,20 @@ export function normalizeConnectorCallEnqueueInput(
 		toolName: input.toolName,
 		params,
 		ttlMs: normalizeTtl(input.ttlMs),
+		traceparent: normalizeTraceparent(input.traceparent),
 	};
+}
+
+function normalizeTraceparent(value: unknown): string | null {
+	if (value === undefined || value === null) return null;
+	if (
+		typeof value !== "string" ||
+		value.length > 55 ||
+		!/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(value)
+	) {
+		throw validationError("traceparent is invalid");
+	}
+	return value;
 }
 
 export function normalizeConnectorCallWriteInput(
@@ -333,8 +350,8 @@ export function normalizeConnectorCallClaimLimit(value: unknown): number {
 }
 
 const CALL_COLUMNS = `id, organization_id, device_id, credential_id, task_id,
-	connector_id, tool_name, params, status, result, error_code, attempts,
-	claimed_at, completed_at, expires_at, created_at`;
+	connector_id, tool_name, params, traceparent, status, result, error_code,
+	attempts, claimed_at, completed_at, expires_at, created_at`;
 
 function toDate(value: unknown, field: string): Date {
 	if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -396,6 +413,7 @@ export function mapConnectorCallRow(
 		connectorId: String(row.connector_id),
 		toolName: String(row.tool_name),
 		params: toJsonObject(row.params, "params"),
+		traceparent: row.traceparent === null ? null : String(row.traceparent),
 		status,
 		result:
 			row.result === null || row.result === undefined
@@ -413,9 +431,9 @@ export function mapConnectorCallRow(
 const STMT = {
 	insert: `INSERT INTO connector_calls (
 		organization_id, device_id, credential_id, task_id, connector_id,
-		tool_name, params, status, expires_at
-	) VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, 'queued',
-		now() + make_interval(secs => $8::double precision / 1000.0))
+		tool_name, params, traceparent, status, expires_at
+	) VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, $8, 'queued',
+		now() + make_interval(secs => $9::double precision / 1000.0))
 	RETURNING ${CALL_COLUMNS}`,
 	// Atomic batch claim: SKIP LOCKED so two pollers never receive the same call.
 	claimNext: `UPDATE connector_calls SET
@@ -559,6 +577,7 @@ export class PostgresConnectorCallRepository
 			normalized.connectorId,
 			normalized.toolName,
 			JSON.stringify(normalized.params),
+			normalized.traceparent,
 			normalized.ttlMs,
 		])) as unknown as Record<string, unknown>[];
 		if (rows.length === 0) {

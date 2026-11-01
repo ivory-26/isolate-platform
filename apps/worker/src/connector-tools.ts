@@ -264,6 +264,7 @@ export function createConnectorToolImplementations(
 				toolName,
 				params,
 				ttlMs: timings.ttlMs,
+				traceparent: context.traceparent ?? null,
 			});
 
 			const outcome: ConnectorCallOutcome | null = await deps.calls.awaitResult(

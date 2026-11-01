@@ -52,34 +52,32 @@ export function RunsFilterBar({
 			: repositories;
 
 	return (
-		<div className="flex flex-wrap items-end gap-3 rounded-lg border border-line-subtle bg-surface/40 px-4 py-3">
+		<div className="flex flex-wrap items-center gap-2">
 			<form
 				key={search.q}
-				className="flex min-w-[220px] flex-1 items-end gap-2"
+				className="flex min-w-[220px] flex-1 items-center gap-1.5"
 				onSubmit={(event) => {
 					event.preventDefault();
 					const value = new FormData(event.currentTarget).get("q");
 					onSearchChange({ q: typeof value === "string" ? value : "" });
 				}}
 			>
-				<div className="min-w-0 flex-1 space-y-1">
-					<Label htmlFor="runs-q" className="text-xs text-ink-muted">
-						Search task id or branch
-					</Label>
-					<Input
-						id="runs-q"
-						name="q"
-						defaultValue={search.q}
-						placeholder="Task id or branch"
-						autoComplete="off"
-						spellCheck={false}
-						disabled={disabled}
-						className="font-mono text-xs"
-					/>
-				</div>
+				<Label htmlFor="runs-q" className="sr-only">
+					Search task id or branch
+				</Label>
+				<Input
+					id="runs-q"
+					name="q"
+					defaultValue={search.q}
+					placeholder="Search task id or branch"
+					autoComplete="off"
+					spellCheck={false}
+					disabled={disabled}
+					className="h-8 max-w-[320px] font-mono text-[11px]"
+				/>
 				<Button
 					type="submit"
-					variant="outline"
+					variant="ghost"
 					size="icon-sm"
 					aria-label="Apply search"
 					title="Apply search"
@@ -102,82 +100,84 @@ export function RunsFilterBar({
 				) : null}
 			</form>
 
-			<div className="space-y-1">
-				<Label htmlFor="runs-status" className="text-xs text-ink-muted">
-					Status
-				</Label>
-				<Select
-					value={search.status}
-					onValueChange={(value) =>
-						onSearchChange({ status: value as RunsSearch["status"] })
-					}
-					disabled={disabled}
+			<Label htmlFor="runs-status" className="sr-only">
+				Status
+			</Label>
+			<Select
+				value={search.status}
+				onValueChange={(value) =>
+					onSearchChange({ status: value as RunsSearch["status"] })
+				}
+				disabled={disabled}
+			>
+				<SelectTrigger
+					id="runs-status"
+					size="sm"
+					className="h-8 min-w-[140px] text-[11px]"
 				>
-					<SelectTrigger
-						id="runs-status"
-						size="sm"
-						className="h-8 min-w-[150px]"
-					>
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						{RUN_STATUS_FILTERS.map((status) => (
-							<SelectItem key={status} value={status}>
-								{status === "all" ? "All statuses" : statusLabel(status)}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</div>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{RUN_STATUS_FILTERS.map((status) => (
+						<SelectItem key={status} value={status}>
+							{status === "all" ? "All statuses" : statusLabel(status)}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 
-			<div className="space-y-1">
-				<Label htmlFor="runs-repo" className="text-xs text-ink-muted">
-					Repository
-				</Label>
-				<Select
-					value={search.repo === "" ? "all" : search.repo}
-					onValueChange={(value) =>
-						onSearchChange({ repo: value === "all" ? "" : value })
-					}
-					disabled={disabled || repoOptions.length === 0}
+			<Label htmlFor="runs-repo" className="sr-only">
+				Repository
+			</Label>
+			<Select
+				value={search.repo === "" ? "all" : search.repo}
+				onValueChange={(value) =>
+					onSearchChange({ repo: value === "all" ? "" : value })
+				}
+				disabled={disabled || repoOptions.length === 0}
+			>
+				<SelectTrigger
+					id="runs-repo"
+					size="sm"
+					className="h-8 min-w-[170px] text-[11px]"
 				>
-					<SelectTrigger id="runs-repo" size="sm" className="h-8 min-w-[190px]">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="all">All repositories</SelectItem>
-						{repoOptions.map((repo) => (
-							<SelectItem key={repo.id} value={repo.id}>
-								{repo.fullName}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</div>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="all">All repositories</SelectItem>
+					{repoOptions.map((repo) => (
+						<SelectItem key={repo.id} value={repo.id}>
+							{repo.fullName}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 
-			<div className="space-y-1">
-				<Label htmlFor="runs-sort" className="text-xs text-ink-muted">
-					Sort
-				</Label>
-				<Select
-					value={search.sort}
-					onValueChange={(value) =>
-						onSearchChange({ sort: value as RunsSearch["sort"] })
-					}
-					disabled={disabled}
+			<Label htmlFor="runs-sort" className="sr-only">
+				Sort
+			</Label>
+			<Select
+				value={search.sort}
+				onValueChange={(value) =>
+					onSearchChange({ sort: value as RunsSearch["sort"] })
+				}
+				disabled={disabled}
+			>
+				<SelectTrigger
+					id="runs-sort"
+					size="sm"
+					className="h-8 min-w-[150px] text-[11px]"
 				>
-					<SelectTrigger id="runs-sort" size="sm" className="h-8 min-w-[170px]">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						{RUN_SORTS.map((sort) => (
-							<SelectItem key={sort} value={sort}>
-								{SORT_LABELS[sort]}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</div>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{RUN_SORTS.map((sort) => (
+						<SelectItem key={sort} value={sort}>
+							{SORT_LABELS[sort]}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 
 			{filtered ? (
 				<Button
@@ -187,8 +187,7 @@ export function RunsFilterBar({
 					onClick={onReset}
 					disabled={disabled}
 				>
-					<XIcon />
-					Clear filters
+					Clear
 				</Button>
 			) : null}
 		</div>

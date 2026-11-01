@@ -1,19 +1,14 @@
 import { Link } from "@tanstack/react-router";
-import type { ComponentType } from "react";
 import { BrandMark } from "@/components/brand/brand-mark";
 import { ShaderBackdrop } from "@/components/brand/shader-backdrop";
 import {
-	type AppIconProps,
 	ApproveIcon,
 	ArrowRightIcon,
 	DatabaseIcon,
 	DevicesIcon,
 	KeyIcon,
 	PlayIcon,
-	PlusIcon,
-	ServerIcon,
 	ShieldCheckIcon,
-	TaskIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 
@@ -24,156 +19,95 @@ const facts = [
 	["Connectors", "Ten supported"],
 ];
 
-const capabilities: {
-	icon: ComponentType<AppIconProps>;
-	title: string;
-	copy: string;
-}[] = [
-	{
-		icon: TaskIcon,
-		title: "Bounded tasks",
-		copy: "Every task carries a goal, file ownership, acceptance criteria, and hard turn, time, token and cost budgets.",
-	},
-	{
-		icon: ShieldCheckIcon,
-		title: "Isolated execution",
-		copy: "The agent works in a disposable sandbox with deny-by-default egress. The repository’s validation command runs before any push.",
-	},
-	{
-		icon: ApproveIcon,
-		title: "A human boundary",
-		copy: "Branches and pull requests are approval-gated against the exact payload and commit. Decisions and denials are audited.",
-	},
-];
-
 const lifecycle = [
 	{
-		step: "01",
-		icon: PlusIcon,
+		icon: PlayIcon,
 		title: "Queue",
 		copy: "Pin a workflow version and submit one bounded task.",
 	},
 	{
-		step: "02",
-		icon: PlayIcon,
+		icon: ShieldCheckIcon,
 		title: "Execute",
 		copy: "A worker claims the job and provisions an isolated sandbox.",
 	},
 	{
-		step: "03",
-		icon: ShieldCheckIcon,
+		icon: DatabaseIcon,
 		title: "Validate",
 		copy: "The diff gate and the repository’s validation command decide.",
 	},
 	{
-		step: "04",
 		icon: ApproveIcon,
 		title: "Approve",
 		copy: "A person authorizes the exact push or pull request.",
 	},
 ];
 
-function DashboardFrame() {
-	return (
-		<div className="relative mx-auto w-full max-w-[1120px]">
-			<div
-				aria-hidden="true"
-				className="absolute -inset-x-12 -top-16 h-64 rounded-full bg-brand/10 blur-3xl"
-			/>
-			<div className="relative overflow-hidden rounded-xl border border-line bg-surface p-1.5 shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
-				<div className="flex h-8 items-center gap-2 border-b border-line-subtle px-3">
-					<span className="size-2 rounded-full border border-line-strong bg-elevated" />
-					<span className="size-2 rounded-full border border-line-strong bg-elevated" />
-					<span className="size-2 rounded-full border border-line-strong bg-elevated" />
-					<span className="ml-2 truncate rounded bg-canvas px-2 py-0.5 font-mono text-[10px] text-ink-muted">
-						isolate.local/overview
-					</span>
-				</div>
-				<img
-					src="/images/dashboard-overview.png"
-					width={1600}
-					height={1200}
-					alt="Isolate Overview dashboard showing active runs, pending approvals, recent activity and a registered device"
-					loading="eager"
-					decoding="async"
-					className="block w-full"
-				/>
-			</div>
-			<p className="mt-3 text-center font-mono text-[10px] text-ink-muted">
-				Illustrative product view. Data is synthetic.
-			</p>
-		</div>
-	);
-}
+const auditRows = [
+	["task.submitted", "worker", "review_ready · +2 files"],
+	["sandbox.provisioned", "worker", "1.2 s · egress denied"],
+	["validation.finished", "worker", "exit 0 · 214 checks"],
+	["approval.requested", "worker", "push · payload 9f3c…"],
+	["approval.decided", "sahil", "approved · audited"],
+];
 
-function ScreenshotPanel({
+function Screenshot({
 	src,
 	alt,
 	width,
 	height,
 	className,
-	cropTop = false,
 }: {
 	src: string;
 	alt: string;
 	width: number;
 	height: number;
 	className?: string;
-	cropTop?: boolean;
 }) {
 	return (
-		<div
-			className={`overflow-hidden rounded-lg border border-line-subtle bg-canvas ${
-				cropTop ? "relative aspect-[2.5/1]" : ""
-			} ${className ?? ""}`}
+		<figure
+			className={`overflow-hidden rounded-xl border border-line-subtle bg-surface p-1 ${className ?? ""}`}
 		>
 			<img
 				src={src}
 				width={width}
 				height={height}
 				alt={alt}
-				loading="eager"
+				loading="lazy"
 				decoding="async"
-				className={
-					cropTop
-						? "absolute inset-0 h-full w-full object-cover object-top"
-						: "block w-full"
-				}
+				className="block w-full rounded-[10px] border border-line-subtle/60"
 			/>
-		</div>
+		</figure>
 	);
 }
 
 function TrustDiagram() {
 	return (
-		<div className="rounded-lg border border-line-subtle bg-canvas/70 p-4">
-			<div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr_auto_1fr] sm:items-center">
-				<div className="rounded-md border border-line-subtle bg-elevated p-3">
+		<div className="rounded-xl border border-line-subtle bg-elevated/40">
+			<div className="grid divide-y divide-line-subtle sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+				<div className="p-5">
 					<KeyIcon size={18} className="text-brand" />
-					<p className="mt-2 text-sm font-medium text-ink">Your device</p>
-					<p className="mt-1 text-xs leading-5 text-ink-muted">
-						Vendor key stays in the local keychain.
+					<p className="mt-3 text-sm font-medium text-ink">Your device</p>
+					<p className="mt-1.5 text-[13px] leading-5 text-ink-muted">
+						The vendor key stays in the local keychain.
 					</p>
 				</div>
-				<ArrowRightIcon className="mx-auto text-ink-muted" />
-				<div className="rounded-md border border-line-subtle bg-elevated p-3">
+				<div className="p-5">
 					<DevicesIcon size={18} className="text-ink-secondary" />
-					<p className="mt-2 text-sm font-medium text-ink">Device daemon</p>
-					<p className="mt-1 text-xs leading-5 text-ink-muted">
+					<p className="mt-3 text-sm font-medium text-ink">Device daemon</p>
+					<p className="mt-1.5 text-[13px] leading-5 text-ink-muted">
 						Claims typed calls and runs them locally.
 					</p>
 				</div>
-				<ArrowRightIcon className="mx-auto text-ink-muted" />
-				<div className="rounded-md border border-line-subtle bg-elevated p-3">
-					<ServerIcon size={18} className="text-ink-secondary" />
-					<p className="mt-2 text-sm font-medium text-ink">Isolate server</p>
-					<p className="mt-1 text-xs leading-5 text-ink-muted">
+				<div className="p-5">
+					<DatabaseIcon size={18} className="text-ink-secondary" />
+					<p className="mt-3 text-sm font-medium text-ink">Control plane</p>
+					<p className="mt-1.5 text-[13px] leading-5 text-ink-muted">
 						Stores a token hash and connector metadata only.
 					</p>
 				</div>
 			</div>
-			<div className="mt-4 flex items-center gap-2 border-t border-line-subtle pt-3 text-xs text-ink-muted">
-				<DatabaseIcon size={16} />
+			<div className="flex items-center gap-2 border-t border-line-subtle px-5 py-3 font-mono text-[11px] text-ink-muted">
+				<ShieldCheckIcon size={14} />
 				No vendor secret is stored server-side, in logs, or in the sandbox.
 			</div>
 		</div>
@@ -182,103 +116,124 @@ function TrustDiagram() {
 
 export function LandingPage() {
 	return (
-		<div className="min-h-dvh bg-canvas">
-			<header className="sticky top-0 z-40 border-b border-line-subtle bg-canvas">
-				<div className="mx-auto flex h-16 w-full max-w-[1296px] items-center justify-between gap-4 px-4 lg:px-6">
+		<div className="relative min-h-dvh">
+			<ShaderBackdrop />
+			<header className="sticky top-0 z-40 border-b border-line-subtle/80 bg-canvas/80 backdrop-blur-sm">
+				<div className="mx-auto flex h-16 w-full max-w-[1200px] items-center justify-between gap-4 px-5 lg:px-8">
 					<Link
 						to="/"
 						className="flex items-center gap-2.5"
 						aria-label="Isolate home"
 					>
-						<BrandMark className="size-8" />
+						<BrandMark className="size-7" />
 						<span className="text-[15px] font-semibold tracking-tight text-ink">
 							Isolate
 						</span>
 					</Link>
 					<nav
-						className="hidden items-center gap-7 text-sm text-ink-secondary md:flex"
+						className="hidden items-center gap-8 text-[13px] text-ink-secondary md:flex"
 						aria-label="Landing navigation"
 					>
-						<a
-							href="#capabilities"
-							className="transition-colors hover:text-ink"
-						>
-							Capabilities
+						<a href="#product" className="transition-colors hover:text-ink">
+							Product
 						</a>
 						<a href="#lifecycle" className="transition-colors hover:text-ink">
 							Lifecycle
 						</a>
 						<a href="#trust" className="transition-colors hover:text-ink">
-							Trust boundary
+							Trust
 						</a>
 					</nav>
-					<div className="flex items-center gap-2">
-						<Button asChild variant="ghost" size="sm">
-							<Link to="/login">Log in</Link>
-						</Button>
-						<Button asChild size="sm">
+					<div className="flex items-center gap-4">
+						<Link
+							to="/login"
+							className="hidden text-[13px] text-ink-secondary transition-colors hover:text-ink sm:block"
+						>
+							Log in
+						</Link>
+						<Button asChild className="rounded-full px-4">
 							<Link to="/signup">Create account</Link>
 						</Button>
 					</div>
 				</div>
 			</header>
 
-			<main>
-				<section className="relative bg-canvas">
-					<div className="relative z-10 mx-auto w-full max-w-[1296px] px-4 pt-20 lg:px-6 lg:pt-28">
-						<div className="mx-auto max-w-4xl text-center motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2 motion-safe:duration-500">
-							<p className="font-mono text-xs text-brand">
-								Autonomous DevSecOps control plane
-							</p>
-							<h1 className="mx-auto mt-5 max-w-4xl text-[clamp(2.9rem,6.2vw,4.8rem)] font-semibold leading-[0.98] tracking-[-0.035em] text-ink">
-								Autonomy with an approval boundary.
-							</h1>
-							<p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-ink-secondary">
-								Isolate runs coding agents in isolated sandboxes, validates the
-								change, and pauses at the exact moment a human must approve.
-							</p>
-							<div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-								<Button asChild size="lg">
-									<Link to="/login">
-										Open the control plane
-										<ArrowRightIcon />
-									</Link>
-								</Button>
-								<Button asChild variant="outline" size="lg">
-									<a href="#lifecycle">See how a task moves</a>
-								</Button>
-							</div>
+			<main className="relative">
+				<section className="relative flex min-h-[calc(100svh-4rem)] flex-col justify-center overflow-hidden px-5 pb-16 pt-20 lg:px-8">
+					<div
+						aria-hidden="true"
+						className="pointer-events-none absolute left-1/2 top-1/3 h-[520px] w-[900px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse_at_center,rgba(2,7,10,0.78)_0%,rgba(2,7,10,0.35)_55%,transparent_100%)]"
+					/>
+					<div className="relative z-10 mx-auto w-full max-w-[1200px] text-center">
+						<h1 className="mx-auto max-w-[19ch] text-[clamp(2.6rem,6vw,4.4rem)] font-medium leading-[1.02] tracking-[-0.035em] text-balance text-ink">
+							Autonomy with an{" "}
+							<span className="text-brand">approval boundary</span>.
+						</h1>
+						<p className="mx-auto mt-6 max-w-[62ch] text-[17px] leading-8 text-ink-secondary">
+							Isolate runs coding agents in isolated sandboxes, validates the
+							change, and pauses at the exact moment a human must approve.
+						</p>
+						<div className="mt-9 flex flex-wrap items-center justify-center gap-3">
+							<Button asChild size="lg" className="rounded-full px-6">
+								<Link to="/login">
+									Open the control plane
+									<ArrowRightIcon />
+								</Link>
+							</Button>
+							<Button
+								asChild
+								variant="outline"
+								size="lg"
+								className="rounded-full border-line bg-canvas/40 px-6 text-ink backdrop-blur-sm"
+							>
+								<a href="#product">See how a task moves</a>
+							</Button>
 						</div>
 					</div>
-					<div className="relative mx-auto w-full max-w-[1296px] px-4 pt-10 pb-20 lg:px-6">
-						<div
-							aria-hidden="true"
-							className="pointer-events-none absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,black_42%,transparent_88%)]"
-						>
-							<ShaderBackdrop variant="landing" />
-						</div>
-						<div className="relative z-10">
-							<DashboardFrame />
-						</div>
+					<div className="relative z-10 mx-auto mt-auto flex w-full max-w-[1200px] items-center justify-between gap-4 pt-20 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-muted">
+						<span className="flex items-center gap-2">
+							<span className="size-1.5 rounded-full bg-brand" />
+							sandbox boundary
+						</span>
+						<span className="hidden sm:block">egress denied by default</span>
+						<span>validation required before push</span>
 					</div>
 				</section>
 
-				<div className="border-y border-line-subtle bg-canvas">
-					<div className="mx-auto grid w-full max-w-[1296px] grid-cols-2 gap-px bg-line-subtle px-4 md:grid-cols-4 lg:px-6">
-						{facts.map(([label, value]) => (
-							<div key={label} className="bg-canvas px-4 py-4 lg:px-6">
-								<p className="font-mono text-[10px] text-ink-muted">{label}</p>
-								<p className="mt-1 text-sm text-ink">{value}</p>
-							</div>
-						))}
+				<section
+					id="product"
+					className="mx-auto w-full max-w-[1200px] px-5 pb-24 lg:px-8"
+				>
+					<div className="mx-auto max-w-[1120px]">
+						<Screenshot
+							src="/images/dashboard-overview.png"
+							alt="Isolate Overview showing active runs, pending approvals, recent activity and a registered device"
+							width={1600}
+							height={1200}
+						/>
+						<p className="mt-3 text-center font-mono text-[10px] text-ink-muted">
+							Illustrative product view · synthetic data
+						</p>
 					</div>
-				</div>
+				</section>
 
-				<section id="capabilities" className="bg-canvas">
-					<div className="mx-auto w-full max-w-[1296px] px-4 py-24 lg:px-6">
-						<div className="max-w-2xl">
-							<p className="font-mono text-xs text-brand">Capabilities</p>
-							<h2 className="mt-3 text-4xl font-medium tracking-tight text-ink">
+				<div className="relative bg-canvas">
+					<div className="border-y border-line-subtle">
+						<div className="mx-auto grid w-full max-w-[1200px] grid-cols-2 divide-x divide-line-subtle px-5 md:grid-cols-4 lg:px-8">
+							{facts.map(([label, value]) => (
+								<div key={label} className="px-4 py-5 first:pl-0 lg:px-6">
+									<p className="font-mono text-[10px] text-ink-muted">
+										{label}
+									</p>
+									<p className="mt-1 text-sm text-ink">{value}</p>
+								</div>
+							))}
+						</div>
+					</div>
+
+					<section className="mx-auto w-full max-w-[1200px] px-5 py-24 lg:px-8 lg:py-32">
+						<div className="max-w-[58ch]">
+							<h2 className="text-[clamp(1.9rem,3.4vw,2.7rem)] font-medium leading-[1.1] tracking-[-0.03em] text-ink">
 								A task boundary you can inspect.
 							</h2>
 							<p className="mt-4 text-base leading-7 text-ink-secondary">
@@ -286,50 +241,33 @@ export function LandingPage() {
 								budget, and a durable record of what happened.
 							</p>
 						</div>
-						<div className="mt-12 grid gap-px overflow-hidden rounded-lg border border-line-subtle bg-line-subtle md:grid-cols-3">
-							{capabilities.map((capability) => {
-								const Glyph = capability.icon;
-								return (
-									<div key={capability.title} className="bg-canvas p-6">
-										<Glyph size={20} className="text-brand" />
-										<h3 className="mt-4 text-sm font-medium text-ink">
-											{capability.title}
-										</h3>
-										<p className="mt-2 text-sm leading-6 text-ink-secondary">
-											{capability.copy}
-										</p>
-									</div>
-								);
-							})}
-						</div>
 
-						<div className="mt-20 grid items-center gap-12 lg:grid-cols-2">
+						<div className="mt-20 grid items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-16">
 							<div>
-								<p className="font-mono text-xs text-brand">Execution</p>
-								<h2 className="mt-3 text-3xl font-medium tracking-tight text-ink">
+								<h3 className="text-[clamp(1.5rem,2.4vw,2rem)] font-medium leading-[1.15] tracking-[-0.02em] text-ink">
 									The sandbox is the worker’s whole world.
-								</h2>
-								<p className="mt-4 text-base leading-7 text-ink-secondary">
+								</h3>
+								<p className="mt-4 max-w-[56ch] text-[15px] leading-7 text-ink-secondary">
 									The agent starts from a clean clone, writes only inside the
 									declared ownership globs, and loses network egress by default.
 									The diff gate rejects anything outside the boundary.
 								</p>
-								<ul className="mt-6 space-y-2 text-sm text-ink-secondary">
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+								<ul className="mt-7 space-y-3 text-[13px] text-ink-secondary">
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="mt-[7px] h-px w-3 shrink-0 bg-brand" />
 										Deny-by-default network and command policy.
 									</li>
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="mt-[7px] h-px w-3 shrink-0 bg-brand" />
 										Validation runs before a branch is pushed.
 									</li>
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="mt-[7px] h-px w-3 shrink-0 bg-brand" />
 										Every tool decision is recorded.
 									</li>
 								</ul>
 							</div>
-							<ScreenshotPanel
+							<Screenshot
 								src="/images/dashboard-active-runs.png"
 								alt="Active runs table from the Isolate Overview dashboard"
 								width={1546}
@@ -337,144 +275,181 @@ export function LandingPage() {
 							/>
 						</div>
 
-						<div className="mt-20 grid items-center gap-12 lg:grid-cols-2">
-							<ScreenshotPanel
+						<div className="mt-20 grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+							<Screenshot
+								className="lg:order-1"
 								src="/images/dashboard-approvals.png"
 								alt="Pending approval panel from the Isolate Overview dashboard"
 								width={998}
 								height={530}
-								cropTop
-								className="lg:order-1"
 							/>
 							<div className="lg:order-2">
-								<p className="font-mono text-xs text-brand">Approval</p>
-								<h2 className="mt-3 text-3xl font-medium tracking-tight text-ink">
+								<h3 className="text-[clamp(1.5rem,2.4vw,2rem)] font-medium leading-[1.15] tracking-[-0.02em] text-ink">
 									Approval is bound to the exact payload.
-								</h2>
-								<p className="mt-4 text-base leading-7 text-ink-secondary">
+								</h3>
+								<p className="mt-4 max-w-[56ch] text-[15px] leading-7 text-ink-secondary">
 									A push or pull request pauses the run. The reviewer sees the
 									repository, branch, commit and payload hash before deciding.
 									The approval cannot be replayed against a different payload.
 								</p>
-								<ul className="mt-6 space-y-2 text-sm text-ink-secondary">
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-orange" />
+								<ul className="mt-7 space-y-3 text-[13px] text-ink-secondary">
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="size-1.5 shrink-0 translate-y-[7px] rounded-full bg-orange" />
 										Separate approve and reject decisions.
 									</li>
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-orange" />
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="size-1.5 shrink-0 translate-y-[7px] rounded-full bg-orange" />
 										High-impact actions require confirmation.
 									</li>
-									<li className="flex gap-2">
-										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-orange" />
+									<li className="flex gap-3 border-t border-line-subtle pt-3">
+										<span className="size-1.5 shrink-0 translate-y-[7px] rounded-full bg-orange" />
 										The decision, actor and payload hash are audited.
 									</li>
 								</ul>
 							</div>
 						</div>
-					</div>
-				</section>
 
-				<section
-					id="lifecycle"
-					className="border-t border-line-subtle bg-elevated/40"
-				>
-					<div className="mx-auto w-full max-w-[1296px] px-4 py-24 lg:px-6">
-						<div className="max-w-2xl">
-							<p className="font-mono text-xs text-brand">Lifecycle</p>
-							<h2 className="mt-3 text-4xl font-medium tracking-tight text-ink">
-								From intent to a reviewed change.
-							</h2>
-						</div>
-						<ol className="mt-12 grid gap-px overflow-hidden rounded-lg border border-line-subtle bg-line-subtle md:grid-cols-4">
-							{lifecycle.map((item) => {
-								const Glyph = item.icon;
-								return (
-									<li key={item.step} className="bg-canvas p-6">
-										<div className="flex items-center justify-between">
-											<span className="font-mono text-xs text-ink-muted">
-												{item.step}
+						<div className="mt-20 grid items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-16">
+							<div>
+								<h3 className="text-[clamp(1.5rem,2.4vw,2rem)] font-medium leading-[1.15] tracking-[-0.02em] text-ink">
+									Every decision leaves a record.
+								</h3>
+								<p className="mt-4 max-w-[56ch] text-[15px] leading-7 text-ink-secondary">
+									Status, stage, actor and timestamp are durable. The run detail
+									page reconstructs the sequence from events, not from a log
+									file someone has to trust.
+								</p>
+							</div>
+							<div className="overflow-hidden rounded-xl border border-line-subtle bg-surface">
+								<div className="flex items-center justify-between border-b border-line-subtle px-4 py-2.5 font-mono text-[10px] text-ink-muted">
+									<span>run events</span>
+									<span>newest last</span>
+								</div>
+								<ul className="divide-y divide-line-subtle/70">
+									{auditRows.map(([event, actor, detail]) => (
+										<li
+											key={event}
+											className="grid grid-cols-[1fr_auto] gap-2 px-4 py-2.5 font-mono text-[11px]"
+										>
+											<span className="text-ink-secondary">{event}</span>
+											<span className="text-ink-muted">{actor}</span>
+											<span className="col-span-2 text-[10px] text-ink-muted">
+												{detail}
 											</span>
-											<Glyph size={18} className="text-ink-muted" />
-										</div>
-										<h3 className="mt-6 text-sm font-medium text-ink">
-											{item.title}
-										</h3>
-										<p className="mt-2 text-sm leading-6 text-ink-secondary">
-											{item.copy}
-										</p>
+										</li>
+									))}
+								</ul>
+							</div>
+						</div>
+					</section>
+
+					<section
+						id="lifecycle"
+						className="border-y border-line-subtle bg-elevated/30"
+					>
+						<div className="mx-auto w-full max-w-[1200px] px-5 py-24 lg:px-8">
+							<div className="max-w-[58ch]">
+								<h2 className="text-[clamp(1.9rem,3.4vw,2.7rem)] font-medium leading-[1.1] tracking-[-0.03em] text-ink">
+									From intent to a reviewed change.
+								</h2>
+							</div>
+							<div className="relative mt-14">
+								<div
+									aria-hidden="true"
+									className="absolute left-0 right-0 top-4 hidden h-px bg-gradient-to-r from-brand/70 via-line-strong to-orange/60 md:block"
+								/>
+								<ol className="grid gap-10 md:grid-cols-4 md:gap-8">
+									{lifecycle.map((item) => {
+										const Glyph = item.icon;
+										return (
+											<li key={item.title} className="relative">
+												<span className="relative z-10 flex size-8 items-center justify-center rounded-full border border-line bg-canvas">
+													<Glyph size={16} className="text-brand" />
+												</span>
+												<h3 className="mt-5 text-sm font-medium text-ink">
+													{item.title}
+												</h3>
+												<p className="mt-2 max-w-[30ch] text-[13px] leading-6 text-ink-muted">
+													{item.copy}
+												</p>
+											</li>
+										);
+									})}
+								</ol>
+							</div>
+						</div>
+					</section>
+
+					<section
+						id="trust"
+						className="mx-auto w-full max-w-[1200px] px-5 py-24 lg:px-8"
+					>
+						<div className="grid gap-12 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center">
+							<div>
+								<h2 className="text-[clamp(1.9rem,3.4vw,2.7rem)] font-medium leading-[1.1] tracking-[-0.03em] text-ink">
+									Your credentials stay on your device.
+								</h2>
+								<p className="mt-4 max-w-[54ch] text-[15px] leading-7 text-ink-secondary">
+									Connectors execute where the keys already live. The control
+									plane records only a device token hash and connector metadata,
+									so a server compromise cannot reach a vendor account.
+								</p>
+								<ul className="mt-6 space-y-2 text-[13px] text-ink-secondary">
+									<li className="flex gap-2">
+										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+										Ten connectors, one device daemon.
 									</li>
-								);
-							})}
-						</ol>
-					</div>
-				</section>
+									<li className="flex gap-2">
+										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+										Typed calls are claimed, bounded and audited.
+									</li>
+									<li className="flex gap-2">
+										<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
+										No platform-held provider keys.
+									</li>
+								</ul>
+							</div>
+							<TrustDiagram />
+						</div>
+					</section>
 
-				<section
-					id="trust"
-					className="border-t border-line-subtle bg-canvas/85"
-				>
-					<div className="mx-auto grid w-full max-w-[1296px] gap-12 px-4 py-24 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center lg:px-6">
-						<div>
-							<p className="font-mono text-xs text-brand">Trust boundary</p>
-							<h2 className="mt-3 text-4xl font-medium tracking-tight text-ink">
-								Your credentials stay on your device.
-							</h2>
-							<p className="mt-4 text-base leading-7 text-ink-secondary">
-								Connectors execute where the keys already live. The control
-								plane records only a device token hash and connector metadata,
-								so a server compromise cannot reach a vendor account.
-							</p>
-							<ul className="mt-6 space-y-2 text-sm text-ink-secondary">
-								<li className="flex gap-2">
-									<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
-									Ten connectors, one device daemon.
-								</li>
-								<li className="flex gap-2">
-									<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
-									Typed calls are claimed, bounded and audited.
-								</li>
-								<li className="flex gap-2">
-									<span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" />
-									No platform-held provider keys.
-								</li>
-							</ul>
+					<section className="border-t border-line-subtle bg-elevated/40">
+						<div className="mx-auto flex w-full max-w-[1200px] flex-col items-start justify-between gap-6 px-5 py-16 lg:flex-row lg:items-center lg:px-8">
+							<div>
+								<h2 className="text-[clamp(1.6rem,2.6vw,2.1rem)] font-medium tracking-[-0.02em] text-ink">
+									Run the work. Keep the proof.
+								</h2>
+								<p className="mt-2 max-w-[52ch] text-sm leading-6 text-ink-secondary">
+									Open the control plane to inspect runs, policy decisions and
+									approval history.
+								</p>
+							</div>
+							<div className="flex flex-wrap gap-3">
+								<Button asChild size="lg" className="rounded-full px-6">
+									<Link to="/login">
+										Open the control plane
+										<ArrowRightIcon />
+									</Link>
+								</Button>
+								<Button
+									asChild
+									variant="outline"
+									size="lg"
+									className="rounded-full px-6"
+								>
+									<Link to="/signup">Create account</Link>
+								</Button>
+							</div>
 						</div>
-						<TrustDiagram />
-					</div>
-				</section>
-
-				<section className="border-t border-line-subtle bg-elevated/50">
-					<div className="mx-auto flex w-full max-w-[1296px] flex-col items-start justify-between gap-6 px-4 py-16 lg:flex-row lg:items-center lg:px-6">
-						<div>
-							<h2 className="text-3xl font-medium tracking-tight text-ink">
-								Run the work. Keep the proof.
-							</h2>
-							<p className="mt-2 max-w-xl text-sm leading-6 text-ink-secondary">
-								Open the control plane to inspect runs, policy decisions and
-								approval history.
-							</p>
-						</div>
-						<div className="flex flex-wrap gap-3">
-							<Button asChild size="lg">
-								<Link to="/login">
-									Open the control plane
-									<ArrowRightIcon />
-								</Link>
-							</Button>
-							<Button asChild variant="outline" size="lg">
-								<Link to="/signup">Create account</Link>
-							</Button>
-						</div>
-					</div>
-				</section>
+					</section>
+				</div>
 			</main>
 
 			<footer className="border-t border-line-subtle bg-canvas">
-				<div className="mx-auto grid w-full max-w-[1296px] gap-10 px-4 py-14 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr] lg:px-6">
+				<div className="mx-auto grid w-full max-w-[1200px] gap-10 px-5 py-14 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr] lg:px-8">
 					<div>
 						<Link to="/" className="flex items-center gap-2.5">
-							<BrandMark className="size-8" />
+							<BrandMark className="size-7" />
 							<span className="text-[15px] font-semibold tracking-tight text-ink">
 								Isolate
 							</span>
@@ -485,8 +460,8 @@ export function LandingPage() {
 						</p>
 					</div>
 					<div>
-						<p className="font-mono text-[10px] text-ink-muted">Product</p>
-						<ul className="mt-3 space-y-2 text-sm text-ink-secondary">
+						<p className="text-xs text-ink-muted">Product</p>
+						<ul className="mt-3 space-y-2 text-[13px] text-ink-secondary">
 							<li>
 								<Link to="/login" className="transition-colors hover:text-ink">
 									Overview
@@ -510,13 +485,10 @@ export function LandingPage() {
 						</ul>
 					</div>
 					<div>
-						<p className="font-mono text-[10px] text-ink-muted">Platform</p>
-						<ul className="mt-3 space-y-2 text-sm text-ink-secondary">
+						<p className="text-xs text-ink-muted">Platform</p>
+						<ul className="mt-3 space-y-2 text-[13px] text-ink-secondary">
 							<li>
-								<a
-									href="#capabilities"
-									className="transition-colors hover:text-ink"
-								>
+								<a href="#product" className="transition-colors hover:text-ink">
 									Isolated execution
 								</a>
 							</li>
@@ -536,8 +508,8 @@ export function LandingPage() {
 						</ul>
 					</div>
 					<div>
-						<p className="font-mono text-[10px] text-ink-muted">Account</p>
-						<ul className="mt-3 space-y-2 text-sm text-ink-secondary">
+						<p className="text-xs text-ink-muted">Account</p>
+						<ul className="mt-3 space-y-2 text-[13px] text-ink-secondary">
 							<li>
 								<Link to="/login" className="transition-colors hover:text-ink">
 									Log in
@@ -552,7 +524,7 @@ export function LandingPage() {
 					</div>
 				</div>
 				<div className="border-t border-line-subtle">
-					<div className="mx-auto flex w-full max-w-[1296px] flex-col gap-2 px-4 py-5 text-xs text-ink-muted sm:flex-row sm:items-center sm:justify-between lg:px-6">
+					<div className="mx-auto flex w-full max-w-[1200px] flex-col gap-2 px-5 py-5 text-xs text-ink-muted sm:flex-row sm:items-center sm:justify-between lg:px-8">
 						<p>© 2026 Isolate</p>
 						<p className="font-mono">
 							Local-first DevSecOps · device-held credentials

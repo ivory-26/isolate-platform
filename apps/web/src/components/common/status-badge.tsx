@@ -14,7 +14,6 @@ import {
 	TickCircleIcon,
 	TriangleAlertIcon,
 } from "@/components/icons";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 type Tone =
@@ -71,14 +70,14 @@ const STATUS: Record<string, Meta> = {
 	claimed: { label: "Claimed", tone: "brand", icon: PlayIcon },
 };
 
-const TONE: Record<Tone, string> = {
-	neutral: "border-line text-ink-secondary bg-elevated",
-	brand: "border-brand/30 bg-brand/10 text-brand",
-	orange: "border-orange/35 bg-orange/10 text-orange",
-	success: "border-success/30 bg-success/10 text-success",
-	warning: "border-warning/30 bg-warning/10 text-warning",
-	danger: "border-danger/30 bg-danger/10 text-danger",
-	muted: "border-line-subtle bg-elevated text-ink-muted",
+const DOT: Record<Tone, string> = {
+	neutral: "bg-ink-muted",
+	brand: "bg-brand",
+	orange: "bg-orange",
+	success: "bg-success",
+	warning: "bg-warning",
+	danger: "bg-danger",
+	muted: "bg-ink-muted",
 };
 
 export function StatusBadge({
@@ -95,19 +94,19 @@ export function StatusBadge({
 		tone: "neutral" as const,
 		icon: ClockIcon,
 	};
-	const Glyph = meta.icon;
 	return (
-		<Badge
-			variant="outline"
+		<span
 			className={cn(
-				"h-6 gap-1.5 rounded-full px-2.5 font-medium text-[11px] leading-none",
-				TONE[meta.tone],
+				"inline-flex items-center gap-2 whitespace-nowrap text-[11px] text-ink-secondary",
 				className,
 			)}
 			data-status={status}
 		>
-			<Glyph size={12} />
+			<span
+				aria-hidden="true"
+				className={cn("size-1.5 shrink-0 rounded-full", DOT[meta.tone])}
+			/>
 			{label ?? meta.label}
-		</Badge>
+		</span>
 	);
 }

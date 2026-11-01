@@ -73,16 +73,16 @@ function RunDetailPending() {
 	return (
 		<PageContainer>
 			<div className="space-y-2 border-b border-line-subtle pb-6">
-				<div className="h-3 w-24 animate-pulse rounded bg-elevated" />
-				<div className="h-8 w-72 animate-pulse rounded-md bg-elevated" />
-				<div className="h-4 w-96 animate-pulse rounded bg-elevated" />
+				<div className="h-3 w-24 rounded bg-elevated/60" />
+				<div className="h-8 w-72 rounded bg-elevated/60" />
+				<div className="h-4 w-96 rounded bg-elevated/40" />
 			</div>
 			<div className="grid gap-px overflow-hidden rounded-lg border border-line-subtle bg-line-subtle sm:grid-cols-2 lg:grid-cols-4">
 				{SKELETON_SLOTS.map((slot) => (
 					<div key={slot} className="h-[92px] bg-surface/60" />
 				))}
 			</div>
-			<div className="h-[280px] animate-pulse rounded-lg border border-line-subtle bg-surface/40" />
+			<div className="h-[280px] rounded bg-elevated/20" />
 		</PageContainer>
 	);
 }
@@ -91,7 +91,6 @@ function RunDetailError({ reset }: { reset: () => void }) {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Run detail"
 				title="Run detail"
 				description="Task identity, lifecycle, tool decisions, usage, approvals and artifacts."
 			/>
@@ -129,7 +128,6 @@ function RunDetailPage() {
 		return (
 			<PageContainer>
 				<PageHeader
-					eyebrow="Run detail"
 					title={
 						<span className="font-mono text-xl">{shortId(taskId, 13)}</span>
 					}
@@ -177,7 +175,6 @@ function RunDetailPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Run detail"
 				title={
 					<span className="flex flex-wrap items-center gap-3">
 						<span className="font-mono text-xl">{shortId(task.id, 13)}</span>
@@ -234,7 +231,7 @@ function RunDetailPage() {
 				}
 			/>
 
-			<MetricStrip>
+			<MetricStrip variant="bare">
 				<Metric
 					label="Task status"
 					value={statusLabel(task.status)}
@@ -276,13 +273,14 @@ function RunDetailPage() {
 			) : null}
 
 			{readOnly ? (
-				<div className="rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs text-ink-muted">
+				<div className="border-y border-line-subtle py-2 text-xs text-ink-muted">
 					Your role in this organization is read-only. Approval decisions and
 					reruns are unavailable.
 				</div>
 			) : null}
 
 			<Section
+				variant="plain"
 				title="Task"
 				description="Identity and provenance as stored on the task row."
 			>
@@ -332,6 +330,7 @@ function RunDetailPage() {
 			</Section>
 
 			<Section
+				variant="plain"
 				title="Execution boundary"
 				description="What the agent was asked to satisfy and which paths it may modify."
 			>
@@ -379,6 +378,7 @@ function RunDetailPage() {
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
 				<div className="min-w-0 space-y-6">
 					<Section
+						variant="plain"
 						title="Lifecycle"
 						description="Durable run events in occurrence order. Event metadata is redacted before it is stored."
 					>
@@ -386,6 +386,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Event log"
 						description="Compact, bounded view of the same event stream with copy support."
 					>
@@ -393,6 +394,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Tool invocations"
 						description="Policy decisions per tool call. Arguments are represented only by their sha256 digest."
 					>
@@ -401,7 +403,7 @@ function RunDetailPage() {
 								No tool invocations were recorded.
 							</p>
 						) : (
-							<div className="overflow-x-auto rounded-md border border-line-subtle">
+							<div className="overflow-x-auto border-y border-line-subtle">
 								<Table>
 									<TableHeader>
 										<TableRow className="border-line-subtle hover:bg-transparent">
@@ -456,6 +458,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Connector calls"
 						description="Device-side provider work. Parameters and results never leave the device; only status metadata is shown."
 					>
@@ -464,7 +467,7 @@ function RunDetailPage() {
 								No connector calls were recorded.
 							</p>
 						) : (
-							<div className="overflow-x-auto rounded-md border border-line-subtle">
+							<div className="overflow-x-auto border-y border-line-subtle">
 								<Table>
 									<TableHeader>
 										<TableRow className="border-line-subtle hover:bg-transparent">
@@ -511,6 +514,7 @@ function RunDetailPage() {
 
 				<div className="min-w-0 space-y-6">
 					<Section
+						variant="plain"
 						title="Approvals"
 						description="Every gate is bound to the exact action payload hash it authorized."
 						action={
@@ -587,6 +591,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Usage"
 						description="Measured usage records only. A missing cost means no trusted price was available."
 					>
@@ -594,6 +599,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Artifacts"
 						description="Bounded previews. Blob references point at object storage and are not fetched here."
 					>
@@ -601,6 +607,7 @@ function RunDetailPage() {
 					</Section>
 
 					<Section
+						variant="plain"
 						title="Workflow runs"
 						description="Durable workflow run rows for this task, oldest first."
 					>
@@ -714,7 +721,7 @@ function UsageSection({ usage }: { usage: RunUsageRecord[] }) {
 					<span className="text-ink-muted">Cost</span> {formatCostUsd(cost)}
 				</span>
 			</div>
-			<div className="overflow-x-auto rounded-md border border-line-subtle">
+			<div className="overflow-x-auto border-y border-line-subtle">
 				<Table>
 					<TableHeader>
 						<TableRow className="border-line-subtle hover:bg-transparent">

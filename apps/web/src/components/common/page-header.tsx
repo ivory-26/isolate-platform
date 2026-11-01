@@ -2,13 +2,13 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function PageHeader({
-	eyebrow,
 	title,
 	description,
 	actions,
 	children,
 	className,
 }: {
+	/** @deprecated Headings carry their own weight; no kicker is rendered. */
 	eyebrow?: string;
 	title: ReactNode;
 	description?: ReactNode;
@@ -24,16 +24,11 @@ export function PageHeader({
 			)}
 		>
 			<div className="min-w-0 space-y-2">
-				{eyebrow ? (
-					<p className="font-mono text-[11px] tracking-[0.12em] text-ink-muted">
-						{eyebrow}
-					</p>
-				) : null}
-				<h1 className="text-2xl font-medium tracking-tight text-ink">
+				<h1 className="text-[26px] font-medium leading-tight tracking-[-0.02em] text-ink">
 					{title}
 				</h1>
 				{description ? (
-					<p className="max-w-3xl text-sm leading-6 text-ink-secondary">
+					<p className="max-w-[70ch] text-[13px] leading-6 text-ink-secondary">
 						{description}
 					</p>
 				) : null}

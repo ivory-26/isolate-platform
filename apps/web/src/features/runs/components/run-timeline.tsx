@@ -16,7 +16,6 @@ import {
 	TerminalIcon,
 	VerifiedIcon,
 } from "@/components/icons";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { RunEventView } from "../contracts";
 import {
@@ -105,12 +104,9 @@ export function RunStageItem({
 					<p className="text-[13px] font-medium text-ink">
 						{eventLabel(event.type)}
 					</p>
-					<Badge
-						variant="outline"
-						className="h-5 rounded-full border-line-subtle bg-elevated px-2 text-[10px] font-normal text-ink-muted"
-					>
+					<span className="text-[10px] text-ink-muted">
 						{ACTOR_LABELS[event.actor]}
-					</Badge>
+					</span>
 				</div>
 				<p className="mt-0.5 font-mono text-[11px] text-ink-muted tabular-nums">
 					<RelativeTime value={event.createdAt} />
@@ -153,7 +149,7 @@ export function RunTimeline({
 	);
 	if (events.length === 0 && traceId === null) {
 		return (
-			<p className="rounded-md border border-dashed border-line px-3 py-4 text-xs text-ink-muted">
+			<p className="border-y border-line-subtle py-3 text-xs text-ink-muted">
 				No lifecycle events recorded for this task yet. A worker writes them as
 				the run advances.
 			</p>
@@ -162,7 +158,7 @@ export function RunTimeline({
 	return (
 		<div className={cn("space-y-4", className)}>
 			{traceId ? (
-				<div className="flex flex-wrap items-center gap-2 rounded-md border border-line-subtle bg-elevated px-3 py-2">
+				<div className="flex flex-wrap items-center gap-2 border-y border-line-subtle py-2">
 					<span className="text-[11px] text-ink-muted">W3C trace</span>
 					<code className="font-mono text-[11px] break-all text-ink-secondary">
 						{traceId}
@@ -171,7 +167,7 @@ export function RunTimeline({
 				</div>
 			) : null}
 			{events.length === 0 ? (
-				<p className="rounded-md border border-dashed border-line px-3 py-4 text-xs text-ink-muted">
+				<p className="border-y border-line-subtle py-3 text-xs text-ink-muted">
 					No lifecycle events recorded for this task yet.
 				</p>
 			) : (

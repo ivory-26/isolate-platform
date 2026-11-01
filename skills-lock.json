@@ -12,6 +12,12 @@
       "sourceType": "github",
       "skillPath": "skills/mastra-factory/SKILL.md",
       "computedHash": "2af192e14eca33ea9d9992e5f70dc0e8af663caba45fdb78d5fa66b42dbffdde"
+    },
+    "unslop": {
+      "source": "heydamir/unslop",
+      "sourceType": "github",
+      "skillPath": "skills/unslop/SKILL.md",
+      "computedHash": "3375a859a14b4283b36e192e864b88971672ad390315995f97081a010dfd832c"
     }
   }
 }

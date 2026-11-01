@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { useSession } from "@/components/auth/SessionProvider";
 import {
 	CheckIcon,
@@ -127,10 +127,10 @@ export function OrganizationMenu({
 				)}
 				<DropdownMenuSeparator />
 				<DropdownMenuItem asChild>
-					<a href="/organizations" className="flex items-center gap-2">
+					<Link to="/organizations" className="flex items-center gap-2">
 						<SettingsIcon size={16} />
 						Manage organizations
-					</a>
+					</Link>
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

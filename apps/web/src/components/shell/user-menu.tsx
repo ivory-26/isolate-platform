@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useSession } from "@/components/auth/SessionProvider";
 import { LogoutIcon, SettingsIcon, UserCircleIcon } from "@/components/icons";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -102,16 +102,16 @@ export function UserMenu() {
 				) : null}
 				<DropdownMenuSeparator />
 				<DropdownMenuItem asChild>
-					<a href="/organizations" className="flex items-center gap-2">
+					<Link to="/organizations" className="flex items-center gap-2">
 						<UserCircleIcon size={16} />
 						Organizations
-					</a>
+					</Link>
 				</DropdownMenuItem>
 				<DropdownMenuItem asChild>
-					<a href="/settings" className="flex items-center gap-2">
+					<Link to="/settings" className="flex items-center gap-2">
 						<SettingsIcon size={16} />
 						Settings
-					</a>
+					</Link>
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem

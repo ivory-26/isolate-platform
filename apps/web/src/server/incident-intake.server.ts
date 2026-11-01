@@ -834,12 +834,16 @@ async function acceptProviderSignal(
 			deduped: true,
 		};
 
-	// Signal-level dedupe before any task write. A redelivery (or a restart that
-	// emptied the in-process store) resolves to the surviving signal instead of
-	// a second task.
-	let recorded: { created: boolean };
+	// Dedupe and the per-org cap are one transactional admission: the signal is
+	// only recorded while the active-task cap has headroom, so concurrent
+	// deliveries cannot exceed the cap and a throttled delivery never burns its
+	// fingerprint.
+	let reserved: {
+		created: boolean;
+		capped: boolean;
+	};
 	try {
-		recorded = await repository.recordIfNew({
+		reserved = await repository.reserveIfNewUnderCap({
 			organizationId: context.organizationId,
 			source: signal.source,
 			kind: signal.kind,
@@ -848,26 +852,17 @@ async function acceptProviderSignal(
 			fingerprint: signal.fingerprint,
 			deliveryId,
 			receivedAt: new Date(signal.receivedAt),
+			maxActive: MAX_ACTIVE_INCIDENT_TASKS,
+			activeSince: new Date(context.nowMs - INCIDENT_TASK_CAP_WINDOW_MS),
+			capSources: [signal.source],
 		});
 	} catch {
 		return { ok: false, code: "UNAVAILABLE" };
 	}
-	if (!recorded.created)
-		return { ok: true, accepted: false, deduped: true, throttled: false };
-
-	// Per-org cap: at most two incident tasks created in the active window.
-	let active: number;
-	try {
-		active = await repository.countActiveIncidentTasks({
-			organizationId: context.organizationId,
-			since: new Date(context.nowMs - INCIDENT_TASK_CAP_WINDOW_MS),
-			sources: [signal.source],
-		});
-	} catch {
-		return { ok: false, code: "UNAVAILABLE" };
-	}
-	if (active >= MAX_ACTIVE_INCIDENT_TASKS)
+	if (reserved.capped)
 		return { ok: true, accepted: false, deduped: false, throttled: true };
+	if (!reserved.created)
+		return { ok: true, accepted: false, deduped: true, throttled: false };
 
 	return createTaskForSignal(deps, context, signal, {
 		incidentSource: signal.source,

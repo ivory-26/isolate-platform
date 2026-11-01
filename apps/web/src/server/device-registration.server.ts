@@ -34,6 +34,11 @@ import {
 	type UserRateLimitAction,
 	type UserRateLimitGate,
 } from "./rate-limit.server";
+import {
+	assertJsonRequest,
+	assertSameOrigin,
+	RequestGuardError,
+} from "./request-guard.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 /**
@@ -80,7 +85,12 @@ export type RevokeDeviceInput = z.infer<typeof revokeDeviceSchema>;
 export type RegisteredDevice = {
 	readonly deviceId: string;
 	readonly token: string;
+	/** ISO expiry; the device must rotate before this instant. */
+	readonly expiresAt: string;
 };
+
+/** Default device-token lifetime; a rotation endpoint replaces the token. */
+export const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Tenant-scoped device view: no token, no hash, no user/org ids. */
 export type DeviceView = {
@@ -177,15 +187,21 @@ export function createDeviceRegistrationService(
 			await throttled(dependencies, scope, "device:register");
 			const token = generateToken();
 			const tokenHash = hashConnectorDeviceToken(token);
+			const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
 			const created = await dependencies.devices.create({
 				organizationId: scope.organizationId,
 				userId: scope.userId,
 				displayName: parsed.data.displayName,
 				tokenHash,
 				status: "active",
+				expiresAt,
 			});
 			// The only place the plaintext token ever leaves the service.
-			return { deviceId: created.id, token };
+			return {
+				deviceId: created.id,
+				token,
+				expiresAt: expiresAt.toISOString(),
+			};
 		},
 
 		async list() {
@@ -239,6 +255,9 @@ function unavailable(): Response {
 
 /** Maps a service failure to fixed text; never serializes the thrown value. */
 function failureResponse(error: unknown): Response {
+	if (error instanceof RequestGuardError) {
+		return fixedError(error.status, "request rejected");
+	}
 	if (error instanceof RateLimitExceededError) {
 		return rateLimitedResponse(error.retryAfterSeconds);
 	}
@@ -331,6 +350,8 @@ export function createDeviceRegistrationRoutes(
 		async register(request) {
 			if (request.method !== "POST") return methodNotAllowed();
 			try {
+				assertSameOrigin(request);
+				assertJsonRequest(request);
 				const input = await readBoundedJson(request);
 				return json(200, await service.register(input));
 			} catch (error) {
@@ -341,6 +362,7 @@ export function createDeviceRegistrationRoutes(
 		async list(request) {
 			if (request.method !== "GET") return methodNotAllowed();
 			try {
+				assertSameOrigin(request);
 				return json(200, { devices: await service.list() });
 			} catch (error) {
 				return failureResponse(error);
@@ -350,6 +372,8 @@ export function createDeviceRegistrationRoutes(
 		async revoke(request) {
 			if (request.method !== "POST") return methodNotAllowed();
 			try {
+				assertSameOrigin(request);
+				assertJsonRequest(request);
 				const input = await readBoundedJson(request);
 				return json(200, await service.revoke(input));
 			} catch (error) {

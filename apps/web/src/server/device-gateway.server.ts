@@ -71,6 +71,8 @@ export const DEVICE_CLAIM_DEFAULT_LIMIT = 1;
 export const DEVICE_CLAIM_MAX_LIMIT = CONNECTOR_CALL_MAX_CLAIM_BATCH;
 
 const BEARER_PATTERN = /^Bearer ([^\s]+)$/i;
+/** At most one `last_seen_at` write per device per minute. */
+const TOUCH_SEEN_INTERVAL_MS = 60_000;
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -393,11 +395,26 @@ export function createDeviceGateway(
 			tokenHash,
 		);
 		if (device === null || device.status !== "active") return null;
-		await dependencies.devices.touchSeen(
-			device.organizationId,
-			device.id,
-			now(),
-		);
+		// Defense in depth: the repository filters expiry, and the gateway checks
+		// the summary too, so a stale cache cannot authenticate.
+		if (
+			device.expiresAt !== null &&
+			device.expiresAt.getTime() <= now().getTime()
+		) {
+			return null;
+		}
+		// Throttle the last-seen write: at most one per device per interval, so a
+		// polling loop cannot amplify into a write per request.
+		if (
+			device.lastSeenAt === null ||
+			now().getTime() - device.lastSeenAt.getTime() >= TOUCH_SEEN_INTERVAL_MS
+		) {
+			await dependencies.devices.touchSeen(
+				device.organizationId,
+				device.id,
+				now(),
+			);
+		}
 		return { device, organizationId: device.organizationId };
 	};
 
@@ -473,8 +490,10 @@ export function createDeviceGateway(
 						);
 					}
 					if (dependencies.usage !== undefined) {
+						// The platform guard is server-side: a client-supplied
+						// freeTierProfile must not raise the budget.
 						const freeLimit = resolveDailyLimit(
-							credential.freeTierProfile.requestsPerDay,
+							null,
 							dependencies.freeDailyLimit,
 						);
 						const period = now().toISOString().slice(0, 10);

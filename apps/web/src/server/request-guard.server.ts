@@ -132,8 +132,12 @@ export function assertSameOrigin(
 
 	const originHeader = request.headers.get("origin");
 	if (originHeader === null) {
-		// An unsafe method must prove its origin; a browser always sends it.
-		if (unsafe) reject("ORIGIN_REJECTED");
+		// A browser always sends Origin (and Sec-Fetch-Site) for an unsafe
+		// request; a cross-site one is rejected above. A non-browser client
+		// (CLI/server-to-server) that sends neither header is allowed, so the
+		// check protects cookie-authenticated browser POSTs without breaking
+		// trusted machine clients.
+		if (unsafe && fetchSite !== undefined) reject("ORIGIN_REJECTED");
 		return;
 	}
 	const rawOrigin = originHeader.trim();

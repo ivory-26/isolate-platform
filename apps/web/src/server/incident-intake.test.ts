@@ -924,8 +924,9 @@ describe("github dedupe and cap", () => {
 			deduped: true,
 			throttled: false,
 		});
-		// The cap is consulted once, for the first delivery only.
-		expect(restarted.store.capCalls).toHaveLength(1);
+		// Every admission consults the cap before the insert; the duplicate then
+		// resolves to the surviving signal row.
+		expect(restarted.store.capCalls).toHaveLength(2);
 		expect(h.tasks.calls).toHaveLength(1);
 		expect(first.deduped).toBe(false);
 	});
@@ -952,8 +953,9 @@ describe("github dedupe and cap", () => {
 		expect(
 			await acceptIncident(deps, githubDelivery(workflowPayload())),
 		).toEqual({ ok: true, accepted: false, deduped: false, throttled: true });
-		// The signal is recorded before the cap, so a replay is deduped, not retried.
-		expect(store.signalCalls).toHaveLength(1);
+		// Admission refuses before recording, so a throttled delivery never burns
+		// its fingerprint and can be retried once the cap has headroom.
+		expect(store.signalCalls).toHaveLength(0);
 		expect(h.tasks.calls).toHaveLength(0);
 		expect(h.queue.calls).toHaveLength(0);
 

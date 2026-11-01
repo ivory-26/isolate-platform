@@ -60,9 +60,19 @@ describe("assertSameOrigin", () => {
 		).not.toThrow();
 	});
 
-	test("a POST without Origin is a fixed 403", () => {
-		const error = guardFailure(() =>
+	test("a non-browser POST may omit Origin, but a browser fetch may not", () => {
+		expect(() =>
 			assertSameOrigin(request({ headers: { host: "app.isolate.dev" } })),
+		).not.toThrow();
+		const error = guardFailure(() =>
+			assertSameOrigin(
+				request({
+					headers: {
+						host: "app.isolate.dev",
+						"sec-fetch-site": "same-origin",
+					},
+				}),
+			),
 		);
 		expect(error.status).toBe(403);
 		expect(error.code).toBe("ORIGIN_REJECTED");

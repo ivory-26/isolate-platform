@@ -36,6 +36,11 @@ import {
 	type UserRateLimitAction,
 	type UserRateLimitGate,
 } from "./rate-limit.server";
+import {
+	assertJsonRequest,
+	assertSameOrigin,
+	RequestGuardError,
+} from "./request-guard.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 /**
@@ -566,6 +571,13 @@ class ConnectorBodyTooLargeError extends Error {
 	}
 }
 
+function guardResponse(error: unknown): Response | null {
+	if (error instanceof RequestGuardError) {
+		return json(error.status, { error: "request rejected" });
+	}
+	return null;
+}
+
 function json(status: number, body: unknown): Response {
 	return Response.json(body, { status, headers: NO_STORE });
 }
@@ -669,6 +681,12 @@ export async function handleConnectorConnectRoute(
 	} catch {
 		return unavailable();
 	}
+	try {
+		assertSameOrigin(request);
+		assertJsonRequest(request);
+	} catch (error) {
+		return guardResponse(error) ?? unavailable();
+	}
 	let body: unknown;
 	try {
 		body = await readJsonBody(request, CONNECTOR_CONNECT_MAX_BODY_BYTES);
@@ -724,6 +742,12 @@ export async function handleConnectorRevokeRoute(
 		connectorService = serviceFor(options);
 	} catch {
 		return unavailable();
+	}
+	try {
+		assertSameOrigin(request);
+		assertJsonRequest(request);
+	} catch (error) {
+		return guardResponse(error) ?? unavailable();
 	}
 	let body: unknown;
 	try {

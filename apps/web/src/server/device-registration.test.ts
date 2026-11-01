@@ -128,7 +128,12 @@ describe("device registration", () => {
 		expect(response.headers.get("pragma")).toBe("no-cache");
 
 		const body = await jsonObject(response);
-		expect(Object.keys(body).sort()).toEqual(["deviceId", "token"]);
+		expect(Object.keys(body).sort()).toEqual([
+			"deviceId",
+			"expiresAt",
+			"token",
+		]);
+		expect(Date.parse(String(body.expiresAt))).toBeGreaterThan(Date.now());
 		expect(body.token).toBe(FIXED_TOKEN);
 		expect(isConnectorDeviceToken(body.token)).toBe(true);
 		const deviceId = body.deviceId;
@@ -247,6 +252,7 @@ describe("device registration", () => {
 		const malformed = await h.routes.register(
 			new Request("http://localhost/api/device/register", {
 				method: "POST",
+				headers: { "content-type": "application/json" },
 				body: "{not json",
 			}),
 		);
@@ -255,6 +261,7 @@ describe("device registration", () => {
 		const oversized = await h.routes.register(
 			new Request("http://localhost/api/device/register", {
 				method: "POST",
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ displayName: "x".repeat(5000) }),
 			}),
 		);

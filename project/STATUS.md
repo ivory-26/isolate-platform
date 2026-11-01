@@ -10,6 +10,9 @@ Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lan
 - **Context preloading (all nine non-GitHub sources)**: strict fingerprint parsers, transactional signal lookup, worker `connector.context.fetch` enqueue/await, and device handlers for Sentry/Grafana/PagerDuty/Kubernetes/Datadog/New Relic/Honeycomb/Axiom/SigNoz. GitHub keeps its server-side reader. Daemon result cap aligned to 256 KiB.
 - **SaaS live harness**: `bun run acceptance:connector-live` enqueues one device-path call and awaits the result; without `CONNECTOR_LIVE=1` it prints the runbook and exits 0. No keys were supplied, so the five SaaS live checks remain user-run.
 - **E2E user flow**: `e2e-connector-flow.test.ts` drives register → list → connect → list/revoke → claim/result/heartbeat → trace read → signed webhook → rotate → revoke with 344 assertions, including auth/CSRF/405 negatives and no-secret scans.
+- **Local context proof**: `k8s.context.fetch` call `85e748d5-…` was claimed by the real daemon, mapped the fingerprint to the local kind cluster, and returned a **1,606-byte `ContextBundle`** (warning events + pod). No provider key reached the server.
+- **Final gates**: biome 0 errors · typecheck 9/9 · **2612 tests / 0 fail / 10 skip ×2** · offline acceptance 7/7 · `security:check` PASS (301 files, 613 tracked).
+- **SaaS live checks**: `bun run acceptance:connector-live` is ready and gate-safe; the five SaaS runs are still user-run because no device-held vendor keys were supplied.
 
 ## Previous: wave 18 — connector hardening, tracing and secret remediation (2026-11-01)
 

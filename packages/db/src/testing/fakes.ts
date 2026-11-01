@@ -40,6 +40,8 @@ import {
 	normalizeIncidentSignalInput,
 	normalizeIncidentSources,
 	type RecordIncidentSignalResult,
+	type ReserveIncidentSignalInput,
+	type ReserveIncidentSignalResult,
 } from "../repositories/incident-repository";
 import { clampPageLimit } from "../repositories/pagination";
 import {
@@ -371,6 +373,26 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		const id = crypto.randomUUID();
 		this.signals.push({ id, ...signal });
 		return { ok: true, signalId: id, created: true };
+	}
+
+	async reserveIfNewUnderCap(
+		input: ReserveIncidentSignalInput,
+	): Promise<ReserveIncidentSignalResult> {
+		const active = await this.countActiveIncidentTasks({
+			organizationId: input.organizationId,
+			since: input.activeSince,
+			sources: input.capSources,
+		});
+		if (active >= input.maxActive) {
+			return { ok: true, signalId: null, created: false, capped: true };
+		}
+		const recorded = await this.recordIfNew(input);
+		return {
+			ok: true,
+			signalId: recorded.signalId,
+			created: recorded.created,
+			capped: false,
+		};
 	}
 
 	async countActiveIncidentTasks(

@@ -70,6 +70,25 @@ export type RecordIncidentSignalResult = {
 	created: boolean;
 };
 
+export type ReserveIncidentSignalInput = IncidentSignalInput & {
+	/** Concurrent non-terminal incident-task cap for this source set. */
+	maxActive: number;
+	/** Lower bound (inclusive) on `tasks.created_at` for the active count. */
+	activeSince: Date;
+	/** Source tokens eligible for the cap; an empty list counts nothing. */
+	capSources: readonly string[];
+};
+
+export type ReserveIncidentSignalResult = {
+	ok: true;
+	/** Null when the cap refused admission (no signal row is written). */
+	signalId: string | null;
+	/** false when the dedupe key hit. */
+	created: boolean;
+	/** true when the active-task cap refused a new signal. */
+	capped: boolean;
+};
+
 export type CountActiveIncidentTasksInput = {
 	organizationId: OrganizationId;
 	/** Lower bound (inclusive) on `tasks.created_at`. */
@@ -80,6 +99,15 @@ export type CountActiveIncidentTasksInput = {
 
 export interface IncidentRepository {
 	recordIfNew(input: IncidentSignalInput): Promise<RecordIncidentSignalResult>;
+	/**
+	 * Admission in one transaction: take a per-org transaction-scoped advisory
+	 * lock, count non-terminal incident tasks, refuse before recording when the
+	 * cap is reached, then insert the signal. A capped delivery therefore never
+	 * burns its fingerprint, and concurrent deliveries cannot exceed the cap.
+	 */
+	reserveIfNewUnderCap(
+		input: ReserveIncidentSignalInput,
+	): Promise<ReserveIncidentSignalResult>;
 	countActiveIncidentTasks(
 		input: CountActiveIncidentTasksInput,
 	): Promise<number>;
@@ -288,6 +316,81 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			);
 		}
 		return { ok: true, signalId: String(existing[0].id), created: false };
+	}
+
+	async reserveIfNewUnderCap(
+		input: ReserveIncidentSignalInput,
+	): Promise<ReserveIncidentSignalResult> {
+		const signal = normalizeIncidentSignalInput(input);
+		const receivedAt = signal.receivedAt.toISOString();
+		const sources = normalizeIncidentSources(input.capSources);
+		if (!(input.activeSince instanceof Date)) {
+			throw new Error("activeSince must be a valid Date");
+		}
+		if (
+			!Number.isSafeInteger(input.maxActive) ||
+			input.maxActive < 0 ||
+			input.maxActive > 1000
+		) {
+			throw new Error("maxActive is out of bounds");
+		}
+		const activeSince = input.activeSince.toISOString();
+		return this.sql.begin(async (tx) => {
+			// Serialize admissions per tenant; transaction-scoped, so safe under
+			// PgBouncer transaction pooling.
+			await tx.unsafe("SELECT pg_advisory_xact_lock(hashtext($1))", [
+				signal.organizationId,
+			]);
+			const counts = (await tx.unsafe(STMT.countActive, [
+				signal.organizationId,
+				sources,
+				activeSince,
+			])) as unknown as Record<string, unknown>[];
+			const active = Number(counts[0]?.n ?? 0);
+			if (Number.isFinite(active) && active >= input.maxActive) {
+				return {
+					ok: true as const,
+					signalId: null,
+					created: false,
+					capped: true,
+				};
+			}
+			const inserted = (await tx.unsafe(STMT.insert, [
+				signal.organizationId,
+				signal.source,
+				signal.kind,
+				signal.severity,
+				signal.service,
+				signal.fingerprint,
+				signal.deliveryId,
+				receivedAt,
+			])) as unknown as Record<string, unknown>[];
+			if (inserted.length > 0) {
+				return {
+					ok: true as const,
+					signalId: String(inserted[0].id),
+					created: true,
+					capped: false,
+				};
+			}
+			const existing = (await tx.unsafe(STMT.findByDedupeKey, [
+				signal.organizationId,
+				signal.source,
+				signal.fingerprint,
+				receivedAt,
+			])) as unknown as Record<string, unknown>[];
+			if (existing.length === 0) {
+				throw new Error(
+					"incident signal insert conflicted but no row matches the dedupe key",
+				);
+			}
+			return {
+				ok: true as const,
+				signalId: String(existing[0].id),
+				created: false,
+				capped: false,
+			};
+		});
 	}
 
 	async countActiveIncidentTasks(

@@ -544,6 +544,24 @@ function incidentRepository(
 			recorded.add(key);
 			return { ok: true, signalId: crypto.randomUUID(), created: true };
 		},
+		async reserveIfNewUnderCap(input) {
+			capCalls.push({
+				organizationId: input.organizationId,
+				since: input.activeSince,
+				sources: input.capSources,
+			});
+			if (options.fail === true) throw new Error("private cap detail");
+			if ((options.active ?? 0) >= input.maxActive) {
+				return { ok: true, signalId: null, created: false, capped: true };
+			}
+			const recordedRow = await repository.recordIfNew(input);
+			return {
+				ok: true,
+				signalId: recordedRow.signalId,
+				created: recordedRow.created,
+				capped: false,
+			};
+		},
 		async countActiveIncidentTasks(input) {
 			capCalls.push(input);
 			if (options.fail === true) throw new Error("private cap detail");

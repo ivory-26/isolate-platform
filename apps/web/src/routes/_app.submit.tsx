@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { useSession } from "@/components/auth/SessionProvider";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { Section } from "@/components/common/section";
+import { ConsoleNote } from "@/components/console/note";
+import { StatusMark } from "@/components/console/status-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,11 +56,38 @@ function Field({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="space-y-1.5">
+		<div className="space-y-2">
 			<Label htmlFor={htmlFor}>{label}</Label>
 			{children}
 			{hint ? <p className="text-xs leading-5 text-ink-muted">{hint}</p> : null}
 		</div>
+	);
+}
+
+function FormSection({
+	id,
+	title,
+	description,
+	children,
+}: {
+	id: string;
+	title: string;
+	description: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<fieldset
+			aria-labelledby={id}
+			className="space-y-4 border-t border-line-subtle pt-6"
+		>
+			<div className="space-y-1">
+				<h2 id={id} className="text-sm font-medium tracking-tight text-ink">
+					{title}
+				</h2>
+				<p className="text-xs leading-5 text-ink-muted">{description}</p>
+			</div>
+			{children}
+		</fieldset>
 	);
 }
 
@@ -113,21 +141,17 @@ function SubmitPage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Submit a task"
 				description="Queue one bounded engineering task. Organization and actor are resolved on the server; your role decides whether you may submit."
 			/>
 			{readOnly ? (
-				<div
-					role="alert"
-					className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
-				>
+				<ConsoleNote role="alert" tone="warning">
 					Your role in this organization is read-only. Ask an owner or admin for
 					submit access.
-				</div>
+				</ConsoleNote>
 			) : null}
 			{session.mode === "demo" ? (
-				<div className="rounded-md border border-line-subtle bg-elevated px-3 py-2 text-xs leading-5 text-ink-muted">
+				<ConsoleNote role="note">
 					Local demo: data is temporary and no worker executes it. The demo
 					repository{" "}
 					<code className="font-mono">
@@ -138,11 +162,11 @@ function SubmitPage() {
 						10000000-0000-4000-8000-000000000004
 					</code>{" "}
 					version <code className="font-mono">1</code> are prefilled below.
-				</div>
+				</ConsoleNote>
 			) : null}
 
 			<form
-				className="space-y-6"
+				className="space-y-8"
 				onSubmit={(event) => {
 					event.preventDefault();
 					if (mutation.isPending || (mutation.isSuccess && mutation.data.ok)) {
@@ -179,8 +203,9 @@ function SubmitPage() {
 					mutation.mutate(parsed.data);
 				}}
 			>
-				<fieldset disabled={locked} className="space-y-6">
-					<Section
+				<fieldset disabled={locked} className="space-y-8">
+					<FormSection
+						id="submission-target"
 						title="Repository and workflow"
 						description="The task is compiled against one immutable workflow version before it is queued."
 					>
@@ -340,20 +365,21 @@ function SubmitPage() {
 							</Field>
 						</div>
 						{optionsQuery.isLoading ? (
-							<p className="text-xs text-ink-muted">
+							<p className="text-xs text-ink-muted" aria-live="polite">
 								Loading connected repositories and workflow versions…
 							</p>
 						) : null}
 						{optionsUnavailable ? (
-							<p className="text-xs leading-5 text-ink-muted">
+							<ConsoleNote role="note">
 								The connected repository and workflow lists are unavailable, so
 								enter the UUIDs directly. Your submission is still validated on
 								the server.
-							</p>
+							</ConsoleNote>
 						) : null}
-					</Section>
+					</FormSection>
 
-					<Section
+					<FormSection
+						id="submission-intent"
 						title="Intent and boundaries"
 						description="The worker receives exactly this text. File ownership bounds every write."
 					>
@@ -401,9 +427,10 @@ function SubmitPage() {
 								</Field>
 							</div>
 						</div>
-					</Section>
+					</FormSection>
 
-					<Section
+					<FormSection
+						id="submission-limits"
 						title="Execution limits"
 						description="Every limit stops the task at the cap. The environment decides completion, not the model."
 					>
@@ -446,10 +473,10 @@ function SubmitPage() {
 								/>
 							</Field>
 						</div>
-					</Section>
+					</FormSection>
 				</fieldset>
 
-				<div className="flex flex-wrap items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2 border-t border-line-subtle pt-4">
 					<Button
 						type="submit"
 						disabled={
@@ -466,7 +493,7 @@ function SubmitPage() {
 					</Button>
 					<Button
 						type="button"
-						variant="outline"
+						variant="ghost"
 						disabled={mutation.isPending}
 						onClick={() => {
 							request.current = null;
@@ -481,26 +508,24 @@ function SubmitPage() {
 
 			<div aria-live="polite" className="space-y-4">
 				{validationError ? (
-					<div
-						role="alert"
-						className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger"
-					>
+					<ConsoleNote role="alert" tone="danger">
 						{validationError}
-					</div>
+					</ConsoleNote>
 				) : null}
 				{mutation.isError ? (
-					<div
-						role="alert"
-						className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger"
-					>
+					<ConsoleNote role="alert" tone="danger">
 						The request could not be confirmed. Retry the same request to avoid
 						duplicates.
-					</div>
+					</ConsoleNote>
 				) : null}
 				{mutation.isSuccess ? (
 					mutation.data.ok ? (
-						<Section title="Task queued">
-							<div className="space-y-2 text-sm text-ink-secondary">
+						<div className="flex flex-col gap-3 border-y border-line-subtle py-5">
+							<div className="flex flex-wrap items-center gap-3">
+								<h2 className="text-sm font-medium text-ink">Task queued</h2>
+								<StatusMark status={mutation.data.value.task.status} />
+							</div>
+							<div className="space-y-1 text-sm text-ink-secondary">
 								<p>
 									Task{" "}
 									<Link
@@ -522,20 +547,25 @@ function SubmitPage() {
 									</code>{" "}
 									is pinned for this submission.
 								</p>
-								<Button asChild variant="outline" size="sm">
-									<Link
-										to="/runs/$taskId"
-										params={{ taskId: mutation.data.value.task.id }}
-									>
-										Open run detail
-									</Link>
-								</Button>
 							</div>
-						</Section>
+							<Button
+								asChild
+								variant="outline"
+								size="sm"
+								className="self-start"
+							>
+								<Link
+									to="/runs/$taskId"
+									params={{ taskId: mutation.data.value.task.id }}
+								>
+									Open run detail
+								</Link>
+							</Button>
+						</div>
 					) : (
 						<div
 							role="alert"
-							className="space-y-2 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm text-danger"
+							className="space-y-2 border-l-2 border-danger/60 py-2 pl-3 text-sm text-danger"
 						>
 							<p>{mutation.data.error.message}</p>
 							{mutation.data.error.issues?.length ? (

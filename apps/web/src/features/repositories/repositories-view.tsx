@@ -2,16 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { RelativeTime } from "@/components/common/relative-time";
-import {
-	BranchIcon,
-	PlusIcon,
-	SearchIcon,
-	ServerIcon,
-	TerminalIcon,
-	TimerIcon,
-	WarningIcon,
-} from "@/components/icons";
-import { Badge } from "@/components/ui/badge";
+import { PlusIcon, SearchIcon, WarningIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -59,10 +50,14 @@ const SKELETON_ROWS = ["one", "two", "three", "four", "five"];
 
 export function RepositoryFilters({
 	search,
+	count,
+	filtered,
 	onQueryChange,
 	onProviderChange,
 }: {
 	search: RepositoriesSearch;
+	count: number;
+	filtered: boolean;
 	onQueryChange: (value: string) => void;
 	onProviderChange: (value: RepositoryProvider | undefined) => void;
 }) {
@@ -80,31 +75,29 @@ export function RepositoryFilters({
 	}, [value, search.q, onQueryChange]);
 
 	return (
-		<div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-			<div className="min-w-0 flex-1 space-y-1.5">
-				<Label htmlFor={searchId} className="text-xs text-ink-muted">
-					Search by full name
+		<div className="flex flex-col gap-3 border-y border-line-subtle py-3 sm:flex-row sm:items-center">
+			<div className="relative min-w-0 flex-1">
+				<Label htmlFor={searchId} className="sr-only">
+					Search repositories by full name
 				</Label>
-				<div className="relative">
-					<SearchIcon
-						size={15}
-						className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-muted"
-					/>
-					<Input
-						id={searchId}
-						value={value}
-						maxLength={100}
-						placeholder="owner/repository"
-						autoComplete="off"
-						spellCheck={false}
-						className="pl-8"
-						onChange={(event) => setValue(event.target.value)}
-					/>
-				</div>
+				<SearchIcon
+					size={15}
+					className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-muted"
+				/>
+				<Input
+					id={searchId}
+					value={value}
+					maxLength={100}
+					placeholder="Search owner/repository"
+					autoComplete="off"
+					spellCheck={false}
+					className="pl-8"
+					onChange={(event) => setValue(event.target.value)}
+				/>
 			</div>
-			<div className="space-y-1.5 sm:w-52">
-				<Label htmlFor={providerId} className="text-xs text-ink-muted">
-					Provider
+			<div className="sm:w-48">
+				<Label htmlFor={providerId} className="sr-only">
+					Filter by provider
 				</Label>
 				<Select
 					value={search.provider ?? "all"}
@@ -121,6 +114,9 @@ export function RepositoryFilters({
 					</SelectContent>
 				</Select>
 			</div>
+			<p className="shrink-0 text-xs text-ink-muted tabular-nums sm:ml-2">
+				{filtered ? `${count} matching` : `${count} registered`}
+			</p>
 		</div>
 	);
 }
@@ -134,7 +130,7 @@ export function RepositoriesTable({
 }) {
 	return (
 		<div className="space-y-2">
-			<div className="overflow-x-auto rounded-lg border border-line-subtle">
+			<div className="border-y border-line-subtle">
 				<Table>
 					<caption className="sr-only">
 						Repositories registered for the active organization, including
@@ -151,56 +147,41 @@ export function RepositoriesTable({
 							<TableHead scope="col" className="min-w-[260px]">
 								Validation gate
 							</TableHead>
-							<TableHead scope="col" className="w-[160px]">
+							<TableHead scope="col" className="w-[150px]">
 								Registered
 							</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
 						{repositories.map((repository) => (
-							<TableRow key={repository.id} className="border-line-subtle">
-								<TableCell className="align-top">
-									<div className="flex items-center gap-2">
-										<ServerIcon size={15} className="shrink-0 text-ink-muted" />
-										<span className="truncate font-mono text-xs text-ink">
-											{repository.externalFullName}
-										</span>
-									</div>
-									<div className="mt-1 flex flex-wrap items-center gap-2">
-										<Badge
-											variant="outline"
-											className="h-5 border-line bg-elevated font-medium text-[10px] text-ink-secondary"
-										>
-											<BranchIcon size={11} />
-											{PROVIDER_LABEL[repository.provider]}
-										</Badge>
-										<span className="font-mono text-[10px] text-ink-muted">
+							<TableRow key={repository.id} className="h-11 border-line-subtle">
+								<TableCell className="py-1 align-top">
+									<span className="block truncate font-mono text-xs text-ink">
+										{repository.externalFullName}
+									</span>
+									<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-muted">
+										<span>{PROVIDER_LABEL[repository.provider]}</span>
+										<span aria-hidden="true">·</span>
+										<span className="font-mono">
 											{repository.id.slice(0, 8)}…
 										</span>
 									</div>
 								</TableCell>
-								<TableCell className="align-top">
+								<TableCell className="py-1 align-top">
 									<span className="font-mono text-xs text-ink-secondary">
 										{repository.defaultBranch}
 									</span>
 								</TableCell>
-								<TableCell className="max-w-[320px] align-top whitespace-normal">
+								<TableCell className="max-w-[320px] py-1 align-top whitespace-normal">
 									{repository.validationCommand ? (
 										<div className="space-y-1">
-											<div className="flex items-start gap-1.5">
-												<TerminalIcon
-													size={13}
-													className="mt-0.5 shrink-0 text-ink-muted"
-												/>
-												<code
-													className="line-clamp-2 font-mono text-[11px] leading-5 break-all text-ink-secondary"
-													title={repository.validationCommand}
-												>
-													{repository.validationCommand}
-												</code>
-											</div>
-											<p className="flex items-center gap-1 text-[11px] text-ink-muted">
-												<TimerIcon size={11} />
+											<code
+												className="line-clamp-2 font-mono text-[11px] leading-5 break-all text-ink-secondary"
+												title={repository.validationCommand}
+											>
+												{repository.validationCommand}
+											</code>
+											<p className="text-[11px] text-ink-muted tabular-nums">
 												Timeout{" "}
 												{formatDurationMs(repository.validationTimeoutMs)}
 											</p>
@@ -211,7 +192,7 @@ export function RepositoriesTable({
 										</span>
 									)}
 								</TableCell>
-								<TableCell className="align-top text-xs text-ink-secondary">
+								<TableCell className="py-1 align-top text-xs text-ink-secondary">
 									<RelativeTime value={repository.createdAt} />
 								</TableCell>
 							</TableRow>
@@ -478,13 +459,16 @@ export function RegisterRepositoryDialog() {
 
 export function RepositoriesSkeleton() {
 	return (
-		<div className="space-y-6">
-			<div className="h-8 w-48 animate-pulse rounded-md bg-elevated" />
-			<div className="grid gap-3 sm:grid-cols-[1fr_208px]">
-				<Skeleton className="h-9 w-full" />
-				<Skeleton className="h-9 w-full" />
+		<div className="flex flex-col gap-6">
+			<div className="space-y-2 border-b border-line-subtle pb-6">
+				<Skeleton className="h-7 w-48" />
+				<Skeleton className="h-4 w-full max-w-xl" />
 			</div>
-			<div className="space-y-2 rounded-lg border border-line-subtle p-3">
+			<div className="flex gap-3 border-y border-line-subtle py-3">
+				<Skeleton className="h-9 flex-1" />
+				<Skeleton className="h-9 w-48" />
+			</div>
+			<div className="divide-y divide-line-subtle border-y border-line-subtle">
 				{SKELETON_ROWS.map((row) => (
 					<Skeleton key={row} className="h-12 w-full" />
 				))}

@@ -1,10 +1,9 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { InfoIcon, UsageIcon } from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
 import { parseUsageSearch, type UsageSearch } from "@/features/usage/contracts";
 import { usageOptions } from "@/features/usage/queries";
 import {
@@ -37,7 +36,6 @@ function UsageError() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Observe"
 				title="Usage"
 				description="Measured model tokens, sandbox seconds and recorded cost."
 			/>
@@ -59,7 +57,6 @@ function UsagePage() {
 		return (
 			<PageContainer>
 				<PageHeader
-					eyebrow="Observe"
 					title="Usage"
 					description={description}
 					actions={<UsagePeriodSelector period={search.period} />}
@@ -77,30 +74,31 @@ function UsagePage() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Observe"
 				title="Usage"
 				description={description}
 				actions={<UsagePeriodSelector period={search.period} />}
 			>
-				<p className="flex items-center gap-1.5 text-xs text-ink-muted">
-					<InfoIcon size={13} />
+				<p className="flex items-center gap-2 text-xs text-ink-muted">
+					<span
+						aria-hidden="true"
+						className="size-1.5 shrink-0 rounded-full bg-brand"
+					/>
 					Measured · {model.period} day window · {model.timeZone} · through{" "}
 					{formatDate(new Date(new Date(model.until).getTime() - 1))}
 				</p>
 			</PageHeader>
 
 			{!model.hasRows ? (
-				<EmptyState
-					icon={UsageIcon}
+				<EmptyRow
 					title="No usage recorded in this period"
 					description="Neither model usage nor measured sandbox time exists for the selected window. Choose a longer period or run a task."
 				/>
 			) : (
-				<>
+				<div className="flex flex-col gap-8">
 					<UsageMetrics model={model} />
 					<UsageCharts model={model} />
 					<UsageTable model={model} />
-				</>
+				</div>
 			)}
 		</PageContainer>
 	);

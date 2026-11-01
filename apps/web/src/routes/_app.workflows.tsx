@@ -1,10 +1,9 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { WorkflowsIcon } from "@/components/icons";
+import { EmptyRow } from "@/components/console/empty-row";
 import { workflowsOptions } from "@/features/workflows/queries";
 import {
 	BuilderUnavailableNote,
@@ -30,7 +29,6 @@ function WorkflowsError() {
 	return (
 		<PageContainer>
 			<PageHeader
-				eyebrow="Operate"
 				title="Workflows"
 				description="Authored workflow definitions and their immutable versions."
 			/>
@@ -50,11 +48,7 @@ function WorkflowsPage() {
 	if (!query.data.ok) {
 		return (
 			<PageContainer>
-				<PageHeader
-					eyebrow="Operate"
-					title="Workflows"
-					description={description}
-				/>
+				<PageHeader title="Workflows" description={description} />
 				<ErrorState
 					message={query.data.error.message}
 					onRetry={() => void query.refetch()}
@@ -67,15 +61,10 @@ function WorkflowsPage() {
 
 	return (
 		<PageContainer>
-			<PageHeader
-				eyebrow="Operate"
-				title="Workflows"
-				description={description}
-			/>
+			<PageHeader title="Workflows" description={description} />
 			<BuilderUnavailableNote />
 			{workflows.length === 0 ? (
-				<EmptyState
-					icon={WorkflowsIcon}
+				<EmptyRow
 					title="No workflow definitions yet"
 					description="Definitions appear here once the authored workflow library is seeded or published outside this read-only surface."
 				/>

@@ -27,8 +27,13 @@ import {
 	PlatformError,
 } from "@isolate/shared";
 import {
+	CONNECTOR_TOOL_ARGUMENT_SCHEMAS,
+	parseConnectorToolArguments,
+} from "./connector-schemas";
+import {
 	connectorIdForToolName,
 	createConnectorToolImplementations,
+	validateConnectorToolArguments,
 } from "./connector-tools";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
@@ -41,6 +46,95 @@ const context: ToolCallContext = {
 	taskId: TASK,
 	scopes: [],
 };
+
+/**
+ * One adapter-valid argument object per tool. These double as the strictness
+ * fixture: `{ ...VALID_ARGS[name], unexpected: true }` must be rejected by
+ * every schema (all 31 are strict objects).
+ */
+const VALID_ARGS: Record<ConnectorToolName, Record<string, unknown>> = {
+	"sentry.list_issues": { orgSlug: "acme", limit: 5 },
+	"sentry.get_issue": { orgSlug: "acme", issueId: "42" },
+	"sentry.latest_event": { orgSlug: "acme", issueId: "42" },
+	"grafana.query_metrics": { service: "checkout", windowMinutes: 30 },
+	"grafana.query_logs": { service: "checkout", maxLines: 100 },
+	"grafana.get_alert_rule": { ruleUid: "rule-1" },
+	"pagerduty.list_incidents": { limit: 5 },
+	"pagerduty.get_incident": { incidentId: "P1" },
+	"pagerduty.list_log_entries": { incidentId: "P1", limit: 5 },
+	"pagerduty.acknowledge": { incidentId: "P1" },
+	"pagerduty.resolve": { incidentId: "P1" },
+	"k8s.list_events": { namespace: "default", name: "api" },
+	"k8s.get_pod": { namespace: "default", name: "api" },
+	"k8s.get_deployment": { namespace: "default", name: "api" },
+	"k8s.logs_tail": { namespace: "default", podName: "api", tailLines: 100 },
+	"datadog.query_metrics": { service: "checkout", windowMinutes: 30 },
+	"datadog.search_logs": { service: "checkout", maxEntries: 10 },
+	"datadog.get_incident": { incidentId: "inc-1" },
+	"datadog.get_monitor": { monitorId: 12_345 },
+	"axiom.query_apl": { apl: "['logs'] | limit 10", windowMinutes: 15 },
+	"axiom.get_monitor": { monitorId: "mon-1" },
+	"axiom.list_datasets": {},
+	"signoz.query_range": {
+		service: "checkout",
+		query: "rate(http_requests_total[5m])",
+	},
+	"signoz.get_rule": { ruleId: "rule-1" },
+	"signoz.list_rules": { limit: 5 },
+	"newrelic.run_nrql": {
+		query: "SELECT count(*) FROM Transaction",
+		windowMinutes: 15,
+	},
+	"newrelic.get_entity": { guid: "MXxBUE18QVBQTElDQVRJT058MQ" },
+	"newrelic.list_alert_policies": { limit: 5 },
+	"honeycomb.run_query": { kind: "latency", service: "checkout" },
+	"honeycomb.get_trigger": { triggerId: "trigger-1" },
+	"honeycomb.list_slos": {},
+};
+
+/** One schema violation per tool: wrong type, range, pattern or missing key. */
+const MALFORMED_ARGS: Record<ConnectorToolName, Record<string, unknown>> = {
+	"sentry.list_issues": { orgSlug: "acme", limit: 0 },
+	"sentry.get_issue": { orgSlug: "acme", issueId: "" },
+	"sentry.latest_event": { orgSlug: "acme" },
+	"grafana.query_metrics": { service: "checkout", windowMinutes: 5 },
+	"grafana.query_logs": { service: "checkout", maxLines: 0 },
+	"grafana.get_alert_rule": { ruleUid: "not a uid" },
+	"pagerduty.list_incidents": { limit: 0 },
+	"pagerduty.get_incident": { incidentId: "P1/../x" },
+	"pagerduty.list_log_entries": { incidentId: "P1", limit: 0 },
+	"pagerduty.acknowledge": { incidentId: "" },
+	"pagerduty.resolve": {},
+	"k8s.list_events": { namespace: "default", name: "api", limit: 51 },
+	"k8s.get_pod": { namespace: "default" },
+	"k8s.get_deployment": {},
+	"k8s.logs_tail": { namespace: "default", podName: "api", tailLines: 0 },
+	"datadog.query_metrics": { service: "checkout", windowMinutes: 61 },
+	"datadog.search_logs": { service: "checkout", maxEntries: 0 },
+	"datadog.get_incident": { incidentId: "inc/1" },
+	"datadog.get_monitor": { monitorId: -1 },
+	"axiom.query_apl": { apl: "" },
+	"axiom.get_monitor": { monitorId: "bad id" },
+	"axiom.list_datasets": { unexpected: true },
+	"signoz.query_range": { service: "checkout", query: "rate(x[5m]);" },
+	"signoz.get_rule": { ruleId: "rule/1" },
+	"signoz.list_rules": { limit: 0 },
+	"newrelic.run_nrql": { query: "" },
+	"newrelic.get_entity": { guid: "bad guid" },
+	"newrelic.list_alert_policies": { limit: 0 },
+	"honeycomb.run_query": { kind: "apdex", service: "checkout" },
+	"honeycomb.get_trigger": { triggerId: "TRIGGER-1" },
+	"honeycomb.list_slos": { limit: 1 },
+};
+
+/** Tools whose adapter schema has no required field, so `{}` is valid. */
+const OPTIONAL_ONLY: ReadonlySet<ConnectorToolName> = new Set([
+	"pagerduty.list_incidents",
+	"axiom.list_datasets",
+	"signoz.list_rules",
+	"newrelic.list_alert_policies",
+	"honeycomb.list_slos",
+]);
 
 type EnqueueInput = Parameters<ConnectorCallRepository["enqueue"]>[0];
 
@@ -206,7 +300,7 @@ describe("connector tool surface", () => {
 				name,
 				{ outcome: { ok: true, data: { items: [] } } },
 			);
-			const value = await implementation({ project: "web" }, context);
+			const value = await implementation(VALID_ARGS[name], context);
 
 			expect(value).toEqual({ ok: true, data: { items: [] } });
 			expect(connectorIds).toEqual([expected[name]]);
@@ -218,10 +312,84 @@ describe("connector tool surface", () => {
 				taskId: TASK,
 				connectorId: expected[name],
 				toolName: name,
-				params: { project: "web" },
+				params: VALID_ARGS[name],
 				ttlMs: 60_000,
 			});
 		}
+	});
+
+	test("every tool rejects an extra key with VALIDATION_FAILED and never enqueues", async () => {
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			const { implementation, connectorIds, enqueued } = implementationFor(
+				name,
+				{ outcome: { ok: true, data: {} } },
+			);
+			await expectPlatformCode(
+				implementation({ ...VALID_ARGS[name], unexpected: true }, context),
+				"VALIDATION_FAILED",
+			);
+			// No credential resolved, no call enqueued: the refusal is local.
+			expect({ name, connectorIds: connectorIds.length }).toEqual({
+				name,
+				connectorIds: 0,
+			});
+			expect(enqueued).toHaveLength(0);
+		}
+	});
+
+	test("every tool rejects a malformed or incomplete argument object", async () => {
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			const { implementation, connectorIds, enqueued } = implementationFor(
+				name,
+				{ outcome: { ok: true, data: {} } },
+			);
+			await expectPlatformCode(
+				implementation(MALFORMED_ARGS[name], context),
+				"VALIDATION_FAILED",
+			);
+			expect(connectorIds).toHaveLength(0);
+			expect(enqueued).toHaveLength(0);
+		}
+	});
+
+	test("only the five all-optional tools accept an empty object", async () => {
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			const parsed = parseConnectorToolArguments(name, {});
+			expect({ name, ok: parsed.ok }).toEqual({
+				name,
+				ok: OPTIONAL_ONLY.has(name),
+			});
+		}
+	});
+
+	test("the schema table covers exactly the 31 tool names", () => {
+		expect(CONNECTOR_TOOL_NAMES).toHaveLength(31);
+		expect(Object.keys(CONNECTOR_TOOL_ARGUMENT_SCHEMAS).sort()).toEqual(
+			[...CONNECTOR_TOOL_NAMES].sort(),
+		);
+	});
+
+	test("an unknown tool name fails closed without echoing the name", () => {
+		const result = parseConnectorToolArguments("sentry.not_a_tool", {
+			orgSlug: "acme",
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unknown tool was accepted");
+		expect(result.error).toBeInstanceOf(PlatformError);
+		expect(result.error.code).toBe("VALIDATION_FAILED");
+		expect(result.error.message).not.toContain("not_a_tool");
+	});
+
+	test("schema failures never echo the offending value", () => {
+		const marker = "SECRET-VALUE/../";
+		const result = parseConnectorToolArguments("sentry.get_issue", {
+			orgSlug: "acme",
+			issueId: marker,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("malformed arguments were accepted");
+		expect(result.error.message).not.toContain(marker);
+		expect(result.error.message).toContain("issueId");
 	});
 
 	test("waits less than the call TTL and returns the device data", async () => {
@@ -233,7 +401,10 @@ describe("connector tool surface", () => {
 				awaitTimeoutMs: 4_000,
 			},
 		);
-		const value = await implementation({ issueId: "1" }, context);
+		const value = await implementation(
+			{ orgSlug: "acme", issueId: "1" },
+			context,
+		);
 		expect(value).toEqual({ ok: true, data: { id: "1", title: "boom" } });
 		expect(enqueued[0]?.ttlMs).toBe(5_000);
 		expect(awaited[0]?.timeoutMs).toBe(4_000);
@@ -253,28 +424,46 @@ describe("connector tool surface", () => {
 		expect(awaited[0]?.timeoutMs).toBe(4_999);
 	});
 
-	test("arguments are bounded before the device is resolved", async () => {
+	test("oversized arguments are bounded before the device is resolved", async () => {
 		const { implementation, connectorIds, enqueued } = implementationFor(
 			"grafana.query_metrics",
 			{ outcome: { ok: true, data: {} } },
 		);
 		const huge = "x".repeat(70_000);
 		const error = await expectPlatformCode(
-			implementation({ query: huge }, context),
+			implementation({ service: huge }, context),
 			"VALIDATION_FAILED",
 		);
 		expect(error.message).not.toContain(huge);
 		expect(connectorIds).toHaveLength(0);
 		expect(enqueued).toHaveLength(0);
+
+		// The 64 KiB cap is applied to the raw object before the schema walk.
+		const boundError = (() => {
+			try {
+				validateConnectorToolArguments("sentry.list_issues", {
+					orgSlug: "acme",
+					query: "y".repeat(70_000),
+				});
+				throw new Error("oversized arguments were accepted");
+			} catch (error) {
+				return error as PlatformError;
+			}
+		})();
+		expect(boundError.code).toBe("VALIDATION_FAILED");
+		expect(boundError.message).toContain("65536");
 	});
 
-	test("credential-shaped keys and values are rejected without echo", async () => {
+	test("credential-shaped keys are rejected without echo", async () => {
 		const { implementation, connectorIds, enqueued } = implementationFor(
 			"sentry.list_issues",
 			{ outcome: { ok: true, data: {} } },
 		);
 		const keyError = await expectPlatformCode(
-			implementation({ apiKey: "sk-live-SECRET-VALUE" }, context),
+			implementation(
+				{ orgSlug: "acme", apiKey: "sk-live-SECRET-VALUE" },
+				context,
+			),
 			"VALIDATION_FAILED",
 		);
 		expect(keyError.message).not.toContain("sk-live");
@@ -283,7 +472,8 @@ describe("connector tool surface", () => {
 		expect(enqueued).toHaveLength(0);
 
 		// The queue repository refuses credential material inside values too,
-		// before any device can see the call.
+		// before any device can see the call. `query` is a valid schema field, so
+		// the recursive scan (not the schema) is what refuses this.
 		const calls = new InMemoryConnectorCallRepository();
 		const realQueueImplementation = createConnectorToolImplementations({
 			broker: makeBroker().broker,
@@ -294,7 +484,7 @@ describe("connector tool surface", () => {
 		if (realQueueImplementation === undefined) throw new Error("missing tool");
 		const valueError = await expectPlatformCode(
 			realQueueImplementation(
-				{ query: "ghp_abcdefghijklmnopqrstuvwxyz012345" },
+				{ orgSlug: "acme", query: "ghp_abcdefghijklmnopqrstuvwxyz012345" },
 				context,
 			),
 			"VALIDATION_FAILED",
@@ -303,15 +493,16 @@ describe("connector tool surface", () => {
 		expect(calls.rowCount).toBe(0);
 	});
 
-	test("credential material nested in arguments is rejected, token metadata passes", async () => {
+	test("credential-shaped values in accepted fields are rejected, metadata passes", async () => {
 		const { implementation, connectorIds, enqueued } = implementationFor(
 			"sentry.list_issues",
 			{ outcome: { ok: true, data: {} } },
 		);
+		// Both values pass the adapter's query pattern, so only the recursive
+		// credential scan can refuse them.
 		const cases: Record<string, unknown>[] = [
-			{ headers: { authorization: `Bearer ${"x".repeat(20)}` } },
-			{ note: `sk-proj-${"A".repeat(32)}` },
-			{ nested: { apiKey: "value" } },
+			{ orgSlug: "acme", query: `Bearer ${"x".repeat(20)}` },
+			{ orgSlug: "acme", query: `sk-proj-${"A".repeat(32)}` },
 		];
 		for (const args of cases) {
 			const error = await expectPlatformCode(
@@ -324,7 +515,16 @@ describe("connector tool surface", () => {
 		expect(connectorIds).toHaveLength(0);
 		expect(enqueued).toHaveLength(0);
 
-		const allowed = await implementation({ tokenBudget: 1_000 }, context);
+		// A credential-shaped *key* is refused by the strict schema instead;
+		// ordinary metadata such as `limit` still passes and is enqueued.
+		await expectPlatformCode(
+			implementation({ orgSlug: "acme", nested: { apiKey: "value" } }, context),
+			"VALIDATION_FAILED",
+		);
+		const allowed = await implementation(
+			VALID_ARGS["sentry.list_issues"],
+			context,
+		);
 		expect(allowed).toEqual({ ok: true, data: {} });
 		expect(enqueued).toHaveLength(1);
 	});
@@ -385,7 +585,7 @@ describe("connector tool surface", () => {
 			outcome: { ok: false, errorCode: "RATE_LIMITED" },
 		});
 		await expectPlatformCode(
-			rateLimited.implementation({ query: "status:error" }, context),
+			rateLimited.implementation({ service: "checkout" }, context),
 			"RATE_LIMITED",
 		);
 
@@ -393,7 +593,7 @@ describe("connector tool surface", () => {
 			outcome: { ok: false, errorCode: "SOMETHING_NEW" },
 		});
 		const error = await expectPlatformCode(
-			unknown.implementation({ query: "status:error" }, context),
+			unknown.implementation({ service: "checkout" }, context),
 			"INTERNAL",
 		);
 		expect(error.message).not.toContain("SOMETHING_NEW");
@@ -416,7 +616,7 @@ describe("connector tool surface", () => {
 		if (implementation === undefined) throw new Error("missing tool");
 
 		const error = await expectPlatformCode(
-			implementation({ issueId: "1" }, context),
+			implementation({ orgSlug: "acme", issueId: "1" }, context),
 			"INTEGRATION_UNAVAILABLE",
 		);
 		expect(error.message).toContain("no active device credential");
@@ -432,7 +632,7 @@ describe("connector tool surface", () => {
 			},
 		);
 		const error = await expectPlatformCode(
-			implementation({ project: "web" }, context),
+			implementation({ orgSlug: "acme" }, context),
 			"INTEGRATION_UNAVAILABLE",
 		);
 		expect(error.message).toContain("has no device call queue");

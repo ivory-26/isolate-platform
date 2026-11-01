@@ -9,14 +9,23 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/_app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OrganizationsRouteRouteImport } from './routes/organizations/route'
-import { Route as RunsRouteImport } from './routes/runs'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as AppApprovalsRouteImport } from './routes/_app.approvals'
+import { Route as AppDevicesRouteImport } from './routes/_app.devices'
+import { Route as AppRepositoriesRouteImport } from './routes/_app.repositories'
+import { Route as AppRunsRouteImport } from './routes/_app.runs'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppSubmitRouteImport } from './routes/_app.submit'
+import { Route as AppUsageRouteImport } from './routes/_app.usage'
+import { Route as AppWorkflowsRouteImport } from './routes/_app.workflows'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
 import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
+import { Route as AppRunsTaskIdRouteImport } from './routes/_app.runs.$taskId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConnectorsConnectRouteImport } from './routes/api.connectors.connect'
 import { Route as ApiConnectorsListRouteImport } from './routes/api.connectors.list'
@@ -31,9 +40,8 @@ import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -46,15 +54,55 @@ const OrganizationsRouteRoute = OrganizationsRouteRouteImport.update({
   path: '/organizations',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RunsRoute = RunsRouteImport.update({
-  id: '/runs',
-  path: '/runs',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
   path: '/signup',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppIndexRoute = AppIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppApprovalsRoute = AppApprovalsRouteImport.update({
+  id: '/approvals',
+  path: '/approvals',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDevicesRoute = AppDevicesRouteImport.update({
+  id: '/devices',
+  path: '/devices',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRepositoriesRoute = AppRepositoriesRouteImport.update({
+  id: '/repositories',
+  path: '/repositories',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRunsRoute = AppRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSubmitRoute = AppSubmitRouteImport.update({
+  id: '/submit',
+  path: '/submit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsageRoute = AppUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWorkflowsRoute = AppWorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => AppRoute,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
@@ -70,6 +118,11 @@ const OrganizationsNewRoute = OrganizationsNewRouteImport.update({
   id: '/new',
   path: '/new',
   getParentRoute: () => OrganizationsRouteRoute,
+} as any)
+const AppRunsTaskIdRoute = AppRunsTaskIdRouteImport.update({
+  id: '/$taskId',
+  path: '/$taskId',
+  getParentRoute: () => AppRunsRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -138,14 +191,22 @@ const ApiDeviceCallsIdResultRoute = ApiDeviceCallsIdResultRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
   '/organizations': typeof OrganizationsRouteRouteWithChildren
+  '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/approvals': typeof AppApprovalsRoute
+  '/devices': typeof AppDevicesRoute
+  '/repositories': typeof AppRepositoriesRoute
+  '/runs': typeof AppRunsRouteWithChildren
+  '/settings': typeof AppSettingsRoute
+  '/submit': typeof AppSubmitRoute
+  '/usage': typeof AppUsageRoute
+  '/workflows': typeof AppWorkflowsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
   '/organizations/': typeof OrganizationsIndexRoute
+  '/runs/$taskId': typeof AppRunsTaskIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -161,13 +222,21 @@ export interface FileRoutesByFullPath {
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/approvals': typeof AppApprovalsRoute
+  '/devices': typeof AppDevicesRoute
+  '/repositories': typeof AppRepositoriesRoute
+  '/runs': typeof AppRunsRouteWithChildren
+  '/settings': typeof AppSettingsRoute
+  '/submit': typeof AppSubmitRoute
+  '/usage': typeof AppUsageRoute
+  '/workflows': typeof AppWorkflowsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
+  '/': typeof AppIndexRoute
   '/organizations': typeof OrganizationsIndexRoute
+  '/runs/$taskId': typeof AppRunsTaskIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -184,14 +253,23 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
   '/organizations': typeof OrganizationsRouteRouteWithChildren
+  '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/runs': typeof RunsRoute
   '/signup': typeof SignupRoute
+  '/_app/approvals': typeof AppApprovalsRoute
+  '/_app/devices': typeof AppDevicesRoute
+  '/_app/repositories': typeof AppRepositoriesRoute
+  '/_app/runs': typeof AppRunsRouteWithChildren
+  '/_app/settings': typeof AppSettingsRoute
+  '/_app/submit': typeof AppSubmitRoute
+  '/_app/usage': typeof AppUsageRoute
+  '/_app/workflows': typeof AppWorkflowsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/organizations/new': typeof OrganizationsNewRoute
+  '/_app/': typeof AppIndexRoute
   '/organizations/': typeof OrganizationsIndexRoute
+  '/_app/runs/$taskId': typeof AppRunsTaskIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -209,14 +287,22 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/'
     | '/organizations'
+    | '/'
     | '/login'
-    | '/runs'
     | '/signup'
+    | '/approvals'
+    | '/devices'
+    | '/repositories'
+    | '/runs'
+    | '/settings'
+    | '/submit'
+    | '/usage'
+    | '/workflows'
     | '/auth/callback'
     | '/organizations/new'
     | '/organizations/'
+    | '/runs/$taskId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -232,13 +318,21 @@ export interface FileRouteTypes {
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/'
     | '/login'
-    | '/runs'
     | '/signup'
+    | '/approvals'
+    | '/devices'
+    | '/repositories'
+    | '/runs'
+    | '/settings'
+    | '/submit'
+    | '/usage'
+    | '/workflows'
     | '/auth/callback'
     | '/organizations/new'
+    | '/'
     | '/organizations'
+    | '/runs/$taskId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -254,14 +348,23 @@ export interface FileRouteTypes {
     | '/api/device/calls/$id/result'
   id:
     | '__root__'
-    | '/'
     | '/organizations'
+    | '/_app'
     | '/login'
-    | '/runs'
     | '/signup'
+    | '/_app/approvals'
+    | '/_app/devices'
+    | '/_app/repositories'
+    | '/_app/runs'
+    | '/_app/settings'
+    | '/_app/submit'
+    | '/_app/usage'
+    | '/_app/workflows'
     | '/auth/callback'
     | '/organizations/new'
+    | '/_app/'
     | '/organizations/'
+    | '/_app/runs/$taskId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -278,10 +381,9 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
   OrganizationsRouteRoute: typeof OrganizationsRouteRouteWithChildren
+  AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
-  RunsRoute: typeof RunsRoute
   SignupRoute: typeof SignupRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -301,11 +403,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -322,19 +424,75 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/runs': {
-      id: '/runs'
-      path: '/runs'
-      fullPath: '/runs'
-      preLoaderRoute: typeof RunsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/signup': {
       id: '/signup'
       path: '/signup'
       fullPath: '/signup'
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/': {
+      id: '/_app/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/approvals': {
+      id: '/_app/approvals'
+      path: '/approvals'
+      fullPath: '/approvals'
+      preLoaderRoute: typeof AppApprovalsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/devices': {
+      id: '/_app/devices'
+      path: '/devices'
+      fullPath: '/devices'
+      preLoaderRoute: typeof AppDevicesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/repositories': {
+      id: '/_app/repositories'
+      path: '/repositories'
+      fullPath: '/repositories'
+      preLoaderRoute: typeof AppRepositoriesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/runs': {
+      id: '/_app/runs'
+      path: '/runs'
+      fullPath: '/runs'
+      preLoaderRoute: typeof AppRunsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/submit': {
+      id: '/_app/submit'
+      path: '/submit'
+      fullPath: '/submit'
+      preLoaderRoute: typeof AppSubmitRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/usage': {
+      id: '/_app/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof AppUsageRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/workflows': {
+      id: '/_app/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof AppWorkflowsRouteImport
+      parentRoute: typeof AppRoute
     }
     '/auth/callback': {
       id: '/auth/callback'
@@ -356,6 +514,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/organizations/new'
       preLoaderRoute: typeof OrganizationsNewRouteImport
       parentRoute: typeof OrganizationsRouteRoute
+    }
+    '/_app/runs/$taskId': {
+      id: '/_app/runs/$taskId'
+      path: '/$taskId'
+      fullPath: '/runs/$taskId'
+      preLoaderRoute: typeof AppRunsTaskIdRouteImport
+      parentRoute: typeof AppRunsRoute
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -464,11 +629,47 @@ const OrganizationsRouteRouteChildren: OrganizationsRouteRouteChildren = {
 const OrganizationsRouteRouteWithChildren =
   OrganizationsRouteRoute._addFileChildren(OrganizationsRouteRouteChildren)
 
+interface AppRunsRouteChildren {
+  AppRunsTaskIdRoute: typeof AppRunsTaskIdRoute
+}
+
+const AppRunsRouteChildren: AppRunsRouteChildren = {
+  AppRunsTaskIdRoute: AppRunsTaskIdRoute,
+}
+
+const AppRunsRouteWithChildren =
+  AppRunsRoute._addFileChildren(AppRunsRouteChildren)
+
+interface AppRouteChildren {
+  AppApprovalsRoute: typeof AppApprovalsRoute
+  AppDevicesRoute: typeof AppDevicesRoute
+  AppRepositoriesRoute: typeof AppRepositoriesRoute
+  AppRunsRoute: typeof AppRunsRouteWithChildren
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppSubmitRoute: typeof AppSubmitRoute
+  AppUsageRoute: typeof AppUsageRoute
+  AppWorkflowsRoute: typeof AppWorkflowsRoute
+  AppIndexRoute: typeof AppIndexRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppApprovalsRoute: AppApprovalsRoute,
+  AppDevicesRoute: AppDevicesRoute,
+  AppRepositoriesRoute: AppRepositoriesRoute,
+  AppRunsRoute: AppRunsRouteWithChildren,
+  AppSettingsRoute: AppSettingsRoute,
+  AppSubmitRoute: AppSubmitRoute,
+  AppUsageRoute: AppUsageRoute,
+  AppWorkflowsRoute: AppWorkflowsRoute,
+  AppIndexRoute: AppIndexRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
   OrganizationsRouteRoute: OrganizationsRouteRouteWithChildren,
+  AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
-  RunsRoute: RunsRoute,
   SignupRoute: SignupRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,

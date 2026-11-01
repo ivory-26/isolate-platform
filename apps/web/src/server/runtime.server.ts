@@ -93,6 +93,18 @@ export function getTaskService() {
 }
 
 /**
+ * Trusted tenant scope for server-side read models. Identity is resolved from
+ * the session and membership rows, never from request data.
+ */
+export async function resolveTrustedScope(): Promise<CallerScope> {
+	return resolveRuntimeScope({
+		nodeEnv: process.env.NODE_ENV,
+		localDemo: process.env.WEB_LOCAL_DEMO,
+		databaseUrl: process.env.DATABASE_URL,
+	});
+}
+
+/**
  * Sign-in, sign-up and the session view. Available only when a database and a
  * Neon Auth configuration are both present.
  */

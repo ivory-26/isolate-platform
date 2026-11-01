@@ -1,4 +1,5 @@
 import {
+	fetchSignozContext,
 	getSignozRule,
 	listSignozRules,
 	querySignozRange,
@@ -6,7 +7,12 @@ import {
 } from "@isolate/integrations";
 import { type Env, resolveSecret, type SignozVendorConfig } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import {
+	parseContextFingerprint,
+	readContextParams,
+	requiredService,
+} from "./context";
+import { failure, withDependencies } from "./shared";
 
 /** SigNoz handlers: self-hosted instance URL plus a read-only API key. */
 export function createSignozHandlers(
@@ -35,5 +41,21 @@ export function createSignozHandlers(
 			withDependencies(dependencies(), (deps) => getSignozRule(deps, params)),
 		"signoz.list_rules": (params) =>
 			withDependencies(dependencies(), (deps) => listSignozRules(deps, params)),
+		"signoz.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(parsed.incidentFingerprint, "signoz");
+			const service = requiredService(parsed);
+			if (ref === null || service === null) {
+				return failure("VALIDATION_FAILED");
+			}
+			return withDependencies(dependencies(), (deps) =>
+				fetchSignozContext(deps, {
+					incidentFingerprint: parsed.incidentFingerprint,
+					service,
+					ruleId: ref.ruleId,
+				}),
+			);
+		},
 	};
 }

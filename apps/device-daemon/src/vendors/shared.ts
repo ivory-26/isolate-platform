@@ -54,7 +54,7 @@ function objectify(data: unknown): Record<string, unknown> {
 	return { value: data ?? null };
 }
 
-/** Wraps a trusted adapter success, enforcing the server's 16 KiB result cap. */
+/** Wraps a trusted adapter success, enforcing the server's 256 KiB result cap. */
 export function boundedSuccess(value: unknown): DispatchOutcome {
 	const data = objectify(value);
 	if (jsonByteLength(data) > DEVICE_MAX_RESULT_BYTES) {

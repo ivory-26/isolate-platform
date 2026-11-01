@@ -42,18 +42,29 @@ const countingFetch = () => {
 };
 
 describe("handler table completeness", () => {
-	test("has exactly the 31 connector tool names, even with no vendor configured", () => {
+	test("has the 31 connector names plus 9 context tools, even with no vendor configured", () => {
 		expect(CONNECTOR_TOOL_NAMES).toHaveLength(31);
 		const handlers = createHandlerTable({ config: baseConfig(), env: {} });
-		expect(Object.keys(handlers).sort()).toEqual(
-			[...CONNECTOR_TOOL_NAMES].sort(),
+		const names = Object.keys(handlers);
+		expect(names).toHaveLength(40);
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		expect(names.sort()).toEqual(
+			Object.values(DEVICE_TOOL_NAMES_BY_VENDOR).flat().sort(),
 		);
 	});
 
-	test("the static vendor map covers the same 31 names", () => {
+	test("the static vendor map covers the same 40 names", () => {
 		const flat = Object.values(DEVICE_TOOL_NAMES_BY_VENDOR).flat();
-		expect(flat.sort()).toEqual([...CONNECTOR_TOOL_NAMES].sort());
-		expect(new Set(flat).size).toBe(31);
+		expect(flat).toHaveLength(40);
+		expect(new Set(flat).size).toBe(40);
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			expect(flat).toContain(name);
+		}
+		expect(flat.filter((name) => name.endsWith(".context.fetch"))).toHaveLength(
+			9,
+		);
 	});
 });
 

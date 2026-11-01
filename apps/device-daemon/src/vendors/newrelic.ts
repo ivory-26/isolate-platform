@@ -1,4 +1,5 @@
 import {
+	fetchNewRelicContext,
 	getNewRelicEntity,
 	listNewRelicAlertPolicies,
 	type NewRelicContextDependencies,
@@ -6,7 +7,12 @@ import {
 } from "@isolate/integrations";
 import { type Env, type NewRelicVendorConfig, resolveSecret } from "../config";
 import type { ToolHandler } from "../contracts";
-import { withDependencies } from "./shared";
+import {
+	parseContextFingerprint,
+	readContextParams,
+	requiredService,
+} from "./context";
+import { failure, withDependencies } from "./shared";
 
 /** New Relic handlers: one user API key and the configured account id. */
 export function createNewRelicHandlers(
@@ -38,5 +44,23 @@ export function createNewRelicHandlers(
 			withDependencies(dependencies(), (deps) =>
 				listNewRelicAlertPolicies(deps, params),
 			),
+		"newrelic.context.fetch": async (params) => {
+			const parsed = readContextParams(params);
+			if (parsed === null) return failure("VALIDATION_FAILED");
+			const ref = parseContextFingerprint(
+				parsed.incidentFingerprint,
+				"newrelic",
+			);
+			const service = requiredService(parsed);
+			if (ref === null || service === null) {
+				return failure("VALIDATION_FAILED");
+			}
+			return withDependencies(dependencies(), (deps) =>
+				fetchNewRelicContext(deps, {
+					incidentFingerprint: parsed.incidentFingerprint,
+					service,
+				}),
+			);
+		},
 	};
 }

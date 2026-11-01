@@ -435,39 +435,55 @@ Sources (accessed 2026-11-01): [SigNoz pricing](https://signoz.io/pricing/), [se
 
 ## 13. Testing handoff
 
-No vendor except GitHub has a live acceptance run. The following names are the intended inline-only interface for a bounded local run; the `acceptance:connector` script does not exist yet, so treat every row as **pending** until its bind is merged.
+No vendor except GitHub has a live acceptance run. The device-path harness
+`scripts/acceptance-connector-live.ts` (`bun run acceptance:connector-live`) enqueues exactly
+one connector call through `PostgresConnectorCallRepository`, waits for the running device
+daemon to claim it, execute it on the device and post the bounded result, then prints a
+bounded summary and PASS/FAIL. The platform process holds no provider key: the key stays in
+the device keychain and only typed arguments and a bounded result cross the queue. Every row
+below stays **pending** until its device credential is registered and one run passes.
 
-Rules for every run:
+Run rules:
 
 - Values are read from the process environment for that one process. Never write them to `.env`, a config file, a fixture, a log or shell history with the value visible. Use a keychain lookup in the command substitution.
 - One provider read per connector, no loops, no retries after success, no parallel calls.
 - Stop at the first cap. Free-tier calls only; no paid plan is required.
 - Expected evidence: one bounded provider result, one `tool.execute` audit row, and no key in logs or the result. Record the measured item count and bytes, not an estimate.
 
-| Connector | Inline environment names (names only) | Bounded operation | Status |
+| Connector | Device-side provider env (names only) | Bounded operation | Status |
 |---|---|---|---|
 | GitHub | none; already server-configured | existing intake/context only | Proven; do not re-run |
-| Sentry | `SENTRY_LIVE_TOKEN`, `SENTRY_LIVE_ORG`, `SENTRY_LIVE_ISSUE_ID`, `SENTRY_LIVE_REGION` | one `issue_context` read | Pending bind |
-| Grafana | `GRAFANA_LIVE_TOKEN`, `GRAFANA_LIVE_BASE_URL`, `GRAFANA_LIVE_RULE_UID`, `GRAFANA_LIVE_DATASOURCE_UID` | one rule read or one metric query | Pending bind |
-| PagerDuty | `PAGERDUTY_LIVE_KEY`, `PAGERDUTY_LIVE_INCIDENT_ID` | one incident context read | Pending bind |
-| Kubernetes | `KUBERNETES_LIVE_TOKEN_FILE`, `KUBERNETES_LIVE_API_URL`, `KUBERNETES_LIVE_NAMESPACE`, `KUBERNETES_LIVE_CA_FILE` | one events list plus one `tailLines=20` log read | Pending bind |
-| Datadog | `DATADOG_LIVE_API_KEY`, `DATADOG_LIVE_APP_KEY`, `DATADOG_LIVE_SITE`, `DATADOG_LIVE_INCIDENT_ID` | one incident read | Pending bind |
-| New Relic | `NEW_RELIC_LIVE_USER_KEY`, `NEW_RELIC_LIVE_ACCOUNT_ID`, `NEW_RELIC_LIVE_ENTITY_GUID` | one entity search or one short NRQL count | Pending bind |
-| Honeycomb | `HONEYCOMB_LIVE_API_KEY`, `HONEYCOMB_LIVE_API_HOST`, `HONEYCOMB_LIVE_DATASET`, `HONEYCOMB_LIVE_QUERY_ID` | one query-result round trip | Pending bind |
-| Axiom | `AXIOM_LIVE_TOKEN`, `AXIOM_LIVE_API_URL`, `AXIOM_LIVE_DATASET`, `AXIOM_LIVE_MONITOR_ID` | one APL aggregate | Pending bind |
-| SigNoz | `SIGNOZ_LIVE_API_KEY`, `SIGNOZ_LIVE_API_URL`, `SIGNOZ_LIVE_SERVICE` | one `query_range` metric query | Pending bind |
+| Sentry | `SENTRY_LIVE_TOKEN`, `SENTRY_LIVE_ORG`, `SENTRY_LIVE_ISSUE_ID`, `SENTRY_LIVE_REGION` | one `issue_context` read | Pending live run |
+| Grafana | `GRAFANA_LIVE_TOKEN`, `GRAFANA_LIVE_BASE_URL`, `GRAFANA_LIVE_RULE_UID`, `GRAFANA_LIVE_DATASOURCE_UID` | one rule read or one metric query | Pending live run |
+| PagerDuty | `PAGERDUTY_LIVE_KEY`, `PAGERDUTY_LIVE_INCIDENT_ID` | one incident context read | Pending live run |
+| Kubernetes | `KUBERNETES_LIVE_TOKEN_FILE`, `KUBERNETES_LIVE_API_URL`, `KUBERNETES_LIVE_NAMESPACE`, `KUBERNETES_LIVE_CA_FILE` | one events list plus one `tailLines=20` log read | Pending live run |
+| Datadog | `DATADOG_LIVE_API_KEY`, `DATADOG_LIVE_APP_KEY`, `DATADOG_LIVE_SITE`, `DATADOG_LIVE_INCIDENT_ID` | one incident read | Pending live run |
+| New Relic | `NEW_RELIC_LIVE_USER_KEY`, `NEW_RELIC_LIVE_ACCOUNT_ID`, `NEW_RELIC_LIVE_ENTITY_GUID` | one entity search or one short NRQL count | Pending live run |
+| Honeycomb | `HONEYCOMB_LIVE_API_KEY`, `HONEYCOMB_LIVE_API_HOST`, `HONEYCOMB_LIVE_DATASET`, `HONEYCOMB_LIVE_QUERY_ID` | one query-result round trip | Pending live run |
+| Axiom | `AXIOM_LIVE_TOKEN`, `AXIOM_LIVE_API_URL`, `AXIOM_LIVE_DATASET`, `AXIOM_LIVE_MONITOR_ID` | one APL aggregate | Pending live run |
+| SigNoz | `SIGNOZ_LIVE_API_KEY`, `SIGNOZ_LIVE_API_URL`, `SIGNOZ_LIVE_SERVICE` | one `query_range` metric query | Pending live run |
 
-Target command shape (not yet runnable):
+Harness contract (names only): `CONNECTOR_LIVE=1`, `CONNECTOR_LIVE_VENDOR`,
+`DATABASE_URL`, `DEVICE_ORGANIZATION_ID`, `DEVICE_ID`, `DEVICE_CREDENTIAL_ID`,
+`CONNECTOR_TOOL_NAME`, optional `CONNECTOR_TOOL_PARAMS_JSON` and `CONNECTOR_AWAIT_MS`
+(default 60000, max 60000). Without `CONNECTOR_LIVE=1` the script prints these instructions
+and exits 0, so CI never runs it.
+
+One bounded Datadog run (the other SaaS vendors use the same shape):
 
 ```bash
 CONNECTOR_LIVE=1 \
-SENTRY_LIVE_TOKEN="$(security find-generic-password -w -s isolate-sentry)" \
-SENTRY_LIVE_ORG="<org-slug>" \
-SENTRY_LIVE_ISSUE_ID="<issue-id>" \
-bun run acceptance:connector -- --connector sentry --operation issue_context --once
+CONNECTOR_LIVE_VENDOR=datadog \
+CONNECTOR_TOOL_NAME=incident_context \
+CONNECTOR_TOOL_PARAMS_JSON='{"incidentId":"<incident-id>"}' \
+CONNECTOR_AWAIT_MS=60000 \
+bun run acceptance:connector-live
 ```
 
-On Linux, replace the keychain read with `secret-tool lookup service isolate-sentry`. Never echo the value to the terminal.
+`DATABASE_URL`, `DEVICE_ORGANIZATION_ID`, `DEVICE_ID` and `DEVICE_CREDENTIAL_ID` come from
+the running device registration; the provider key itself is read only by the device daemon
+from the OS keychain. Never echo a key value to the terminal. On Linux, load it with
+`secret-tool lookup service isolate-<vendor>` inside the daemon's environment, not here.
 
 ## 14. Documented-only catalog
 

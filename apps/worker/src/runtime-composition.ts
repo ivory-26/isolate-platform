@@ -46,6 +46,9 @@ import {
 } from "@isolate/sandbox";
 import {
 	type ContextBundle,
+	createLoggerTraceSink,
+	createMultiTraceSink,
+	createOtlpTraceSink,
 	type Logger,
 	type OrganizationId,
 	PlatformError,
@@ -53,6 +56,7 @@ import {
 	type RunSummary,
 	type TaskId,
 	type TaskStatus,
+	type TraceSink,
 	type UsageSink,
 } from "@isolate/shared";
 import type { WorkerCompositionOverrides } from "./composition";
@@ -211,6 +215,64 @@ export function readInferenceProvider(
 	env: Record<string, string | undefined>,
 ): string {
 	return env.INFERENCE_PROVIDER?.trim() || "none";
+}
+
+const MAX_OTLP_HEADERS = 8;
+const MAX_OTLP_HEADER_VALUE_CHARS = 1024;
+const OTLP_HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/**
+ * Parses `OTEL_EXPORTER_OTLP_HEADERS` (`key=value,key2=value2`).
+ *
+ * Header values are credentials, so they are never logged and never returned
+ * to a caller that would print them. A malformed pair is dropped instead of
+ * failing the worker; a present-but-unusable header set exports without it.
+ */
+export function parseOtlpHeaders(
+	raw: string | undefined,
+): Record<string, string> | undefined {
+	const text = raw?.trim();
+	if (text === undefined || text.length === 0) return undefined;
+	const entries: Array<[string, string]> = [];
+	for (const pair of text.split(",")) {
+		if (entries.length >= MAX_OTLP_HEADERS) break;
+		const separator = pair.indexOf("=");
+		if (separator <= 0) continue;
+		const key = pair.slice(0, separator).trim();
+		const value = pair.slice(separator + 1).trim();
+		if (!OTLP_HEADER_NAME_PATTERN.test(key)) continue;
+		if (value.length === 0 || value.length > MAX_OTLP_HEADER_VALUE_CHARS) {
+			continue;
+		}
+		entries.push([key, value]);
+	}
+	return entries.length === 0 ? undefined : Object.fromEntries(entries);
+}
+
+/**
+ * Opt-in OTLP/HTTP JSON trace export.
+ *
+ * When `OTEL_EXPORTER_OTLP_ENDPOINT` is set the handler receives a multi sink
+ * (redacting logger + OTLP exporter); without it `undefined` keeps the
+ * handler's existing logger default. Endpoint validation happens here, at
+ * boot: an invalid URL (http off-loopback, embedded credentials, query token)
+ * fails closed before any job is claimed. No endpoint or header value is
+ * logged.
+ */
+export function selectTraceSink(
+	env: Record<string, string | undefined>,
+	logger: Logger,
+	fetchImpl?: typeof fetch,
+): TraceSink | undefined {
+	const endpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
+	if (endpoint === undefined || endpoint.length === 0) return undefined;
+	const headers = parseOtlpHeaders(env.OTEL_EXPORTER_OTLP_HEADERS);
+	const otlp = createOtlpTraceSink({
+		endpoint,
+		...(headers === undefined ? {} : { headers }),
+		...(fetchImpl === undefined ? {} : { fetchImpl }),
+	});
+	return createMultiTraceSink([createLoggerTraceSink(logger), otlp]);
 }
 
 /**
@@ -579,6 +641,11 @@ export async function createConfiguredWorkerComposition(
 	deps: CompositionDependencies = {},
 ): Promise<ConfiguredWorkerComposition> {
 	const inferenceProvider = readInferenceProvider(env);
+	// Opt-in OTLP export. Built before any database check so a worker without
+	// durable storage still streams spans; absent endpoint = logger default.
+	const traceSink = selectTraceSink(env, logger);
+	const traceOverrides: WorkerCompositionOverrides =
+		traceSink === undefined ? {} : { traceSink };
 	// Wave 11: validated at boot. Absence is fine (unknown cost); a present but
 	// malformed table fails closed before any job is claimed.
 	const priceTable = loadCostPriceTable(env);
@@ -592,7 +659,7 @@ export async function createConfiguredWorkerComposition(
 			"worker has no DATABASE_URL; queue, usage and task context stay unbound",
 		);
 		return {
-			overrides: {},
+			overrides: traceOverrides,
 			providerName: readProviderName(env),
 			inferenceProvider,
 			githubAuth: false,
@@ -614,6 +681,7 @@ export async function createConfiguredWorkerComposition(
 	const branchLocks = new PostgresBranchLockRepository(sql);
 
 	const overrides: WorkerCompositionOverrides = {
+		...traceOverrides,
 		usageSink,
 		// Wave 13: the task-context projection predates the incident columns, so
 		// the task row is consulted once to carry the fingerprint into the

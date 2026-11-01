@@ -138,6 +138,11 @@ export function createOfflineWorkerDeps(
 		maxCostUsdPerTask: overrides.maxCostUsdPerTask ?? config.maxCostUsdPerTask,
 		priceTable: overrides.priceTable ?? null,
 		now: overrides.now,
+		// Wave 19: the configured composition binds the opt-in OTLP exporter;
+		// absent keeps the handler's redacting-logger default.
+		...(overrides.traceSink === undefined
+			? {}
+			: { traceSink: overrides.traceSink }),
 		// Wave 11: optional blob store for full large payloads. Absent keeps the
 		// inline-only behaviour (a large diff is truncated and recorded as such).
 		...(overrides.blobStore === undefined

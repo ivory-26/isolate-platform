@@ -34,9 +34,9 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 | W19-ROTATE | `603f561` → merged | **done** — `rotateToken`, `/api/device/rotate`, expiry renewal, rate limit, tests |
 | W19-TRACE | `4c3fd9a` → merged | **done** — tenant-scoped trace read model + `/api/traces/{taskId}` |
 | W19-OTLP | `e78cb3b` → merged | **done** — OTLP/HTTP sink, worker sink composition, device-path SaaS live harness |
-| W19-CONTEXT-DEVICE | in flight | per-vendor `*.context.fetch` handlers in the daemon |
-| W19-CONTEXT-WORKER | in flight | fingerprint → device context call loader + composition |
-| W19-E2E | in flight | route-level end-to-end flow covering every endpoint |
+| W19-CONTEXT-DEVICE | `f69318e` → merged | **done** — nine `*.context.fetch` handlers, 256 KiB result cap |
+| W19-CONTEXT-WORKER | `85d8807` → merged | **done** — fingerprint → device context call loader + routed composition |
+| W19-E2E | `6f1c543` → merged | **done** — 344-assertion ordered flow over every device/connector/trace/webhook route |
 
 ## Wave 18 — connector hardening: limits, validation, batching, chunking (2026-11-01)
 

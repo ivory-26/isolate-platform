@@ -2,7 +2,16 @@
 
 Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lanes; published history purged of JWT-shaped test fixtures)
 
-## Current: wave 18 — connector hardening, tracing and secret remediation (2026-11-01)
+## Current: wave 19 — rotation, trace API, OTLP, context preloading, E2E (2026-11-01)
+
+- **Device rotation**: `rotateToken` + `POST /api/device/rotate`; the old token stops verifying immediately, the new token gets a fresh 90-day expiry, and the response is shown once with `no-store`.
+- **Trace read API**: `PostgresTraceReadRepository.getTaskTrace` + `GET /api/traces/{taskId}` — tenant-scoped, `task:read`, bounded events/tool invocations/usage/connector calls, derived trace id, no payloads.
+- **OTLP export**: opt-in `OTEL_EXPORTER_OTLP_ENDPOINT` sink (OTLP/HTTP JSON, bounded attributes, https-only, timeouts, never throws) composed with the logger sink; `.env.example` updated.
+- **Context preloading (all nine non-GitHub sources)**: strict fingerprint parsers, transactional signal lookup, worker `connector.context.fetch` enqueue/await, and device handlers for Sentry/Grafana/PagerDuty/Kubernetes/Datadog/New Relic/Honeycomb/Axiom/SigNoz. GitHub keeps its server-side reader. Daemon result cap aligned to 256 KiB.
+- **SaaS live harness**: `bun run acceptance:connector-live` enqueues one device-path call and awaits the result; without `CONNECTOR_LIVE=1` it prints the runbook and exits 0. No keys were supplied, so the five SaaS live checks remain user-run.
+- **E2E user flow**: `e2e-connector-flow.test.ts` drives register → list → connect → list/revoke → claim/result/heartbeat → trace read → signed webhook → rotate → revoke with 344 assertions, including auth/CSRF/405 negatives and no-secret scans.
+
+## Previous: wave 18 — connector hardening, tracing and secret remediation (2026-11-01)
 
 - **Secret incident (resolved)**: GitGuardian flagged synthetic JWT-shaped fixtures in the Kubernetes and SigNoz tests (commits `c62c705`, `1217440`, `484b473`, `02cbf6f`). They were synthetic (`alg` + `sub` + short signature), never live credentials. Fixtures now build a JWT at runtime; `security:check` rejects static JWT literals in tests; `.gitleaks.toml` gained an explicit JWT rule; the CI secret scan is **blocking** instead of advisory. History was rewritten and force-pushed with lease; `origin/main` is `7beec7a` and contains no JWT-shaped literal.
 - **Audit**: fresh full audit of auth/Neon Auth, tenancy, rate limits, validation, secret handling, queue integrity, SSRF, load balancing and batching is running.

@@ -29,6 +29,13 @@ Two planes meet here: the **trigger/context plane** (webhooks and context bundle
 **live tool plane** (typed calls during a task). This runbook covers the second one; the
 first is in [`../connector-usage.md`](../connector-usage.md) §2.
 
+Non-GitHub incident tasks preload evidence through the same queue: the worker parses the
+incident fingerprint, looks up the signal's `service`/`kind`, and enqueues
+`<source>.context.fetch` (`sentry`, `grafana`, `pagerduty`, `k8s`, `datadog`, `newrelic`,
+`honeycomb`, `axiom`, `signoz`). The daemon maps the fingerprint to provider selectors and
+returns a bounded `ContextBundle`; GitHub keeps its server-side reader. A missing daemon or
+unconfigured vendor degrades to no context, never a failed task.
+
 ## 2. Endpoint inventory
 
 | Endpoint | Auth | Purpose | Availability |

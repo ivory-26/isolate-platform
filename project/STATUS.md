@@ -1,8 +1,26 @@
 # Status
 
-Last updated: 2026-11-01 (wave 20: public landing + authenticated control plane UI)
+Last updated: 2026-11-01 (wave 21: console refit, landing rebuild, shader auth, mobile pass)
 
-## Current: wave 20 — public landing and control plane UI (2026-11-01)
+## Current: wave 21 — console refit, landing rebuild, shader auth, mobile (2026-11-01)
+
+- **Tenant repair (user-approved).** The second Google account (`karpesahil2007@gmail.com`) was added as owner of the populated workspace `15fc5715…`; the auto-created empty workspace `13e308b6…` was deleted after verifying zero tasks, repositories, workflows, approvals, devices and audit rows. The login flow already creates a personal workspace only when the identity has no membership, so an existing account never gets a second one; a different Google account is a different identity and creates its own workspace by design.
+- **Dashboard core (`4c94bea`).** Shared primitives lost the card treatment: `PageHeader` no longer renders a kicker, `Section`/`MetricStrip` gained plain variants, `StatusBadge` is a dot plus label. Overview and Runs now use hairline bands, a four-number metric strip, dense tables, a quiet action hierarchy, and right-aligned time columns.
+- **Secondary pages (`eb2eaec`, lane `de242693`).** Approvals, Repositories, Workflows, Usage, Settings, Devices and Submit were rebuilt as full-width hairline sections with one primary action, explicit empty states, and no card grids.
+- **Landing (`3ad8df3`, merged in `e7800d3`).** Product-led composition against the exact supplied GradientASCII configuration: centered display headline with one Electric Blue phrase, two pill actions, console 56px below the actions, no scrim behind the copy, three masked `backdrop-blur` bands at the console's bottom edge, facts strip, alternating product rows, lifecycle rail, trust diagram, CTA, footer. Refreshed captures (1600×1200 overview, 2× panel clips) replace the old synthetic screenshot; provenance updated.
+- **Shader context fix (`4c94bea`).** The React Bits component called `loseContext()` in its effect cleanup; React's dev double-mount then reused a dead context and the canvas painted white. The forced loss was removed. The shader is fixed to the viewport at `z-index: -1` with the exact eleven visual props.
+- **Auth (`1c7cad6`, `b33865a`).** Sign-in and sign-up reuse the same shader: split brand field on desktop, short shader band on mobile, solid card on canvas, static blue/orange fallback behind the canvas. The Google button uses the official four-colour mark. The shared shader regression is covered by the same component fix.
+- **Mobile (`1c7cad6`).** Emil Kowalski's `mobile-native` skill installed and applied: `viewport-fit=cover`, `interactive-widget=resizes-content`, theme color, tap-highlight removal, `touch-action: manipulation`, control-only `user-select`, 16px inputs on coarse pointers, root overscroll, safe-area padding on topbar/sidebar/auth, `100dvh`/`100svh`. A 390px audit measured zero horizontal overflow on every authenticated route and the landing.
+- **Motion.** A prioritized audit lives in the motion lane (`122edf5`, `task/wave21-motion`): remove the 13 pulse loops, one 150/200/300ms vocabulary with `cubic-bezier(0.23, 1, 0.32, 1)`, one signature moment per surface. Applied so far: skeleton pulses removed, sheet timing fixed, the sheet and command palette keep instant keyboard paths. Chart rAF parking and the run-timeline gate remain open.
+- **Gates.** `tsc --noEmit` 0 errors · biome clean (242 files) · **558 web tests / 0 fail ×2** · landing verified at 1440/390/320 with no overflow · auth canvas live (`webgl2`, not lost) · refreshed captures in `apps/web/public/images/`.
+
+### Wave 21 open items
+1. Chart canvases still run `requestAnimationFrame` continuously; park them and wake on interaction.
+2. Run-timeline gate animation from the motion plan is not implemented.
+3. Real-device QA (sticky hover, tap delay, safe areas with the keyboard, pull-to-refresh) still needs a phone.
+4. The landing's scroll reveal intentionally arms after hydration; a full-page capture must scroll first or the below-fold sections stay hidden.
+
+## Previous: wave 20 — public landing and control plane UI (2026-11-01)
 
 - **Public landing** at `/`: Baseten-style product-led layout, the real dashboard screenshot in a browser frame, the React Bits `GradientASCII` shader from `project/design.md` as the visual bed, a facts strip, alternating feature sections, lifecycle, trust boundary, CTA and footer. Authenticated and local-demo callers redirect to `/overview`.
 - **Auth** at `/login` and `/signup`: focused layout with a minimal shader variant, the Isolate brand mark, and preserved Neon Auth/Google behavior.

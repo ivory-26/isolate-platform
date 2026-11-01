@@ -7,6 +7,7 @@ import {
 	sectionPadding,
 	sectionTitle,
 } from "../styles";
+import { FrameDots } from "./frame";
 import { Reveal, useInView } from "./reveal";
 
 export function LifecycleSection() {
@@ -15,8 +16,9 @@ export function LifecycleSection() {
 	return (
 		<section
 			id="lifecycle"
-			className="scroll-mt-20 border-y border-line-subtle bg-elevated"
+			className="relative scroll-mt-20 border-y border-line-subtle bg-elevated"
 		>
+			<FrameDots />
 			<div className={cn(pageContainer, sectionPadding)}>
 				<Reveal className="max-w-[64ch]">
 					<h2 className={sectionTitle}>From intent to a reviewed change.</h2>

@@ -34,7 +34,6 @@ export function ProductShot({
 	height,
 	aspect,
 	eager = false,
-	align = "left",
 	fadeBottom = false,
 	className,
 }: {
@@ -45,8 +44,7 @@ export function ProductShot({
 	/** Optional fixed display crop, e.g. trimming dead space from a capture. */
 	aspect?: string;
 	eager?: boolean;
-	align?: "left" | "center";
-	/** Progressive backdrop blur where the console meets the page. */
+	/** Progressive blur and fade from the lower third of the frame. */
 	fadeBottom?: boolean;
 	className?: string;
 }) {
@@ -69,23 +67,16 @@ export function ProductShot({
 					{fadeBottom ? (
 						<div
 							aria-hidden="true"
-							className="pointer-events-none absolute inset-x-0 bottom-0 h-28"
+							className="pointer-events-none absolute inset-x-0 bottom-0 h-[38%]"
 						>
-							<div className="absolute inset-x-0 bottom-0 h-28 backdrop-blur-[2px] [mask-image:linear-gradient(to_top,black_5%,transparent_100%)]" />
-							<div className="absolute inset-x-0 bottom-0 h-20 backdrop-blur-[5px] [mask-image:linear-gradient(to_top,black_0%,transparent_92%)]" />
-							<div className="absolute inset-x-0 bottom-0 h-12 backdrop-blur-[10px] [mask-image:linear-gradient(to_top,black_0%,transparent_85%)]" />
+							<div className="absolute inset-x-0 bottom-0 h-full backdrop-blur-[2px] [mask-image:linear-gradient(to_top,black_14%,transparent_100%)]" />
+							<div className="absolute inset-x-0 bottom-0 h-[72%] backdrop-blur-[5px] [mask-image:linear-gradient(to_top,black_6%,transparent_96%)]" />
+							<div className="absolute inset-x-0 bottom-0 h-[44%] backdrop-blur-[10px] [mask-image:linear-gradient(to_top,black_0%,transparent_88%)]" />
+							<div className="absolute inset-x-0 bottom-0 h-[18%] bg-gradient-to-t from-canvas via-canvas/70 to-transparent" />
 						</div>
 					) : null}
 				</div>
 			</ShotFrame>
-			<figcaption
-				className={cn(
-					"mt-3 font-mono text-[11px] leading-5 text-ink-muted",
-					align === "center" && "text-center",
-				)}
-			>
-				Illustrative product view · synthetic data
-			</figcaption>
 		</figure>
 	);
 }

@@ -6,6 +6,7 @@ import {
 	sectionPadding,
 	sectionTitle,
 } from "../styles";
+import { FrameDots } from "./frame";
 import { Reveal } from "./reveal";
 
 function TrustDiagram() {
@@ -79,7 +80,8 @@ function TrustDiagram() {
 
 export function TrustSection() {
 	return (
-		<section id="trust" className="scroll-mt-20 bg-canvas">
+		<section id="trust" className="relative scroll-mt-20 bg-canvas">
+			<FrameDots />
 			<div className={cn(pageContainer, sectionPadding)}>
 				<Reveal className="max-w-[64ch]">
 					<h2 className={sectionTitle}>

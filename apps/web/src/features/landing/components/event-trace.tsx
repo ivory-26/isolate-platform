@@ -33,9 +33,6 @@ export function EventTrace() {
 					))}
 				</ul>
 			</ShotFrame>
-			<figcaption className="mt-3 font-mono text-[11px] leading-5 text-ink-muted">
-				Illustrative event log · synthetic data
-			</figcaption>
 		</figure>
 	);
 }

@@ -37,14 +37,18 @@ import type {
 } from "@isolate/shared";
 import {
 	acceptanceCheckSchema,
+	createLoggerTraceSink,
+	createRunTracer,
 	errorCodeOf,
 	isPlatformError,
 	type Logger,
 	modelCallCostUsd,
+	newTraceContext,
 	type OrganizationId,
 	PlatformError,
 	sandboxCostUsd,
 	type TaskId,
+	type TraceSink,
 } from "@isolate/shared";
 import {
 	acceptanceReportArtifact,
@@ -242,6 +246,12 @@ export type TaskExecutionDeps = {
 		taskId: TaskId;
 	}): Promise<TaskContext>;
 	caps: AgentTurnCaps;
+	/**
+	 * Run-trace sink. Defaults to the redacting logger (`isolate.trace`);
+	 * tests inject a memory sink. Every job gets one trace id and one span per
+	 * agent turn; attributes are bounded ids/counts/durations only.
+	 */
+	traceSink?: TraceSink;
 	/** Trusted command policy bound to the sandbox root. */
 	sandboxPolicy: CommandPolicy;
 	sandbox: {
@@ -796,6 +806,11 @@ function createHandler(
 			const resumeApprovalId = isResume ? readApprovalId(job.payload) : null;
 			if (isResume && resumeApprovalId === null) return REJECTED_PAYLOAD;
 
+			const runTrace = newTraceContext();
+			const tracer = createRunTracer(runTrace, {
+				sink: deps.traceSink ?? createLoggerTraceSink(ctx.logger),
+			});
+
 			let createdAt = 0;
 			let promptTokens = 0;
 			let completionTokens = 0;
@@ -1125,18 +1140,32 @@ function createHandler(
 								workflowRunId: null,
 								type: "agent.turn_started",
 								actor: "worker",
-								data: { turn },
+								data: { turn, traceId: runTrace.traceId },
 							});
 						}
 						const turnStartedAt = now();
-						const output = await runtime.runTurn({
-							prompt,
-							context,
-							signal: ctx.signal,
+						const turnSpan = tracer.startSpan("agent.turn", {
+							turn,
+							taskId: job.taskId,
 						});
+						let output: string;
+						try {
+							output = await runtime.runTurn({
+								prompt,
+								context,
+								signal: ctx.signal,
+							});
+							turnSpan.end("ok", {
+								outputBytes: Buffer.byteLength(output, "utf8"),
+							});
+						} catch (error) {
+							turnSpan.end("error");
+							throw error;
+						}
 						emitMetric(ctx.logger, WORKER_METRICS.turnLatencyMs, {
 							turn,
 							durationMs: Math.max(0, now() - turnStartedAt),
+							traceId: runTrace.traceId,
 						});
 						if (mode !== null) {
 							await mode.lifecycle.event({
@@ -1148,6 +1177,7 @@ function createHandler(
 								data: {
 									turn,
 									emptyOutput: output.trim() === COMPLETION_OUTPUT,
+									traceId: runTrace.traceId,
 								},
 							});
 						}

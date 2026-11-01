@@ -47,7 +47,14 @@ export const METRIC_LOG_MESSAGE = "isolate.metric";
  */
 export type MetricFields = Readonly<Record<string, unknown>>;
 
-const ID_FIELDS = new Set(["jobId", "taskId", "jobType", "code", "outcome"]);
+const ID_FIELDS = new Set([
+	"jobId",
+	"taskId",
+	"jobType",
+	"code",
+	"outcome",
+	"traceId",
+]);
 const COUNT_FIELDS = new Set(["attempt", "maxAttempts", "turn", "count"]);
 const DURATION_FIELDS = new Set(["durationMs", "seconds"]);
 const FLAG_FIELDS = new Set(["requeued"]);

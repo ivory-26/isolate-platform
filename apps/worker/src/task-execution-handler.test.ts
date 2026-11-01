@@ -46,7 +46,7 @@ import type {
 	UsageRecordInput,
 	UsageSink,
 } from "@isolate/shared";
-import { PlatformError } from "@isolate/shared";
+import { createMemoryTraceSink, PlatformError } from "@isolate/shared";
 import type { HandlerContext, HandlerVerdict } from "./contracts";
 import {
 	BRANCH_LOCK_RENEW_INTERVAL_MS,
@@ -461,6 +461,7 @@ type HarnessOptions = {
 	maxSandboxSeconds?: number;
 	maxCostUsdPerTask?: number;
 	priceTable?: TaskExecutionDeps["priceTable"];
+	traceSink?: TaskExecutionDeps["traceSink"];
 	script?: ScriptTurn[];
 	runtime?: RuntimeScript;
 	provider?: FakeProvider;
@@ -548,6 +549,9 @@ function makeHarness(options: HarnessOptions = {}) {
 			options.priceTable === undefined
 				? { models: [], sandbox: { cpuSecondUsd: 0.5, gibSecondUsd: 0.25 } }
 				: options.priceTable,
+		...(options.traceSink === undefined
+			? {}
+			: { traceSink: options.traceSink }),
 		now: clock.now,
 		...(options.lifecycle === undefined
 			? {}
@@ -3404,5 +3408,31 @@ describe("task execution handler — wave 11 metrics", () => {
 				(record) => record.metric === "worker.validation.outcome",
 			),
 		).toMatchObject([{ outcome: "failed" }]);
+	});
+});
+
+describe("task execution handler — run tracing", () => {
+	test("emits one agent.turn span per turn under a single trace id", async () => {
+		const traceSink = createMemoryTraceSink();
+		const harness = makeHarness({
+			traceSink,
+			script: [{ output: "working" }, { output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		const turns = traceSink.events.filter(
+			(event) => event.name === "agent.turn",
+		);
+		expect(turns).toHaveLength(2);
+		expect(new Set(traceSink.events.map((event) => event.traceId)).size).toBe(
+			1,
+		);
+		expect(turns.map((event) => event.status)).toEqual(["ok", "ok"]);
+		expect(turns.map((event) => event.attributes.turn)).toEqual([1, 2]);
+		// Only bounded identifiers/numbers leave the handler.
+		expect(JSON.stringify(traceSink.events)).not.toContain("working");
 	});
 });

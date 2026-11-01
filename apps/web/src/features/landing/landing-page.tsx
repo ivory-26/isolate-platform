@@ -4,13 +4,14 @@ import { ShaderBackdrop } from "@/components/brand/shader-backdrop";
 import { ArrowRightIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { FeatureVisual } from "./components/feature-visual";
 import { FrameDots, FrameLines } from "./components/frame";
 import { LifecycleSection } from "./components/lifecycle-section";
+import { ProductShot } from "./components/product-shot";
 import { Reveal } from "./components/reveal";
 import { SiteFooter } from "./components/site-footer";
 import { SiteHeader } from "./components/site-header";
 import { TrustSection } from "./components/trust-section";
-import { WorkflowVisual } from "./components/workflow-visual";
 import { facts } from "./content";
 import {
 	displayTitle,
@@ -153,21 +154,22 @@ export function LandingPage() {
 				</section>
 
 				<section
-					aria-labelledby="workflow-title"
+					aria-labelledby="product-view-title"
 					className="relative px-5 pb-20 lg:px-8 lg:pb-24"
 				>
-					<h2 id="workflow-title" className="sr-only">
-						Isometric workflow
+					<h2 id="product-view-title" className="sr-only">
+						Product view
 					</h2>
 					<div className="mx-auto w-full max-w-[1200px]">
-						<WorkflowVisual className="px-2 py-3 sm:px-4 sm:py-5" />
-						<div className="wf-stations" aria-hidden="true">
-							<span>task</span>
-							<span>sandbox</span>
-							<span>validate</span>
-							<span data-lit>approve</span>
-							<span>branch</span>
-						</div>
+						<ProductShot
+							src="/images/dashboard-overview.png"
+							alt="Isolate Overview dashboard showing active runs, pending approvals, recent activity and a registered device"
+							width={1600}
+							height={1200}
+							eager
+							fadeBottom
+							className="mx-auto w-full max-w-[1120px]"
+						/>
 					</div>
 				</section>
 
@@ -226,7 +228,7 @@ export function LandingPage() {
 										"Validation runs before a branch is pushed.",
 										"Every tool decision is recorded.",
 									]}
-									visual={<WorkflowVisual focus="sandbox" className="p-3" />}
+									visual={<FeatureVisual feature="sandbox" />}
 								/>
 
 								<CapabilityRow
@@ -239,13 +241,13 @@ export function LandingPage() {
 										"High-impact actions require confirmation.",
 										"The decision, actor and payload hash are audited.",
 									]}
-									visual={<WorkflowVisual focus="approval" className="p-3" />}
+									visual={<FeatureVisual feature="approval" />}
 								/>
 
 								<CapabilityRow
 									title="Every decision leaves a record."
 									copy="Status, stage, actor and timestamp are durable. The run detail page reconstructs the sequence from events, not from a log file someone has to trust."
-									visual={<WorkflowVisual focus="ledger" className="p-3" />}
+									visual={<FeatureVisual feature="record" />}
 								/>
 							</div>
 						</div>

@@ -2,598 +2,493 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as k from "./iso/iso-kit.mjs";
 
 /**
- * Build the isometric workflow machine used by the landing.
+ * Landing feature figures.
  *
- * The object is the explanation: one task block travels from the input
- * carriage, through the sandbox chamber, the validation arch and the approval
- * turnstile, and onto the branch tray. A ledger strip records each step.
- * Colours come from the product tokens at render time.
+ * One hairline vocabulary, borrowed from instrument drawing: a single stroke
+ * weight, dashed hidden edges, small nodes at the ends, no fills or shading.
+ * Each figure is built from its section's own words:
+ *
+ *   sandbox  -> clone, ownership globs, network (denied), budget
+ *   approval -> payload, commit sha, approve, reject
+ *   record   -> event, stage, timestamp, durable
+ *
+ * Every scene sits on a plate so the three figures share one ground plane.
  *
  * Run: bun apps/web/scripts/build-iso.mjs
  */
 
-const WIDTH = 1080;
-const HEIGHT = 660;
-const TEAL = "#0297de";
-const ORANGE = "#fc734d";
+const WIDTH = 720;
+const HEIGHT = 470;
+const PAD = 38;
+const AZ = 45;
+const EL = 30;
+const OUT = "apps/web/public/iso";
 
-const PLATE = { x: -280, y: -170, w: 560, d: 340, r: 18 };
-const PLATE_H = 16;
-const FOOT_H = 7;
-const DECK = { x: -250, y: -132, w: 500, d: 252, r: 12 };
-const DECK_H = 8;
-
-const RAIL_Y = [-70, 40];
-const RAIL_X = [-230, 230];
-const RAIL_Z = DECK_H;
-const RAIL_H = 4;
-
-const CONTROL = { x: -70, y: -162, w: 170, d: 38, r: 5 };
-const CONTROL_H = 54;
-
-const SANDBOX = { x0: -150, x1: -40, y0: -92, y1: 72 };
-const SANDBOX_TOP = 150;
-
-const VALIDATE_X = 40;
-const VALIDATE_Y = [-92, 72];
-const VALIDATE_TOP = 166;
-
-const GATE = [140, 0];
-const GATE_TOP = 152;
-
-const TRAY = { x: 190, y: -58, w: 62, d: 116, r: 6 };
-const PR_CARD = { x: 204, y: -34, w: 34, d: 58, r: 2 };
-
-const TASK_X = -196;
-const TASK_Y = -14;
-const TASK_Z = 20;
-const TASK_W = 40;
-const TASK_D = 38;
-const TASK_H = 26;
-
-const STATIONS = [-95, VALIDATE_X, GATE[0], 218];
-
-const P = k.fitProjection(
-	[
-		...k.boxCorners(PLATE, -PLATE_H - FOOT_H, 0),
-		[-150, -92, SANDBOX_TOP + 4],
-		[VALIDATE_X, -92, VALIDATE_TOP + 4],
-		[GATE[0], 0, GATE_TOP + 10],
-		[TRAY.x + TRAY.w, TRAY.y + TRAY.d, 30],
-	],
-	WIDTH,
-	HEIGHT,
-	{ pad: 42, azimuth: 45, elevation: 30 },
-);
-
-const S = (paths, style) => k.solidSvg(paths, style);
-const L = (d, style) => k.lineSvg(d, style);
-const D = (points, style) => k.dotsSvg(points, style);
-const at = (point) => k.iso(point, P);
-const screenDelta = (dx) => {
-	const a = k.iso([dx, 0, 0], P);
-	const b = k.iso([0, 0, 0], P);
-	return [a[0] - b[0], a[1] - b[1]];
-};
-const px = (value) => `${value.toFixed(2)}px`;
-
-function base() {
-	const out = [
-		`<path class="iso-halo" d="${k.haloOf(PLATE, -PLATE_H - FOOT_H, PLATE_H, P)}"/>`,
-	];
-	for (const [x, y] of k.corners(PLATE, 26)) {
-		out.push(S(k.cylinder(x, y, 9, -PLATE_H - FOOT_H, 2, P, 28), { tone: "lo" }));
-		out.push(
-			S(k.cylinder(x, y, 7, -PLATE_H - FOOT_H + 2, FOOT_H - 2, P, 28), {
-				tone: "mid",
-			}),
-		);
-	}
-	out.push(S(k.slabOf(PLATE, -PLATE_H, PLATE_H, P, 10, 1.8), { tone: "lo" }));
-	out.push(L(k.planOutline(k.insetPlan(PLATE, 6), 0, P, 10), { tone: "faint" }));
-	const screws = k.corners(PLATE, 12);
-	out.push(
-		L(
-			screws.map(([x, y]) => k.ring(x, y, 2.6, 0.2, P, 18)).join(""),
-			{ tone: "lo" },
-		),
-	);
-	out.push(D(screws.map(([x, y]) => at([x, y, 0.2])), { size: 0.5 }));
-
-	const strip = { x: -250, y: PLATE.y + PLATE.d - 20, w: 500, d: 8, r: 1 };
-	out.push(S(k.slabOf(strip, 0, 0.7, P, 3), { tone: "lo", crease: "none" }));
-	const ticks = k.topTicks(
-		strip.x + 6,
-		strip.x + strip.w - 6,
-		5,
-		5,
-		strip.y + 1,
-		0.7,
-		[2, 3.8],
-		P,
-	);
-	out.push(L(ticks.minor, { tone: "lo" }), L(ticks.major, { tone: "mid" }));
-
-	out.push(S(k.slabOf(DECK, 0, DECK_H, P, 10, 1.4), { tone: "mid" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(DECK, 5), DECK_H, P, 10), { tone: "faint" }),
-	);
-	return out.join("");
-}
-
-function rails() {
-	const out = [];
-	for (const y of RAIL_Y) {
-		out.push(
-			S(
-				k.slabOf(
-					{ x: RAIL_X[0], y, w: RAIL_X[1] - RAIL_X[0], d: 6, r: 1 },
-					RAIL_Z,
-					RAIL_H,
-					P,
-					3,
-					0.5,
-				),
-				{ tone: "mid" },
-			),
-		);
-		out.push(
-			D(
-				[RAIL_X[0] + 8, RAIL_X[1] - 8].map((x) =>
-					at([x, y + 3, RAIL_Z + RAIL_H]),
-				),
-				{ size: 0.4 },
-			),
-		);
-	}
-	for (const x of [RAIL_X[0] - 6, RAIL_X[1]]) {
-		out.push(
-			S(
-				k.slabOf(
-					{ x, y: RAIL_Y[0] - 4, w: 6, d: RAIL_Y[1] - RAIL_Y[0] + 14, r: 1.4 },
-					RAIL_Z,
-					RAIL_H + 4,
-					P,
-					3,
-					0.6,
-				),
-				{ tone: "mid" },
-			),
-		);
-	}
-	return out.join("");
-}
-
-function controlBox() {
-	const out = [];
-	out.push(S(k.slabOf(CONTROL, 0, CONTROL_H, P, 8, 1.2), { tone: "mid" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(CONTROL, 5), CONTROL_H, P, 8), { tone: "faint" }),
-	);
-	const screen = { x: CONTROL.x + 12, y: CONTROL.y + 8, w: 76, d: 22, r: 2 };
-	out.push(S(k.slabOf(screen, CONTROL_H, 1.2, P, 4), { tone: "lo", crease: "none" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(screen, 2), CONTROL_H + 1.2, P, 4), {
-			tone: "blue",
-		}),
-	);
-	out.push(
-		L(
-			[0, 4, 8].map((offset) =>
-				k.lineOnTop(
-					[screen.x + 5, screen.y + 5 + offset],
-					[screen.x + 5 + (offset === 4 ? 34 : 52), screen.y + 5 + offset],
-					CONTROL_H + 1.2,
-					P,
-				),
-			).join(""),
-			{ tone: "blue" },
-		),
-	);
-	const knobs = [
-		[CONTROL.x + 106, CONTROL.y + 18],
-		[CONTROL.x + 126, CONTROL.y + 18],
-	];
-	for (const [x, y] of knobs) {
-		out.push(S(k.cylinder(x, y, 6, CONTROL_H, 4, P, 24), { tone: "mid" }));
-		out.push(L(k.knurl(x, y, 6, CONTROL_H, CONTROL_H + 4, 30, P), { tone: "lo" }));
-		out.push(L(k.lineOnTop([x, y], [x + 5, y], CONTROL_H + 4, P), { tone: "hi" }));
-		out.push(D([at([x, y, CONTROL_H + 4])], { size: 0.5, tone: "hi" }));
-	}
-	const vents = { x: CONTROL.x + 12, y: CONTROL.y + 22, w: 64, d: 10, r: 1 };
-	out.push(
-		L(
-			[0, 3, 6].map((offset) =>
-				k.lineOnTop(
-					[vents.x + 2, vents.y + 2 + offset],
-					[vents.x + vents.w - 2, vents.y + 2 + offset],
-					CONTROL_H,
-					P,
-				),
-			).join(""),
-			{ tone: "faint" },
-		),
-	);
-	out.push(
-		D(
-			k.corners(CONTROL, 6).map(([x, y]) => at([x, y, CONTROL_H])),
-			{ size: 0.45 },
-		),
-	);
-	return out.join("");
-}
-
-function ledger() {
-	const out = [];
-	const strip = { x: -240, y: 102, w: 480, d: 22, r: 3 };
-	out.push(S(k.slabOf(strip, DECK_H, 4, P, 4, 0.5), { tone: "lo" }));
-	const ticks = k.topTicks(
-		strip.x + 6,
-		strip.x + strip.w - 6,
-		6,
-		5,
-		strip.y + 2,
-		DECK_H + 4,
-		[1.6, 3.4],
-		P,
-	);
-	out.push(L(ticks.minor, { tone: "faint" }), L(ticks.major, { tone: "lo" }));
-	const dots = [];
-	for (let index = 0; index < 18; index += 1) {
-		const x = strip.x + 18 + index * 25;
-		const y = strip.y + (index % 3 === 0 ? 8 : 13);
-		dots.push(at([x, y, DECK_H + 4]));
-	}
-	out.push(D(dots, { size: 0.55, tone: "mid", pulse: true }));
-
-	const head = { x: -34, y: 94, w: 38, d: 34, r: 3 };
-	out.push(S(k.slabOf(head, DECK_H, 30, P, 4, 0.6), { tone: "mid" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(head, 3), DECK_H + 30, P, 4), { tone: "faint" }),
-	);
-	out.push(
-		D(
-			k.corners(head, 5).map(([x, y]) => at([x, y, DECK_H + 30])),
-			{ size: 0.4 },
-		),
-	);
-	const lamp = [head.x + head.w / 2, head.y + head.d / 2];
-	out.push(S(k.cylinder(lamp[0], lamp[1], 4, DECK_H + 30, 2, P, 20), { tone: "lit", lit: true }));
-	return out.join("");
-}
-
-function sandbox() {
-	const out = [];
-	const posts = [
-		[SANDBOX.x0, SANDBOX.y0],
-		[SANDBOX.x0, SANDBOX.y1],
-		[SANDBOX.x1, SANDBOX.y0],
-		[SANDBOX.x1, SANDBOX.y1],
-	];
-	for (const [x, y] of posts) {
-		out.push(
-			S(k.cylinder(x, y, 5, DECK_H, SANDBOX_TOP - DECK_H, P, 20), {
-				tone: "mid",
-				crease: "none",
-			}),
-		);
-		out.push(L(k.sideArc(x, y, 5, SANDBOX_TOP - 8, P, 12), { tone: "faint" }));
-		out.push(S(k.cylinder(x, y, 6, SANDBOX_TOP, 3, P, 20), { tone: "mid" }));
-	}
-	const topX = { x: SANDBOX.x0 - 6, y: SANDBOX.y0 - 6, w: SANDBOX.x1 - SANDBOX.x0 + 12, d: 6, r: 1 };
-	const topY = { x: SANDBOX.x1 - 6, y: SANDBOX.y0 - 6, w: 6, d: SANDBOX.y1 - SANDBOX.y0 + 12, r: 1 };
-	out.push(S(k.slabOf(topX, SANDBOX_TOP, 4, P, 4), { tone: "mid" }));
-	out.push(S(k.slabOf(topY, SANDBOX_TOP, 4, P, 4), { tone: "mid" }));
-
-	const glass = k.onTop(
-		[
-			[SANDBOX.x0 + 5, SANDBOX.y1 - 5],
-			[SANDBOX.x1 - 5, SANDBOX.y1 - 5],
-			[SANDBOX.x1 - 5, SANDBOX.y1 - 5],
-			[SANDBOX.x1 - 5, SANDBOX.y0 + 5],
-		],
-		DECK_H + 6,
-		P,
-		true,
-	);
-	out.push(
-		`<path class="wf-glass" d="${glass}" />`,
-	);
-	out.push(
-		L(
-			k.onTop(
-				[
-					[SANDBOX.x0 + 5, SANDBOX.y1 - 5],
-					[SANDBOX.x1 - 5, SANDBOX.y1 - 5],
-				],
-				SANDBOX_TOP - 4,
-				P,
-			),
-			{ tone: "blue" },
-		),
-	);
-	const table = { x: -118, y: -36, w: 46, d: 46, r: 3 };
-	out.push(S(k.slabOf(table, DECK_H, 8, P, 4, 0.6), { tone: "hi" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(table, 3), DECK_H + 8, P, 4), { tone: "faint" }),
-	);
-	const armBase = [-100, -14];
-	out.push(S(k.cylinder(armBase[0], armBase[1], 7, DECK_H + 8, 8, P, 24), { tone: "mid" }));
-	out.push(
-		S(k.cylinder(armBase[0], armBase[1], 4, DECK_H + 16, 52, P, 18), {
-			tone: "mid",
-			crease: "none",
-		}),
-	);
-	const arm = { x: armBase[0] + 4, y: armBase[1] - 3, w: 34, d: 6, r: 2 };
-	out.push(S(k.slabOf(arm, DECK_H + 60, 4, P, 4, 0.5), { tone: "mid" }));
-	out.push(S(k.cylinder(armBase[0] + 38, armBase[1], 3.4, DECK_H + 58, 10, P, 18), { tone: "hi" }));
-	out.push(D([at([armBase[0] + 38, armBase[1], DECK_H + 68])], { size: 0.5, tone: "hi" }));
-	return out.join("");
-}
-
-function validation() {
-	const out = [];
-	for (const y of VALIDATE_Y) {
-		out.push(
-			S(k.cylinder(VALIDATE_X, y, 5, DECK_H, VALIDATE_TOP - DECK_H, P, 20), {
-				tone: "mid",
-				crease: "none",
-			}),
-		);
-		out.push(S(k.cylinder(VALIDATE_X, y, 6, VALIDATE_TOP, 3, P, 20), { tone: "mid" }));
-	}
-	const top = { x: VALIDATE_X - 6, y: VALIDATE_Y[0] - 6, w: 12, d: VALIDATE_Y[1] - VALIDATE_Y[0] + 12, r: 2 };
-	out.push(S(k.slabOf(top, VALIDATE_TOP, 6, P, 4, 0.6), { tone: "mid" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(top, 3), VALIDATE_TOP + 6, P, 4), { tone: "faint" }),
-	);
-	out.push(
-		S(k.slabOf({ x: VALIDATE_X - 10, y: -34, w: 20, d: 68, r: 3 }, 92, 14, P, 4, 0.5), {
-			tone: "mid",
-		}),
-	);
-	out.push(
-		L(
-			k.onTop(
-				[
-					[VALIDATE_X, 0],
-					[VALIDATE_X, 0],
-				],
-				106,
-				P,
-			),
-			{ tone: "faint" },
-		),
-	);
-	const scan = { x: VALIDATE_X - 7, y: -26, w: 14, d: 52, r: 2 };
-	out.push(
-		`<g data-part="scan">${S(k.slabOf(scan, 110, 5, P, 4, 0.4), { tone: "blue" })}${L(
-			k.planOutline(k.insetPlan(scan, 2), 115, P, 4),
-			{ tone: "blue" },
-		)}</g>`,
-	);
-	out.push(
-		D(
-			[
-				at([VALIDATE_X, -70, VALIDATE_TOP + 6]),
-				at([VALIDATE_X, 70, VALIDATE_TOP + 6]),
-			],
-			{ size: 0.5, tone: "mid" },
-		),
-	);
-	return out.join("");
-}
-
-function approval() {
-	const out = [];
-	out.push(S(k.cylinder(GATE[0], GATE[1], 22, DECK_H, 8, P, 32), { tone: "mid" }));
-	out.push(L(k.ring(GATE[0], GATE[1], 22, DECK_H + 8, P, 40), { tone: "faint" }));
-	out.push(
-		S(k.cylinder(GATE[0], GATE[1], 7, DECK_H + 8, GATE_TOP - DECK_H - 20, P, 24), {
-			tone: "mid",
-			crease: "none",
-		}),
-	);
-	const screen = at([GATE[0], GATE[1], 116]);
-	const arm = `<g data-part="gate-arm" style="transform-box:view-box;transform-origin:${screen[0]}px ${screen[1]}px">${S(
-		k.slabOf({ x: GATE[0] - 4, y: GATE[1] - 78, w: 8, d: 78, r: 3 }, 112, 6, P, 4, 0.6),
-		{ tone: "lit", lit: true },
-	)}${S(
-		k.slabOf({ x: GATE[0] - 10, y: GATE[1] - 88, w: 20, d: 14, r: 2 }, 116, 12, P, 4, 0.6),
-		{ tone: "lit", lit: true },
-	)}${L(
-		k.planOutline(
-			{ x: GATE[0] - 10, y: GATE[1] - 88, w: 20, d: 14, r: 2 },
-			128,
-			P,
-			4,
-		),
-		{ tone: "lit" },
-	)}</g>`;
-	out.push(arm);
-	out.push(
-		S(k.cylinder(GATE[0], GATE[1], 9, GATE_TOP, 8, P, 24), { tone: "mid" }),
-	);
-	out.push(
-		S(k.cylinder(GATE[0], GATE[1], 5, GATE_TOP + 8, 4, P, 20), {
-			tone: "lit",
-			lit: true,
-		}),
-	);
-	out.push(
-		`<circle data-part="gate-lamp" class="wf-lamp" cx="${at([GATE[0], GATE[1], GATE_TOP + 13])[0]}" cy="${at([GATE[0], GATE[1], GATE_TOP + 13])[1]}" r="4" />`,
-	);
-	return out.join("");
-}
-
-function output() {
-	const out = [];
-	out.push(S(k.slabOf(TRAY, DECK_H, 6, P, 6, 0.6), { tone: "mid" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(TRAY, 4), DECK_H + 6, P, 6), { tone: "faint" }),
-	);
-	out.push(S(k.slabOf(PR_CARD, DECK_H + 6, 4, P, 4, 0.5), { tone: "hi" }));
-	out.push(
-		L(k.planOutline(k.insetPlan(PR_CARD, 3), DECK_H + 10, P, 4), { tone: "blue" }),
-	);
-	const lines = [0, 5, 10, 15].map((offset) =>
-		k.lineOnTop(
-			[PR_CARD.x + 5, PR_CARD.y + 10 + offset],
-			[PR_CARD.x + PR_CARD.w - 5, PR_CARD.y + 10 + offset],
-			DECK_H + 10,
-			P,
-		),
-	);
-	out.push(L(lines.join(""), { tone: "faint" }));
-	out.push(
-		D(k.corners(TRAY, 7).map(([x, y]) => at([x, y, DECK_H + 6])), { size: 0.45 }),
-	);
-	return out.join("");
-}
-
-function carriage() {
-	const out = [];
-	const body = { x: -228, y: -72, w: 66, d: 66, r: 4 };
-	out.push(S(k.slabOf(body, RAIL_Z + RAIL_H, 8, P, 5, 0.6), { tone: "mid" }));
-	out.push(D(k.corners(body, 7).map(([x, y]) => at([x, y, RAIL_Z + RAIL_H + 8])), { size: 0.4 }));
-	out.push(
-		L(
-			[0, 1].map((index) =>
-				k.lineOnTop(
-					[body.x + 6, body.y + 12 + index * 8],
-					[body.x + body.w - 6, body.y + 12 + index * 8],
-					RAIL_Z + RAIL_H + 8,
-					P,
-				),
-			).join(""),
-			{ tone: "faint" },
-		),
-	);
-	return out.join("");
-}
-
-function task() {
-	const plan = { x: TASK_X, y: TASK_Y, w: TASK_W, d: TASK_D, r: 3 };
-	const out = [];
-	out.push(S(k.slabOf(plan, TASK_Z, TASK_H, P, 5, 0.7), { tone: "hi" }));
-	out.push(L(k.planOutline(k.insetPlan(plan, 3), TASK_Z + TASK_H, P, 5), { tone: "blue" }));
-	out.push(
-		L(
-			[0, 1].map((index) =>
-				k.lineOnTop(
-					[plan.x + 7, plan.y + 10 + index * 8],
-					[plan.x + plan.w - 7, plan.y + 10 + index * 8],
-					TASK_Z + TASK_H,
-					P,
-				),
-			).join(""),
-			{ tone: "blue" },
-		),
-	);
-	out.push(D([at([TASK_X + 6, TASK_Y + 6, TASK_Z + TASK_H])], { size: 0.5, tone: "hi" }));
-	return out.join("");
-}
-
-function cables() {
-	const paths = [
-		[
-			[-52, -132],
-			[-52, -100],
-			[-95, -70],
-			[-95, -40],
-		],
-		[
-			[70, -132],
-			[70, -105],
-			[40, -92],
-			[40, -70],
-		],
-		[
-			[96, -132],
-			[96, -110],
-			[140, -90],
-			[140, -40],
-		],
-	];
-	return paths
-		.map((points) =>
-			L(k.onTop(points, DECK_H, P), { tone: "blue", flow: true }),
-		)
-		.join("");
-}
-
-const body = [
-	base(),
-	controlBox(),
-	cables(),
-	rails(),
-	ledger(),
-	sandbox(),
-	validation(),
-	approval(),
-	output(),
-	carriage(),
-	`<g data-part="task" class="wf-task">${task()}</g>`,
-].join("");
-
-const deltas = STATIONS.map((x) => screenDelta(x - TASK_X));
-const gateScreen = at([GATE[0], GATE[1], 116]);
-const style = `
-<style>
-.wf-glass{fill:rgba(2,151,222,.07);stroke:rgba(2,151,222,.32);stroke-width:.6}
-.wf-task .iso-top{fill:#63bce8}.wf-task .iso-shade{fill:#0277ad}.wf-task .iso-edge{stroke:#8fd4f5}.wf-task .iso-line{stroke:#8fd4f5}.wf-lamp{fill:#fc734d;opacity:.9;animation:wf-lamp 2.4s ease-in-out infinite}
-@keyframes wf-task{
-  0%,6%{transform:translate(0,0);opacity:1}
-  20%,30%{transform:translate(${px(deltas[0][0])},${px(deltas[0][1])});opacity:1}
-  42%,52%{transform:translate(${px(deltas[1][0])},${px(deltas[1][1])});opacity:1}
-  62%,70%{transform:translate(${px(deltas[2][0])},${px(deltas[2][1])});opacity:1}
-  82%,94%{transform:translate(${px(deltas[3][0])},${px(deltas[3][1])});opacity:1}
-  98%,100%{transform:translate(${px(deltas[3][0])},${px(deltas[3][1])});opacity:0}
-}
-@keyframes wf-gate{
-  0%,58%{transform:rotate(0deg)}
-  66%,78%{transform:rotate(-72deg)}
-  88%,100%{transform:rotate(0deg)}
-}
-@keyframes wf-scan{
-  0%,32%{transform:translateY(0)}
-  42%,50%{transform:translateY(34px)}
-  60%,100%{transform:translateY(0)}
-}
-@keyframes wf-lamp{
-  0%,100%{opacity:.35}
-  12%,46%{opacity:1}
-  60%{opacity:.35}
-}
-[data-part="task"]{animation:wf-task 18s cubic-bezier(.23,1,.32,1) infinite}
-[data-part="gate-arm"]{animation:wf-gate 18s cubic-bezier(.23,1,.32,1) infinite}
-[data-part="scan"]{animation:wf-scan 18s cubic-bezier(.23,1,.32,1) infinite}
-@media (prefers-reduced-motion:reduce){
-  [data-part="task"],[data-part="gate-arm"],[data-part="scan"],.wf-task .iso-top{fill:#63bce8}.wf-task .iso-shade{fill:#0277ad}.wf-task .iso-edge{stroke:#8fd4f5}.wf-task .iso-line{stroke:#8fd4f5}.wf-lamp{animation:none!important}
-}
-</style>`;
-
+/* Tokens: the page is #02070A, so strokes are light and thin. */
 const BRAND_CSS = `.iso{
---anatomy-card:#02070a;--anatomy-paper:#071016;--anatomy-top:#1c4658;
---anatomy-shade-0:#08161d;--anatomy-shade-1:#0c2029;--anatomy-shade-2:#112b37;--anatomy-shade-3:#173846;
---anatomy-face:#fc734d;--anatomy-lit-top:#ff9b78;--anatomy-lit-shade:#d9572f;
---anatomy-hi:#eaf2f5;--anatomy-mid:#6a8b9c;--anatomy-lo:#3d6072;--anatomy-faint:#203541;--anatomy-lit:#fc734d;
---anatomy-blue:#0297de;--anatomy-red:#fc734d;--anatomy-green:#4ccb91;--anatomy-dot:#63bce8;
---anatomy-halo:#000000;--anatomy-halo-opacity:.55;--anatomy-weight:.7px;
-}`;
+  --anatomy-paper:#02070a;
+  --anatomy-hi:#e4f0f6;
+  --anatomy-mid:#8aa7b6;
+  --anatomy-lo:#44626f;
+  --anatomy-faint:#203138;
+  --anatomy-lit:#fc734d;
+  --anatomy-red:#fc734d;
+  --anatomy-blue:#0297de;
+  --anatomy-dot:#9fd3ec;
+  --anatomy-weight:.8px;
+}
+.iso-line[data-tone="blue"]{stroke-width:1.15px}
+.iso-line[data-tone="red"]{stroke-width:1.15px}
+.iso-line[data-tone="hi"]{stroke-width:1px}
+.iso-dots circle{fill:#9fd3ec}
+.iso-dots[data-tone="mid"] circle{fill:#5f8ba0}
+.iso-dots[data-tone="faint"] circle{fill:#2c4653}`;
 
-const full = k.figureSvg({
-	width: WIDTH,
-	height: HEIGHT,
+const px = (value) => `${value.toFixed(1)}px`;
+
+/** Projection helpers shared by every scene. */
+function geometry(P) {
+	const iso = (point) => k.iso(point, P);
+	const line = (d, tone, opts = {}) => k.lineSvg(d, { tone, ...opts });
+	const edge = (a, b, tone, opts = {}) =>
+		line(k.pathOf([iso(a), iso(b)]), tone, opts);
+	const edges = (pairs, tone, opts = {}) =>
+		line(
+			pairs.map(([a, b]) => k.pathOf([iso(a), iso(b)])).join(""),
+			tone,
+			opts,
+		);
+	const strokePaths = (paths, tone, opts = {}) =>
+		line(paths.filter(Boolean).join(""), tone, opts);
+	const planRing = (plan, z, tone, opts = {}) =>
+		line(k.planOutline(plan, z, P, 10), tone, opts);
+	const planEdge = (points, z, tone, closed = false, opts = {}) =>
+		line(k.onTop(points, z, P, closed), tone, opts);
+	const lineOnTop = (from, to, z, tone, opts = {}) =>
+		line(k.lineOnTop(from, to, z, P), tone, opts);
+	const dot = (point, size = 2, tone = "mid") =>
+		k.dotsSvg([iso(point)], { size, tone });
+	const dots = (points, size = 2, tone = "mid") =>
+		k.dotsSvg(points.map(iso), { size, tone });
+	const ticks = (from, to, step, every, y, z, lengths, tone = "lo") => {
+		const marks = k.topTicks(from, to, step, every, y, z, lengths, P);
+		return `${line(marks.minor, "faint")}${line(marks.major, tone)}`;
+	};
+
+	/** A box drawn as a wireframe: top edge solid, far edge dashed. */
+	const box = (
+		plan,
+		z0,
+		z1,
+		{ top = "mid", side = "lo", hidden = "faint" } = {},
+	) => {
+		const radius = plan.r ?? 0;
+		const inset = radius * (1 - Math.SQRT1_2);
+		const posts = [
+			[plan.x + inset, plan.y + inset],
+			[plan.x + plan.w - inset, plan.y + inset],
+			[plan.x + plan.w - inset, plan.y + plan.d - inset],
+			[plan.x + inset, plan.y + plan.d - inset],
+		];
+		return [
+			hidden ? planRing(plan, z0, hidden, { dashed: true }) : "",
+			strokePaths(
+				posts.map(([x, y]) => k.pathOf([iso([x, y, z0]), iso([x, y, z1])])),
+				side,
+			),
+			planRing(plan, z1, top),
+		].join("");
+	};
+
+	/** A column: two ellipses and the two silhouette lines. */
+	const cyl = (
+		cx,
+		cy,
+		radius,
+		z0,
+		z1,
+		{ top = "mid", side = "lo", hidden = "faint" } = {},
+	) => {
+		const [vx, vy] = k.towardViewer(P);
+		const bearing = Math.atan2(vy, vx);
+		const out = [
+			planEdge(k.circleRing(cx, cy, radius, 40), z0, hidden, true, {
+				dashed: true,
+			}),
+			planEdge(k.circleRing(cx, cy, radius, 40), z1, top, true),
+		];
+		for (const sign of [1, -1]) {
+			const angle = bearing + (sign * Math.PI) / 2;
+			const px0 = cx + radius * Math.cos(angle);
+			const py0 = cy + radius * Math.sin(angle);
+			out.push(edge([px0, py0, z0], [px0, py0, z1], side));
+		}
+		return out.join("");
+	};
+
+	return {
+		iso,
+		line,
+		edge,
+		edges,
+		strokePaths,
+		planRing,
+		planEdge,
+		lineOnTop,
+		dot,
+		dots,
+		ticks,
+		box,
+		cyl,
+	};
+}
+
+/** Screen-space offset for a world-space move, used by the animations. */
+function shift(P, from, to) {
+	const a = k.iso(from, P);
+	const b = k.iso(to, P);
+	return [b[0] - a[0], b[1] - a[1]];
+}
+
+function writeScene({ name, label, fit, css = "", build }) {
+	const P = k.fitProjection(fit, WIDTH, HEIGHT, {
+		pad: PAD,
+		azimuth: AZ,
+		elevation: EL,
+	});
+	const g = geometry(P);
+	const rules = typeof css === "function" ? css({ g, P }) : css;
+	const body = [
+		`<style>${rules}
+@media (prefers-reduced-motion:reduce){[data-part]{animation:none!important}}
+</style>`,
+		...build(g, P),
+	];
+	const svg = k.figureSvg({
+		width: WIDTH,
+		height: HEIGHT,
+		label,
+		body,
+		className: "line-svg",
+		standalone: true,
+	});
+	mkdirSync(OUT, { recursive: true });
+	const file = svg.replace("</style>", `${BRAND_CSS}</style>`);
+	writeFileSync(`${OUT}/${name}.svg`, file);
+	console.log(`${name}.svg`, `${(file.length / 1024).toFixed(1)} KiB`);
+}
+
+/* ------------------------------------------------------------------ */
+/* sandbox: the plate is the sandbox; the wire is cut at its wall.      */
+/* ------------------------------------------------------------------ */
+
+writeScene({
+	name: "sandbox",
 	label:
-		"An isometric workflow machine. A task block leaves the input carriage, passes through a glass sandbox chamber, under a validation arch, through an orange approval turnstile, and onto the branch tray. A ledger strip records each event.",
-	body: [style, body],
-	className: "wf-svg",
-	standalone: true,
+		"Hairline isometric diagram of a sandbox: a wireframe plate holds a stack of cloned repository layers and a task block raised on a column inside a dashed ownership boundary. A network wire leaves the task, crosses the boundary and is cut at the sandbox wall. A budget dial and a tick ruler sit at the front.",
+	fit: [
+		...k.boxCorners({ x: -150, y: -88, w: 300, d: 176 }, 0, 12),
+		[-16, -30, 64],
+		[146, 6, 24],
+		[-78, 72, 12],
+	],
+	css: `[data-part="deny"]{animation:s-deny 6.5s ease-in-out infinite}
+@keyframes s-deny{0%,70%,100%{opacity:.35}80%,90%{opacity:1}}
+[data-part="needle"]{animation:s-needle 9s cubic-bezier(.32,.72,0,1) infinite}
+@keyframes s-needle{0%,100%{transform:rotate(-9deg)}40%,60%{transform:rotate(7deg)}}`,
+	build: (g, P) => {
+		const PLATE = { x: -150, y: -88, w: 300, d: 176, r: 14 };
+		const OWN = { x: -56, y: -50, w: 108, d: 92, r: 8 };
+		const parts = [];
+
+		parts.push(g.box(PLATE, 0, 12, { top: "mid", side: "lo" }));
+
+		// clone: three repository layers, inside the sandbox, outside the globs.
+		const CLONE = { x: -132, y: -42, w: 58, d: 58, r: 5 };
+		for (let layer = 0; layer < 3; layer += 1) {
+			parts.push(
+				g.box(CLONE, 12 + layer * 4, 16 + layer * 4, {
+					top: layer === 2 ? "mid" : "lo",
+					side: "faint",
+				}),
+			);
+		}
+		parts.push(
+			g.dots(
+				k.corners(CLONE, 9).map(([x, y]) => [x, y, 24]),
+				1.7,
+				"faint",
+			),
+		);
+
+		// ownership: the files this run may write.
+		parts.push(g.planRing(OWN, 12, "lo", { dashed: true }));
+		const bracket = 12;
+		parts.push(
+			g.edges(
+				[
+					[[OWN.x, OWN.y], [OWN.x + bracket, OWN.y]],
+					[[OWN.x, OWN.y], [OWN.x, OWN.y + bracket]],
+					[
+						[OWN.x + OWN.w - bracket, OWN.y],
+						[OWN.x + OWN.w, OWN.y],
+					],
+					[
+						[OWN.x + OWN.w, OWN.y],
+						[OWN.x + OWN.w, OWN.y + bracket],
+					],
+					[
+						[OWN.x, OWN.y + OWN.d - bracket],
+						[OWN.x, OWN.y + OWN.d],
+					],
+					[
+						[OWN.x, OWN.y + OWN.d],
+						[OWN.x + bracket, OWN.y + OWN.d],
+					],
+					[
+						[OWN.x + OWN.w - bracket, OWN.y + OWN.d],
+						[OWN.x + OWN.w, OWN.y + OWN.d],
+					],
+					[
+						[OWN.x + OWN.w, OWN.y + OWN.d - bracket],
+						[OWN.x + OWN.w, OWN.y + OWN.d],
+					],
+				].map(([a, b]) => [
+					[a[0], a[1], 12],
+					[b[0], b[1], 12],
+				]),
+				"lo",
+			),
+		);
+
+		// The task: the only object at that height.
+		parts.push(g.cyl(8, -4, 12, 12, 38, { top: "lo", side: "faint" }));
+		parts.push(
+			g.box({ x: -16, y: -28, w: 48, d: 48, r: 4 }, 38, 64, {
+				top: "blue",
+				side: "blue",
+			}),
+		);
+		parts.push(g.dot([-8, -20, 64], 2.2, "hi"));
+
+		// network: leaves the task, crosses the globs, cut at the sandbox wall.
+		parts.push(
+			g.line(k.onTop([[18, -4], [96, -4], [138, -4]], 24, P), "blue", {
+				flow: true,
+			}),
+		);
+		parts.push(
+			`<g data-part="deny">${g.strokePaths(
+				[
+					k.lineOnTop([140, -14], [140, 6], 24, P),
+					k.lineOnTop([133, -14], [133, 6], 24, P),
+				],
+				"red",
+			)}</g>`,
+		);
+
+		// budget: a dial and the plate's own ruler.
+		const DIAL = [-100, 56];
+		const R = 17;
+		parts.push(
+			g.planEdge(k.circleRing(DIAL[0], DIAL[1], R, 40), 12, "lo", true),
+		);
+		parts.push(
+			g.strokePaths(
+				Array.from({ length: 12 }, (_, index) => {
+					const angle = (index / 12) * Math.PI * 2;
+					const inner = R - (index % 3 === 0 ? 5 : 3);
+					return k.lineOnTop(
+						[DIAL[0] + inner * Math.cos(angle), DIAL[1] + inner * Math.sin(angle)],
+						[DIAL[0] + R * Math.cos(angle), DIAL[1] + R * Math.sin(angle)],
+						12,
+						P,
+					);
+				}),
+				"faint",
+			),
+		);
+		const pivot = k.iso([DIAL[0], DIAL[1], 12], P);
+		parts.push(
+			`<g data-part="needle" style="transform-box:view-box;transform-origin:${px(pivot[0])} ${px(pivot[1])}">${g.lineOnTop(
+				[DIAL[0], DIAL[1]],
+				[DIAL[0] + R * 0.74, DIAL[1] - R * 0.3],
+				12,
+				"red",
+			)}</g>`,
+		);
+		parts.push(g.dot([DIAL[0], DIAL[1], 12], 1.7, "hi"));
+		parts.push(g.ticks(-124, 116, 8, 5, PLATE.y + PLATE.d - 10, 12, [2, 4]));
+
+		return parts;
+	},
 });
-const branded = (source) => source.replace("</style>", `${BRAND_CSS}</style>`);
-const outDir = "apps/web/public/iso";
-mkdirSync(outDir, { recursive: true });
-writeFileSync(`${outDir}/workflow-machine.svg`, branded(full));
-console.log(`wrote ${outDir}/workflow-machine.svg (${(full.length / 1024).toFixed(1)} KiB)`);
+
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* approval: a stamp held over the exact payload.                      */
+/* ------------------------------------------------------------------ */
+
+writeScene({
+	name: "approval",
+	label:
+		"Hairline isometric diagram of an approval gate: a plinth carries a payload sheet marked with three commit hash dots. A stamp hangs from a slim column and arm, its head held above the paper. Two round buttons on the plinth read approve and reject.",
+	fit: [
+		...k.boxCorners({ x: -84, y: -46, w: 172, d: 92 }, 0, 10),
+		[58, -32, 56],
+		[-46, -30, 52],
+		[52, 30, 10],
+	],
+	css: ({ P }) => {
+		const press = shift(P, [-31, -4, 42], [-31, -4, 24]);
+		return `[data-part="press"]{animation:a-press 9s cubic-bezier(.32,.72,0,1) infinite}
+@keyframes a-press{0%,26%{transform:translate(0,0)}44%,62%{transform:translate(${px(press[0])},${px(press[1])})}78%,100%{transform:translate(0,0)}}
+[data-part="lamp"]{animation:a-lamp 9s ease-in-out infinite}
+@keyframes a-lamp{0%,40%{opacity:.2}48%,66%{opacity:1}80%,100%{opacity:.2}}`;
+	},
+	build: (g) => {
+		const PLINTH = { x: -84, y: -46, w: 172, d: 92, r: 10 };
+		const SHEET = { x: -64, y: -30, w: 66, d: 52, r: 3 };
+		const HEAD = { x: -51, y: -24, w: 40, d: 40, r: 3 };
+		const DIE = { x: -44, y: -17, w: 26, d: 26, r: 2 };
+		const ARM = { x: -46, y: -34, w: 104, d: 10, r: 3 };
+		const POST = [58, -32];
+		const parts = [g.box(PLINTH, 0, 10, { top: "mid", side: "lo" })];
+
+		// The payload: the exact thing being authorized.
+		parts.push(g.box(SHEET, 10, 16, { top: "blue", side: "blue", hidden: null }));
+		parts.push(
+			g.dots(
+				[
+					[SHEET.x + 8, SHEET.y + 9, 16],
+					[SHEET.x + 21, SHEET.y + 9, 16],
+					[SHEET.x + 34, SHEET.y + 9, 16],
+				],
+				1.9,
+				"blue",
+			),
+		);
+		parts.push(
+			g.lineOnTop(
+				[SHEET.x + 8, SHEET.y + 25],
+				[SHEET.x + 54, SHEET.y + 25],
+				16,
+				"faint",
+			),
+		);
+		parts.push(
+			g.lineOnTop(
+				[SHEET.x + 8, SHEET.y + 34],
+				[SHEET.x + 40, SHEET.y + 34],
+				16,
+				"faint",
+			),
+		);
+
+		// The stamp: column, arm, rod, head, die, held just above the sheet.
+		parts.push(g.cyl(POST[0], POST[1], 5, 10, 52, { top: "mid", side: "lo" }));
+		parts.push(g.box(ARM, 46, 52, { top: "mid", side: "lo", hidden: null }));
+		parts.push(
+			`<g data-part="press">${[
+				g.cyl(-31, -24, 2.2, 42, 46, { top: "lo", side: "faint" }),
+				g.box(HEAD, 38, 42, { top: "red", side: "red", hidden: null }),
+				g.box(DIE, 34, 38, { top: "red", side: "red", hidden: null }),
+			].join("")}</g>`,
+		);
+		parts.push(
+			`<g data-part="lamp">${g.planEdge(k.circleRing(POST[0], POST[1], 3, 18), 52, "red", true)}</g>`,
+		);
+
+		// approve / reject: two buttons set straight into the plate.
+		const button = (x, y, tone) =>
+			[
+				g.planEdge(k.circleRing(x, y, 8.5, 30), 10, "lo", true),
+				g.planEdge(k.circleRing(x, y, 5, 24), 10, tone, true),
+				g.dot([x, y, 10], 1.5, "hi"),
+			].join("");
+		parts.push(button(26, 30, "blue"));
+		parts.push(button(52, 30, "red"));
+
+		// A scale along the open front edge.
+		parts.push(g.ticks(-74, 4, 8, 4, PLINTH.y + PLINTH.d - 7, 10, [2, 4]));
+
+		return parts;
+	},
+});
+
+/* ------------------------------------------------------------------ */
+/* record: a strip of event tiles, one still being written.            */
+/* ------------------------------------------------------------------ */
+
+writeScene({
+	name: "record",
+	label:
+		"Hairline isometric diagram of a run record: a plinth carries a record strip with five event tiles, the fourth lifted above the others on a dashed drop line. A tick ruler on the front edge reads elapsed time, and an archive drawer at the left holds the durable copy.",
+	fit: [
+		...k.boxCorners({ x: -128, y: -56, w: 256, d: 112 }, 0, 8),
+		[47, -21, 78],
+		[-118, 2, 24],
+		[-22, 46, 24],
+		[118, 28, 18],
+	],
+	css: ({ P }) => {
+		const drop = shift(P, [47, -21, 78], [47, -21, 17]);
+		return `[data-part="lift"]{animation:r-lift 8s cubic-bezier(.32,.72,0,1) infinite}
+@keyframes r-lift{0%,16%{transform:translate(0,0)}40%,60%{transform:translate(${px(drop[0])},${px(drop[1])})}76%,100%{transform:translate(0,0)}}`;
+	},
+	build: (g) => {
+		const PLINTH = { x: -128, y: -56, w: 256, d: 112, r: 12 };
+		const TAPE = { x: -118, y: -46, w: 236, d: 46, r: 4 };
+		const parts = [g.box(PLINTH, 0, 8, { top: "mid", side: "lo" })];
+
+		parts.push(g.box(TAPE, 8, 12, { top: "mid", side: "faint" }));
+
+		// Five events on the strip. The fourth is the approval.
+		const TILE_Y = -42;
+		for (const [index, x] of [-118, -70, -22, 26, 74].entries()) {
+			const plan = { x, y: TILE_Y, w: 42, d: 42, r: 4 };
+			const tone = index === 3 ? "red" : index === 4 ? "lo" : "mid";
+			const centre = [x + 21, TILE_Y + 21];
+
+			if (index === 3) {
+				parts.push(
+					g.edge(
+						[centre[0], centre[1], 12],
+						[centre[0], centre[1], 74],
+						"red",
+						{ dashed: true },
+					),
+				);
+				parts.push(
+					`<g data-part="lift">${g.box(plan, 74, 78, {
+						top: tone,
+						side: tone,
+						hidden: null,
+					})}${g.dot([centre[0], centre[1], 78], 2.4, tone)}</g>`,
+				);
+				continue;
+			}
+
+			parts.push(g.box(plan, 12, 17, { top: tone, side: "faint" }));
+			parts.push(g.dot([centre[0], centre[1], 17], 2.2, tone));
+		}
+
+		// durable: the archive drawer, front left.
+		const DRAWER = { x: -118, y: 2, w: 96, d: 44, r: 5 };
+		const face = DRAWER.y + DRAWER.d;
+		parts.push(g.box(DRAWER, 8, 24, { top: "mid", side: "lo" }));
+		parts.push(
+			g.edge([DRAWER.x + 14, face, 16], [DRAWER.x + 82, face, 16], "mid"),
+		);
+		parts.push(g.dot([DRAWER.x + 48, face, 16], 2, "hi"));
+
+		// timestamp: the ruler, with a marker under the event being written.
+		parts.push(g.edge([-6, 28, 8], [118, 28, 8], "mid"));
+		parts.push(g.ticks(-4, 116, 7, 4, 28, 8, [2.5, 5], "mid"));
+		parts.push(g.edge([47, 28, 8], [47, 28, 18], "red"));
+		parts.push(g.dot([47, 28, 18], 2.2, "red"));
+
+		return parts;
+	},
+});

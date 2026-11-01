@@ -20,6 +20,7 @@ export * from "./repositories/run-event-repository";
 export * from "./repositories/task-attempt-repository";
 export * from "./repositories/task-context-repository";
 export * from "./repositories/task-repository";
+export * from "./repositories/trace-read";
 export * from "./repositories/usage-repository";
 export * from "./repositories/user-repository";
 export * from "./repositories/workflow-compilation";

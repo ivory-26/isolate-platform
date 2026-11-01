@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import { lifecycle } from "../content";
 import {
@@ -7,12 +6,11 @@ import {
 	sectionPadding,
 	sectionTitle,
 } from "../styles";
+import { FeatureVisual } from "./feature-visual";
 import { FrameDots } from "./frame";
-import { Reveal, useInView } from "./reveal";
+import { Reveal } from "./reveal";
 
 export function LifecycleSection() {
-	const { ref, inView } = useInView<HTMLDivElement>();
-
 	return (
 		<section
 			id="lifecycle"
@@ -28,91 +26,30 @@ export function LifecycleSection() {
 					</p>
 				</Reveal>
 
-				<div
-					ref={ref}
-					className={cn(
-						"landing-trace relative mt-16 lg:mt-20",
-						inView && "is-in",
-					)}
-				>
-					<ol className="grid gap-10 md:grid-cols-4 md:gap-8">
-						{lifecycle.map((stage, index) => {
-							const isApproval = index === lifecycle.length - 1;
-							const delay = `${120 + index * 180}ms`;
+				<Reveal className="mt-12 lg:mt-16">
+					<FeatureVisual feature="lifecycle" />
+				</Reveal>
 
-							return (
-								<li key={stage.title} className="relative pl-12 md:pl-0">
-									{!isApproval && (
-										<>
-											{/*
-											 * Segment runs from this node centre to the next:
-											 * 14px dot radius + the 32px md:gap-8 column gap.
-											 */}
-											<span
-												aria-hidden="true"
-												className={cn(
-													"landing-trace-segment absolute top-[13px] left-7 hidden h-px md:block",
-													index === 2
-														? "bg-gradient-to-r from-brand/60 to-orange/70"
-														: "bg-brand/60",
-												)}
-												style={
-													{
-														right: "-46px",
-														"--segment-delay": delay,
-													} as CSSProperties
-												}
-											/>
-											<span
-												aria-hidden="true"
-												className={cn(
-													"landing-trace-segment-v absolute top-7 -bottom-[54px] left-[13px] w-px md:hidden",
-													index === 2
-														? "bg-gradient-to-b from-brand/60 to-orange/70"
-														: "bg-brand/60",
-												)}
-												style={
-													{
-														"--segment-delay": delay,
-													} as CSSProperties
-												}
-											/>
-										</>
-									)}
-
-									<span
-										aria-hidden="true"
-										className={cn(
-											"absolute top-0 left-0 z-10 flex size-7 items-center justify-center rounded-full border bg-elevated md:static",
-											isApproval ? "border-orange/60" : "border-line-strong",
-										)}
-									>
-										<span
-											className={cn(
-												"size-2 rounded-full",
-												isApproval ? "bg-orange" : "bg-brand",
-											)}
-										/>
-									</span>
-
-									<div className="pt-0.5 md:pt-7">
-										<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-											<h3 className="text-[16px] font-medium leading-6 text-ink">
-												{stage.title}
-											</h3>
-											<span className="font-mono text-[10px] leading-4 text-ink-muted">
-												{stage.event}
-											</span>
-										</div>
-										<p className="mt-2 max-w-[30ch] text-[14px] leading-6 text-ink-muted">
-											{stage.copy}
-										</p>
-									</div>
-								</li>
-							);
-						})}
-					</ol>
-				</div>
+				<ol className="mt-12 grid gap-10 border-t border-line-subtle pt-10 md:grid-cols-4 md:gap-8">
+					{lifecycle.map((stage, index) => (
+						<li key={stage.title}>
+							<div className="flex items-baseline gap-3">
+								<span className="font-mono text-[10px] leading-4 text-ink-muted">
+									{String(index + 1).padStart(2, "0")}
+								</span>
+								<h3 className="text-[16px] font-medium leading-6 text-ink">
+									{stage.title}
+								</h3>
+							</div>
+							<p className="mt-1 font-mono text-[10px] leading-4 text-ink-muted">
+								{stage.event}
+							</p>
+							<p className="mt-3 max-w-[30ch] text-[14px] leading-6 text-ink-secondary">
+								{stage.copy}
+							</p>
+						</li>
+					))}
+				</ol>
 			</div>
 		</section>
 	);

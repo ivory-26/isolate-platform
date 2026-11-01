@@ -47,11 +47,27 @@ export const deviceCallSchema = z.strictObject({
 
 export type DeviceCall = z.output<typeof deviceCallSchema>;
 
-export const claimResponseSchema = z.strictObject({
-	call: deviceCallSchema.nullable(),
-});
+/**
+ * A claim round answers either the single-call envelope `{ call }` (no
+ * `?limit=`, or `?limit=1`) or the batch envelope `{ calls }`. Both are closed
+ * objects: a mixed body, an extra key or more than ten calls is invalid.
+ */
+export const DEVICE_MAX_CLAIM_BATCH = 10;
+
+export const claimResponseSchema = z.union([
+	z.strictObject({ call: deviceCallSchema.nullable() }),
+	z.strictObject({
+		calls: z.array(deviceCallSchema).max(DEVICE_MAX_CLAIM_BATCH),
+	}),
+]);
 
 export type ClaimResponse = z.output<typeof claimResponseSchema>;
+
+/** Flattens either envelope into an ordered, possibly empty, call list. */
+export function claimedCalls(response: ClaimResponse): DeviceCall[] {
+	if ("calls" in response) return response.calls;
+	return response.call === null ? [] : [response.call];
+}
 
 export type ToolParams = Record<string, unknown>;
 

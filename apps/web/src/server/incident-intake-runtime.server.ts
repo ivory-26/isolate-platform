@@ -1,5 +1,10 @@
 import "@tanstack/react-start/server-only";
-import { createDb, type PgSql, PostgresIncidentRepository } from "@isolate/db";
+import {
+	createDb,
+	type PgSql,
+	PostgresIncidentRepository,
+	PostgresRateLimitRepository,
+} from "@isolate/db";
 import {
 	GITHUB_WEBHOOK_MIN_SECRET_LENGTH,
 	GRAFANA_WEBHOOK_MIN_SECRET_LENGTH,
@@ -257,6 +262,7 @@ let intake: ReturnType<typeof createIncidentIntake> | undefined;
 const dedupe = createInMemoryIncidentDedupeStore();
 
 type PostgresBundle = {
+	database: PgSql;
 	store: ReturnType<typeof createPostgresStore>;
 	incidentRepository: PostgresIncidentRepository;
 };
@@ -265,15 +271,16 @@ function getStore(databaseUrl: string): PostgresBundle {
 	if (
 		store !== undefined &&
 		incidentRepository !== undefined &&
-		sqlUrl === databaseUrl
+		sqlUrl === databaseUrl &&
+		sql !== undefined
 	)
-		return { store, incidentRepository };
+		return { database: sql, store, incidentRepository };
 	sql = createDb(databaseUrl);
 	sqlUrl = databaseUrl;
 	store = createPostgresStore(sql);
 	// Signal dedupe and the per-org incident cap share the same connection pool.
 	incidentRepository = new PostgresIncidentRepository(sql);
-	return { store, incidentRepository };
+	return { database: sql, store, incidentRepository };
 }
 
 export function incidentRepositoryRoute(
@@ -331,8 +338,11 @@ export function getIncidentIntake(
 		databaseUrl.length === 0
 	)
 		throw new IncidentIntakeNotConfiguredError();
-	const { store: taskStore, incidentRepository: signals } =
-		getStore(databaseUrl);
+	const {
+		database,
+		store: taskStore,
+		incidentRepository: signals,
+	} = getStore(databaseUrl);
 	const service = createTaskService({
 		// The verified route binding is the caller identity for this path.
 		resolveScope: async () => settings.binding,
@@ -353,6 +363,8 @@ export function getIncidentIntake(
 			incidentRepositoryRoute(settings, input),
 		incidentRepository: signals,
 		dedupe,
+		// One durable bucket per detected provider mode (600/min).
+		rateLimits: new PostgresRateLimitRepository(database),
 		submitTask: (input) => service.submit(input),
 	});
 	return intake;

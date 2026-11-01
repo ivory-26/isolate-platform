@@ -1,4 +1,5 @@
 import {
+	claimedCalls,
 	claimResponseSchema,
 	DEVICE_MAX_RESULT_BYTES,
 	type DeviceCall,
@@ -12,9 +13,10 @@ import { createConsoleLogger, type Logger } from "./logger";
  * Long-poll loop against the device gateway.
  *
  * Contract (see `apps/web/src/server/device-gateway.server.ts`):
- * - `POST {serverUrl}/api/device/claim` with `Authorization: Bearer <token>`
- *   returns `{ call: null }` or `{ call: { id, connectorId, credentialRef,
- *   toolName, params, deadlineAt } }`.
+ * - `POST {serverUrl}/api/device/claim?limit=<n>` with
+ *   `Authorization: Bearer <token>` returns `{ call: null }`, `{ call: {...} }`
+ *   (single-call envelope) or `{ calls: [{ id, connectorId, credentialRef,
+ *   toolName, params, deadlineAt }, ...] }` (batch envelope).
  * - `POST {serverUrl}/api/device/calls/{id}/result` returns the bounded
  *   `{ ok, data }` / `{ ok: false, errorCode }` envelope.
  *
@@ -32,6 +34,11 @@ export const CLAIM_REQUEST_TIMEOUT_MS = 20_000;
 export const RESULT_REQUEST_TIMEOUT_MS = 20_000;
 /** A claim carries at most 16 KiB of params; anything larger is malformed. */
 export const CLAIM_MAX_RESPONSE_BYTES = 64 * 1024;
+/**
+ * Calls requested per claim round. The gateway caps at ten; four keeps one
+ * round's work below the claim deadline while still draining a burst queue.
+ */
+export const DEFAULT_CLAIM_BATCH_SIZE = 4;
 
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 
@@ -48,6 +55,8 @@ export type PollLoopOptions = {
 	baseBackoffMs?: number;
 	maxBackoffMs?: number;
 	maxResultAttempts?: number;
+	/** Calls requested per claim round (1–10, default 4). */
+	claimBatchSize?: number;
 	/** Optional bound; tests and one-shot runs stop after this many claims. */
 	maxClaims?: number;
 	signal?: AbortSignal;
@@ -99,7 +108,7 @@ export function computeBackoffDelay(
 
 type ClaimOutcome =
 	| { kind: "none" }
-	| { kind: "call"; call: DeviceCall }
+	| { kind: "calls"; calls: DeviceCall[] }
 	| { kind: "retryable"; detail: string }
 	| { kind: "unauthorized" }
 	| { kind: "fatal"; detail: string };
@@ -116,6 +125,7 @@ type PollContext = {
 	baseBackoffMs: number;
 	maxBackoffMs: number;
 	maxResultAttempts: number;
+	claimBatchSize: number;
 	signal?: AbortSignal;
 };
 
@@ -131,7 +141,10 @@ async function claimOnce(context: PollContext): Promise<ClaimOutcome> {
 	let response: Response;
 	try {
 		response = await context.fetchImpl(
-			endpoint(context.serverUrl, "/api/device/claim"),
+			endpoint(
+				context.serverUrl,
+				`/api/device/claim?limit=${context.claimBatchSize}`,
+			),
 			{
 				method: "POST",
 				headers: {
@@ -172,8 +185,9 @@ async function claimOnce(context: PollContext): Promise<ClaimOutcome> {
 	if (!parsed.success) {
 		return { kind: "retryable", detail: "claim body is invalid" };
 	}
-	if (parsed.data.call === null) return { kind: "none" };
-	return { kind: "call", call: parsed.data.call };
+	// One round may carry several calls; an empty envelope is "no work".
+	const calls = claimedCalls(parsed.data);
+	return calls.length === 0 ? { kind: "none" } : { kind: "calls", calls };
 }
 
 type ResultPostOutcome = "ok" | "unauthorized" | "failed";
@@ -307,6 +321,13 @@ export async function runPollLoop(
 			1,
 			options.maxResultAttempts ?? DEFAULT_MAX_RESULT_ATTEMPTS,
 		),
+		claimBatchSize: Math.min(
+			10,
+			Math.max(
+				1,
+				Math.trunc(options.claimBatchSize ?? DEFAULT_CLAIM_BATCH_SIZE),
+			),
+		),
 		...(options.signal === undefined ? {} : { signal: options.signal }),
 	};
 	const maxClaims = options.maxClaims ?? Number.POSITIVE_INFINITY;
@@ -342,9 +363,16 @@ export async function runPollLoop(
 			await pause(context, context.pollIntervalMs);
 			continue;
 		}
-		const posted = await executeCall(context, claim.call, options.dispatch);
-		if (posted === "unauthorized") {
-			return { reason: "unauthorized", detail: "device authentication failed" };
+		// Strictly sequential: the device executes and posts one call at a time,
+		// so provider rate limits and result retries stay bounded per round.
+		for (const call of claim.calls) {
+			const posted = await executeCall(context, call, options.dispatch);
+			if (posted === "unauthorized") {
+				return {
+					reason: "unauthorized",
+					detail: "device authentication failed",
+				};
+			}
 		}
 	}
 	return { reason: "stopped" };

@@ -3,6 +3,7 @@ import {
 	type ConsumeRateLimitResult,
 	normalizeConsumeRateLimitInput,
 	normalizeDeleteExpiredBatch,
+	normalizeRateLimitNow,
 	RATE_LIMIT_DEFAULT_DELETE_BATCH,
 	type RateLimitRepository,
 	retryAfterSecondsFor,
@@ -32,9 +33,7 @@ function windowId(bucketKey: string, windowStartMs: number): string {
 export class InMemoryRateLimitRepository implements RateLimitRepository {
 	private readonly rows = new Map<string, StoredWindow>();
 
-	async consume(
-		input: ConsumeRateLimitInput,
-	): Promise<ConsumeRateLimitResult> {
+	async consume(input: ConsumeRateLimitInput): Promise<ConsumeRateLimitResult> {
 		const normalized = normalizeConsumeRateLimitInput(input);
 		const id = windowId(normalized.key, normalized.windowStart.getTime());
 		const existing = this.rows.get(id);
@@ -69,12 +68,10 @@ export class InMemoryRateLimitRepository implements RateLimitRepository {
 		now: Date,
 		maxRows: number = RATE_LIMIT_DEFAULT_DELETE_BATCH,
 	): Promise<number> {
-		if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
-			throw new Error("now must be a valid Date");
-		}
+		const current = normalizeRateLimitNow(now);
 		const batch = normalizeDeleteExpiredBatch(maxRows);
 		const expired = [...this.rows.entries()]
-			.filter(([, row]) => row.expiresAtMs <= now.getTime())
+			.filter(([, row]) => row.expiresAtMs <= current.getTime())
 			.sort((left, right) => left[1].expiresAtMs - right[1].expiresAtMs)
 			.slice(0, batch);
 		for (const [id] of expired) this.rows.delete(id);

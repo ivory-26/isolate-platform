@@ -4,6 +4,7 @@ import {
 	InMemoryConnectorCallRepository,
 	InMemoryConnectorCredentialRepository,
 	InMemoryConnectorDeviceRepository,
+	InMemoryRateLimitRepository,
 } from "@isolate/db";
 import { hashConnectorDeviceToken } from "@isolate/integrations";
 import { asOrganizationId, type OrganizationId } from "@isolate/shared";
@@ -21,6 +22,7 @@ import {
 	readDeviceCallId,
 	resetDeviceGatewayForTests,
 } from "./device-gateway.server";
+import type { RateLimitCounter } from "./rate-limit.server";
 
 const ORG_A = asOrganizationId("11111111-1111-4111-8111-111111111111");
 const ORG_B = asOrganizationId("22222222-2222-4222-8222-222222222222");
@@ -36,6 +38,7 @@ type Harness = {
 	calls: InMemoryConnectorCallRepository;
 	devices: InMemoryConnectorDeviceRepository;
 	credentials: InMemoryConnectorCredentialRepository;
+	rateLimits: RateLimitCounter;
 	deviceAId: string;
 	deviceBId: string;
 	deviceCId: string;
@@ -53,6 +56,8 @@ async function createHarness(
 				input: { limitPerPeriod: number; period: string },
 			) => Promise<{ consumed: boolean; requestCount: number }>;
 		};
+		trustProxyHeaders?: boolean;
+		rateLimits?: RateLimitCounter;
 	} = {},
 ): Promise<Harness> {
 	const devices = new InMemoryConnectorDeviceRepository();
@@ -60,6 +65,8 @@ async function createHarness(
 	const calls = new InMemoryConnectorCallRepository(
 		options.now === undefined ? {} : { now: options.now },
 	);
+	const rateLimits: RateLimitCounter =
+		options.rateLimits ?? new InMemoryRateLimitRepository();
 	const owners = new Map<string, OrganizationId>();
 	const deviceA = await devices.create({
 		organizationId: ORG_A,
@@ -133,12 +140,15 @@ async function createHarness(
 		},
 		...(options.now === undefined ? {} : { now: options.now }),
 		...(options.usage === undefined ? {} : { usage: options.usage }),
+		rateLimits,
+		trustProxyHeaders: options.trustProxyHeaders === true,
 	};
 	return {
 		gateway: createDeviceGateway(dependencies),
 		calls,
 		devices,
 		credentials,
+		rateLimits,
 		deviceAId: deviceA.id,
 		deviceBId: deviceB.id,
 		deviceCId: deviceC.id,
@@ -152,6 +162,23 @@ function claimRequest(token?: string): Request {
 	return new Request("http://localhost/api/device/claim", {
 		method: "POST",
 		headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+	});
+}
+
+function claimRequestWith(
+	options: { token?: string; limit?: string; forwardedFor?: string } = {},
+): Request {
+	const search = options.limit === undefined ? "" : `?limit=${options.limit}`;
+	const headers: Record<string, string> = {};
+	if (options.token !== undefined) {
+		headers.authorization = `Bearer ${options.token}`;
+	}
+	if (options.forwardedFor !== undefined) {
+		headers["x-forwarded-for"] = options.forwardedFor;
+	}
+	return new Request(`http://localhost/api/device/claim${search}`, {
+		method: "POST",
+		headers,
 	});
 }
 
@@ -629,5 +656,205 @@ describe("device gateway free-tier guard", () => {
 		const row = harness.calls.peek(callId);
 		expect(row?.status).toBe("failed");
 		expect(row?.errorCode).toBe("RATE_LIMITED");
+	});
+});
+
+describe("device gateway batch claim", () => {
+	test("claims a bounded oldest-first batch and answers with calls", async () => {
+		let clock = new Date("2026-11-01T00:00:00.000Z").getTime();
+		const harness = await createHarness({ now: () => new Date(clock) });
+		const first = await enqueueCall(harness);
+		clock += 1_000;
+		const second = await enqueueCall(harness);
+		clock += 1_000;
+		const third = await enqueueCall(harness);
+
+		const batch = await readResponse(
+			await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_A, limit: "2" }),
+			),
+			[TOKEN_A],
+		);
+		expect(batch).not.toHaveProperty("call");
+		expect(
+			(batch.calls as Array<{ id: string }>).map((call) => call.id),
+		).toEqual([first, second]);
+		expect(harness.calls.peek(third)?.status).toBe("queued");
+
+		const drained = await readResponse(
+			await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_A, limit: "4" }),
+			),
+		);
+		expect(
+			(drained.calls as Array<{ id: string }>).map((call) => call.id),
+		).toEqual([third]);
+
+		const empty = await readResponse(
+			await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_A, limit: "4" }),
+			),
+		);
+		expect(empty).toEqual({ calls: [] });
+	});
+
+	test("rejects a limit outside 1..10 and an absent limit stays single", async () => {
+		const harness = await createHarness();
+		for (const limit of ["0", "11", "2.5", "abc", ""]) {
+			const response = await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_A, limit }),
+			);
+			expect(response.status).toBe(400);
+			await readResponse(response, [TOKEN_A]);
+		}
+		const single = await harness.gateway.handleClaim(claimRequest(TOKEN_A));
+		expect(await readResponse(single, [TOKEN_A])).toEqual({ call: null });
+	});
+
+	test("a batch never includes a foreign call or an unusable credential", async () => {
+		const harness = await createHarness();
+		const valid = await enqueueCall(harness);
+		const unusable = await enqueueCall(harness, {
+			credentialId: harness.credentialCId,
+		});
+		const foreign = await enqueueCall(harness, {
+			deviceId: harness.deviceBId,
+			credentialId: harness.credentialBId,
+		});
+		const body = await readResponse(
+			await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_A, limit: "10" }),
+			),
+		);
+		expect(
+			(body.calls as Array<{ id: string }>).map((call) => call.id),
+		).toEqual([valid]);
+		expect(harness.calls.peek(unusable)?.status).toBe("failed");
+		expect(harness.calls.peek(foreign)?.status).toBe("queued");
+	});
+});
+
+describe("device gateway throttling", () => {
+	test("applies the documented budget to the pre-auth and per-device buckets", async () => {
+		const seen: Array<{ key: string; limit: number; windowSeconds: number }> =
+			[];
+		const counter: RateLimitCounter = {
+			async consume(input) {
+				seen.push({
+					key: input.key,
+					limit: input.limit,
+					windowSeconds: input.windowSeconds,
+				});
+				return {
+					allowed: true,
+					count: 1,
+					remaining: input.limit - 1,
+					retryAfterSeconds: 0,
+				};
+			},
+		};
+		const harness = await createHarness({ rateLimits: counter });
+		const callId = await enqueueCall(harness);
+		await harness.gateway.handleClaim(claimRequest(TOKEN_A));
+		await harness.gateway.handleHeartbeat(heartbeatRequest(TOKEN_A));
+		await harness.gateway.handleResult(
+			resultRequest(callId, { ok: true, data: {} }, TOKEN_A),
+		);
+		expect(seen).toEqual([
+			{ key: "ip:direct:device", limit: 600, windowSeconds: 60 },
+			{
+				key: `device:${harness.deviceAId}:claim`,
+				limit: 120,
+				windowSeconds: 60,
+			},
+			{ key: "ip:direct:device", limit: 600, windowSeconds: 60 },
+			{
+				key: `device:${harness.deviceAId}:heartbeat`,
+				limit: 60,
+				windowSeconds: 60,
+			},
+			{ key: "ip:direct:device", limit: 600, windowSeconds: 60 },
+			{
+				key: `device:${harness.deviceAId}:result`,
+				limit: 240,
+				windowSeconds: 60,
+			},
+		]);
+	});
+
+	test("denies the 601st pre-auth request with Retry-After and no-store", async () => {
+		const harness = await createHarness();
+		for (let index = 0; index < 600; index += 1) {
+			const response = await harness.gateway.handleClaim(claimRequest());
+			expect(response.status).toBe(401);
+		}
+		const denied = await harness.gateway.handleClaim(claimRequest());
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+		expect(await readResponse(denied)).toEqual({ error: "too many requests" });
+	});
+
+	test("a denial on any device action is the same fixed 429", async () => {
+		const counter: RateLimitCounter = {
+			async consume() {
+				return {
+					allowed: false,
+					count: 1,
+					remaining: 0,
+					retryAfterSeconds: 17,
+				};
+			},
+		};
+		const harness = await createHarness({ rateLimits: counter });
+		const callId = await enqueueCall(harness);
+		for (const response of [
+			await harness.gateway.handleClaim(claimRequest(TOKEN_A)),
+			await harness.gateway.handleHeartbeat(heartbeatRequest(TOKEN_A)),
+			await harness.gateway.handleResult(
+				resultRequest(callId, { ok: true, data: {} }, TOKEN_A),
+			),
+		]) {
+			expect(response.status).toBe(429);
+			expect(response.headers.get("retry-after")).toBe("17");
+			await readResponse(response);
+		}
+		// A throttled result never touches the call row.
+		expect(harness.calls.peek(callId)?.status).toBe("queued");
+	});
+
+	test("buckets by x-forwarded-for only when proxy headers are trusted", async () => {
+		const untrusted = await createHarness();
+		for (let index = 0; index < 600; index += 1) {
+			await untrusted.gateway.handleClaim(
+				claimRequestWith({ forwardedFor: "198.51.100.1" }),
+			);
+		}
+		// The header is ignored, so a "different" address shares one bucket.
+		const denied = await untrusted.gateway.handleClaim(
+			claimRequestWith({ forwardedFor: "198.51.100.2" }),
+		);
+		expect(denied.status).toBe(429);
+
+		const trusted = await createHarness({ trustProxyHeaders: true });
+		for (let index = 0; index < 600; index += 1) {
+			await trusted.gateway.handleClaim(
+				claimRequestWith({ forwardedFor: "198.51.100.1" }),
+			);
+		}
+		expect(
+			(
+				await trusted.gateway.handleClaim(
+					claimRequestWith({ forwardedFor: "198.51.100.1" }),
+				)
+			).status,
+		).toBe(429);
+		// A second address starts a fresh bucket: still unauthenticated, not 429.
+		expect(
+			(
+				await trusted.gateway.handleClaim(
+					claimRequestWith({ forwardedFor: "198.51.100.2" }),
+				)
+			).status,
+		).toBe(401);
 	});
 });

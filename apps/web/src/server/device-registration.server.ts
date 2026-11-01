@@ -6,6 +6,7 @@ import {
 	type PgSql,
 	type PlatformCapability,
 	PostgresConnectorDeviceRepository,
+	PostgresRateLimitRepository,
 	type UserRole,
 } from "@isolate/db";
 import {
@@ -26,6 +27,13 @@ import {
 	isDeviceGatewayEnabled,
 } from "./device-gateway.server";
 import { readNeonAuthSettings } from "./neon-auth.server";
+import {
+	createUserRateLimitGate,
+	RateLimitExceededError,
+	rateLimitedResponse,
+	type UserRateLimitAction,
+	type UserRateLimitGate,
+} from "./rate-limit.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 /**
@@ -93,6 +101,11 @@ export type DeviceRegistrationDependencies = {
 	devices: ConnectorDeviceRepository;
 	/** Test seam only; production always uses `generateConnectorDeviceToken`. */
 	generateToken?: () => string;
+	/**
+	 * Per-user throttle, applied after the scope and role are known. Production
+	 * wiring always supplies it; a missing gate is the offline/test shape.
+	 */
+	rateLimiter?: UserRateLimitGate;
 };
 
 export type DeviceRegistrationService = {
@@ -123,6 +136,16 @@ async function scoped(
 	return requireScope(scope, capability);
 }
 
+/** Consumes the caller's per-user bucket for this action, if one is wired. */
+async function throttled(
+	dependencies: DeviceRegistrationDependencies,
+	scope: CallerScope,
+	action: UserRateLimitAction,
+): Promise<void> {
+	if (dependencies.rateLimiter === undefined) return;
+	await dependencies.rateLimiter.enforce(scope.userId, action);
+}
+
 function toDeviceView(device: ConnectorDeviceSummary): DeviceView {
 	return {
 		id: device.id,
@@ -151,6 +174,7 @@ export function createDeviceRegistrationService(
 			if (!parsed.success) throw validationError();
 			// Capability is checked before a token exists or storage is touched.
 			const scope = await scoped(dependencies, "member:manage");
+			await throttled(dependencies, scope, "device:register");
 			const token = generateToken();
 			const tokenHash = hashConnectorDeviceToken(token);
 			const created = await dependencies.devices.create({
@@ -166,6 +190,7 @@ export function createDeviceRegistrationService(
 
 		async list() {
 			const scope = await scoped(dependencies, "organization:read");
+			await throttled(dependencies, scope, "device:list");
 			const devices = await dependencies.devices.listByOrganization(
 				scope.organizationId,
 			);
@@ -176,6 +201,7 @@ export function createDeviceRegistrationService(
 			const parsed = revokeDeviceSchema.safeParse(input);
 			if (!parsed.success) throw validationError();
 			const scope = await scoped(dependencies, "member:manage");
+			await throttled(dependencies, scope, "device:revoke");
 			const revoked = await dependencies.devices.revoke(
 				scope.organizationId,
 				parsed.data.deviceId.toLowerCase(),
@@ -213,6 +239,9 @@ function unavailable(): Response {
 
 /** Maps a service failure to fixed text; never serializes the thrown value. */
 function failureResponse(error: unknown): Response {
+	if (error instanceof RateLimitExceededError) {
+		return rateLimitedResponse(error.retryAfterSeconds);
+	}
 	if (error instanceof ControlPlaneError) {
 		if (error.code === "AUTH_REQUIRED") {
 			return fixedError(401, "authentication required");
@@ -336,6 +365,7 @@ type DeviceRegistrationRuntime = {
 	cookieSecret: string;
 	auth: AuthRuntime;
 	devices: ConnectorDeviceRepository;
+	rateLimits: PostgresRateLimitRepository;
 };
 
 let sql: PgSql | undefined;
@@ -380,6 +410,7 @@ export function getDeviceRegistrationRoutes(
 			cookieSecret: settings.cookieSecret,
 			auth: createAuthRuntime(database, settings),
 			devices: new PostgresConnectorDeviceRepository(database),
+			rateLimits: new PostgresRateLimitRepository(database),
 		};
 	}
 	const active = runtime;
@@ -392,6 +423,7 @@ export function getDeviceRegistrationRoutes(
 				preferredOrganizationId: readActiveOrganizationPreference(),
 			}),
 		devices: active.devices,
+		rateLimiter: createUserRateLimitGate(active.rateLimits),
 	});
 }
 

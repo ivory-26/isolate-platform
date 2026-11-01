@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	InMemoryConnectorCredentialRepository,
 	InMemoryConnectorDeviceRepository,
+	InMemoryRateLimitRepository,
 	type UserRole,
 } from "@isolate/db";
 import { asOrganizationId, asUserId } from "@isolate/shared";
@@ -18,6 +19,10 @@ import {
 	looksLikeCredentialSecret,
 	resetConnectorConnectForTests,
 } from "./connector-connect.server";
+import {
+	createUserRateLimitGate,
+	type UserRateLimitGate,
+} from "./rate-limit.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 const ORG_A = asOrganizationId("11111111-1111-4111-8111-111111111111");
@@ -28,6 +33,7 @@ const NO_STORE = "no-store";
 type HarnessOptions = {
 	role?: UserRole;
 	scopeError?: "AUTH_REQUIRED" | "FORBIDDEN";
+	rateLimiter?: UserRateLimitGate;
 };
 
 type Harness = {
@@ -88,6 +94,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 			}
 			return scope;
 		},
+		...(options.rateLimiter === undefined
+			? {}
+			: { rateLimiter: options.rateLimiter }),
 	});
 	return {
 		service,
@@ -733,5 +742,86 @@ describe("connector connect routes", () => {
 			const body = await readBody(response);
 			expect(JSON.stringify(body)).not.toContain("private driver text");
 		}
+	});
+});
+
+describe("connector route throttling", () => {
+	test("the 31st connect in a minute is a fixed 429", async () => {
+		const h = await createHarness({
+			rateLimiter: createUserRateLimitGate(new InMemoryRateLimitRepository()),
+		});
+		const options = { service: h.service };
+		for (let index = 0; index < 30; index += 1) {
+			const response = await handleConnectorConnectRoute(
+				connectRequest(
+					payload(h.deviceAId, {
+						displayName: `Team Sentry ${index}`,
+						credentialRef: `keychain:isolate/sentry/team-${index}`,
+					}),
+				),
+				options,
+			);
+			expect(response.status).toBe(200);
+			await response.body?.cancel();
+		}
+		const denied = await handleConnectorConnectRoute(
+			connectRequest(
+				payload(h.deviceAId, {
+					displayName: "Team Sentry denied",
+					credentialRef: "keychain:isolate/sentry/team-denied",
+				}),
+			),
+			options,
+		);
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+		expect(denied.headers.get("cache-control")).toBe(NO_STORE);
+		expect(await denied.json()).toEqual({ error: "too many requests" });
+		// The refused request created nothing, and another action is unaffected.
+		expect(h.credentials.rowCount).toBe(30);
+		expect(
+			(await handleConnectorListRoute(listRequest(), options)).status,
+		).toBe(200);
+	});
+
+	test("revoke and list enforce their own budgets", async () => {
+		const h = await createHarness({
+			rateLimiter: createUserRateLimitGate(new InMemoryRateLimitRepository()),
+		});
+		const options = { service: h.service };
+		const created = await h.credentials.create({
+			organizationId: ORG_A,
+			deviceId: h.deviceAId,
+			connectorId: "sentry",
+			displayName: "Team Sentry",
+			authKind: "api_key",
+			credentialRef: "keychain:isolate/sentry/team-a",
+			status: "active",
+		});
+		for (let index = 0; index < 30; index += 1) {
+			const response = await handleConnectorRevokeRoute(
+				revokeRequest({ credentialId: created.id }),
+				options,
+			);
+			expect(response.status).toBe(200);
+			await response.body?.cancel();
+		}
+		const revokeDenied = await handleConnectorRevokeRoute(
+			revokeRequest({ credentialId: created.id }),
+			options,
+		);
+		expect(revokeDenied.status).toBe(429);
+		await revokeDenied.body?.cancel();
+
+		for (let index = 0; index < 120; index += 1) {
+			const response = await handleConnectorListRoute(listRequest(), options);
+			expect(response.status).toBe(200);
+			await response.body?.cancel();
+		}
+		const listDenied = await handleConnectorListRoute(listRequest(), options);
+		expect(listDenied.status).toBe(429);
+		expect(
+			Number(listDenied.headers.get("retry-after")),
+		).toBeGreaterThanOrEqual(1);
 	});
 });

@@ -142,12 +142,43 @@ describe("in-memory connector call repository", () => {
 			}),
 		);
 		const claimed = await clock.claimNext(DEVICE_A);
-		expect(claimed?.id).toBe(first.id);
-		expect(claimed?.status).toBe("claimed");
-		expect(claimed?.attempts).toBe(1);
-		expect(claimed?.claimedAt).not.toBeNull();
-		expect(await clock.claimNext(DEVICE_A)).toBeNull();
-		expect((await clock.claimNext(DEVICE_B))?.id).toBe(second.id);
+		expect(claimed).toHaveLength(1);
+		expect(claimed[0]?.id).toBe(first.id);
+		expect(claimed[0]?.status).toBe("claimed");
+		expect(claimed[0]?.attempts).toBe(1);
+		expect(claimed[0]?.claimedAt).not.toBeNull();
+		expect(await clock.claimNext(DEVICE_A)).toEqual([]);
+		expect((await clock.claimNext(DEVICE_B))[0]?.id).toBe(second.id);
+	});
+
+	test("claimNext claims a bounded oldest-first batch for one device only", async () => {
+		let now = new Date("2026-11-01T00:00:00.000Z");
+		const repo = new InMemoryConnectorCallRepository({ now: () => now });
+		const first = await repo.enqueue(enqueueInput({ params: { order: 1 } }));
+		now = new Date(now.getTime() + 1_000);
+		const second = await repo.enqueue(enqueueInput({ params: { order: 2 } }));
+		now = new Date(now.getTime() + 1_000);
+		const third = await repo.enqueue(enqueueInput({ params: { order: 3 } }));
+		const foreign = await repo.enqueue(enqueueInput({ deviceId: DEVICE_B }));
+		const batch = await repo.claimNext(DEVICE_A, 2);
+		expect(batch.map((call) => call.id)).toEqual([first.id, second.id]);
+		expect(
+			batch.every((call) => call.status === "claimed" && call.attempts === 1),
+		).toBe(true);
+		expect(repo.peek(third.id)?.status).toBe("queued");
+		expect(repo.peek(foreign.id)?.status).toBe("queued");
+		expect((await repo.claimNext(DEVICE_A, 10)).map((call) => call.id)).toEqual(
+			[third.id],
+		);
+		expect(await repo.claimNext(DEVICE_A, 10)).toEqual([]);
+	});
+
+	test("claimNext rejects a batch size outside 1..10", async () => {
+		const repo = new InMemoryConnectorCallRepository();
+		await repo.enqueue(enqueueInput());
+		for (const limit of [0, 11, 1.5, Number.NaN]) {
+			await expectValidationRejection(repo.claimNext(DEVICE_A, limit));
+		}
 	});
 
 	test("two concurrent claims never receive the same call", async () => {
@@ -157,7 +188,7 @@ describe("in-memory connector call repository", () => {
 			repo.claimNext(DEVICE_A),
 			repo.claimNext(DEVICE_A),
 		]);
-		const claimed = [left, right].filter((call) => call !== null);
+		const claimed = [...left, ...right];
 		expect(claimed).toHaveLength(1);
 		expect(repo.peek(claimed[0]?.id ?? "")?.attempts).toBe(1);
 	});
@@ -170,9 +201,9 @@ describe("in-memory connector call repository", () => {
 			repo.claimNext(DEVICE_A),
 			repo.claimNext(DEVICE_A),
 		]);
-		expect(left).not.toBeNull();
-		expect(right).not.toBeNull();
-		expect(left?.id).not.toBe(right?.id);
+		expect(left).toHaveLength(1);
+		expect(right).toHaveLength(1);
+		expect(left[0]?.id).not.toBe(right[0]?.id);
 	});
 
 	test("claimNext ignores calls past their deadline", async () => {
@@ -180,7 +211,7 @@ describe("in-memory connector call repository", () => {
 		const repo = new InMemoryConnectorCallRepository({ now: () => now });
 		await repo.enqueue(enqueueInput({ ttlMs: 1_000 }));
 		now = new Date("2026-11-01T00:00:02.000Z");
-		expect(await repo.claimNext(DEVICE_A)).toBeNull();
+		expect(await repo.claimNext(DEVICE_A)).toEqual([]);
 	});
 
 	test("complete stores the result and replays idempotently", async () => {
@@ -224,7 +255,7 @@ describe("in-memory connector call repository", () => {
 			}),
 		).toEqual({ ok: false, code: "NOT_FOUND" });
 		expect(repo.peek(call.id)?.status).toBe("claimed");
-		expect(await repo.claimNext(DEVICE_A)).toBeNull();
+		expect(await repo.claimNext(DEVICE_A)).toEqual([]);
 	});
 
 	test("a queued call cannot be completed before it is claimed", async () => {

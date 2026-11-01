@@ -15,12 +15,15 @@ import {
 	evaluateIncidentTrigger,
 	githubIncidentOnDefaultBranch,
 	INCIDENT_DEDUPE_WINDOW_MS,
+	INCIDENT_FAILURE_STATUS,
 	INCIDENT_TASK_CAP_WINDOW_MS,
 	type IncidentIntakeDependencies,
 	type IncidentRepositoryRoute,
+	incidentFailureResponse,
 	MAX_ACTIVE_INCIDENT_TASKS,
 	UNTRUSTED_INCIDENT_NOTICE,
 } from "./incident-intake.server";
+import type { RateLimitCounter } from "./rate-limit.server";
 import { harness, otherScope, scope, workflowPin } from "./test-fixtures";
 import {
 	WEBHOOK_SIGNATURE_HEADER,
@@ -1012,5 +1015,100 @@ describe("github hygiene", () => {
 		for (const secret of [GITHUB_SECRET, signature, "payload-marker-7c1"])
 			expect(logged).not.toContain(secret);
 		expect(messages).toHaveLength(0);
+	});
+});
+
+describe("incident intake throttling", () => {
+	/** Records the bucket and answers from a switch, so no task is created. */
+	function counter(options: { allow: boolean; retryAfterSeconds?: number }) {
+		const seen: Array<{ key: string; limit: number; windowSeconds: number }> =
+			[];
+		const rateLimits: RateLimitCounter = {
+			async consume(input) {
+				seen.push({
+					key: input.key,
+					limit: input.limit,
+					windowSeconds: input.windowSeconds,
+				});
+				return options.allow
+					? {
+							allowed: true,
+							count: 1,
+							remaining: input.limit - 1,
+							retryAfterSeconds: 0,
+						}
+					: {
+							allowed: false,
+							count: input.limit,
+							remaining: 0,
+							retryAfterSeconds: options.retryAfterSeconds ?? 42,
+						};
+			},
+		};
+		return { seen, rateLimits };
+	}
+
+	test("denies with a bounded code, retry hint and no task", async () => {
+		const h = harness();
+		const stub = counter({ allow: false });
+		const result = await acceptIncident(
+			dependencies(h, { rateLimits: stub.rateLimits }),
+			delivery(signal()),
+		);
+		expect(result).toEqual({
+			ok: false,
+			code: "RATE_LIMITED",
+			retryAfterSeconds: 42,
+		});
+		expect(stub.seen).toEqual([
+			{ key: "webhook:generic:global", limit: 600, windowSeconds: 60 },
+		]);
+		expect(h.tasks.calls).toHaveLength(0);
+	});
+
+	test("keys the bucket by the detected mode", async () => {
+		for (const [header, expected] of [
+			[["x-github-event", "workflow_run"], "webhook:github:global"],
+			[["sentry-hook-signature", "x"], "webhook:sentry:global"],
+			[["x-pagerduty-signature", "x"], "webhook:pagerduty:global"],
+		] as const) {
+			const h = harness();
+			const stub = counter({ allow: false });
+			const headers = new Headers({ [header[0]]: header[1] });
+			const result = await acceptIncident(
+				dependencies(h, { rateLimits: stub.rateLimits }),
+				{ rawBody: "{}", headers, now: NOW },
+			);
+			expect(result.ok).toBe(false);
+			expect(stub.seen[0]?.key).toBe(expected);
+		}
+	});
+
+	test("an allowed delivery proceeds through the normal pipeline", async () => {
+		const h = harness();
+		const stub = counter({ allow: true });
+		const result = await acceptIncident(
+			dependencies(h, { rateLimits: stub.rateLimits }),
+			delivery(signal()),
+		);
+		expect(result.ok).toBe(true);
+		expect(h.tasks.calls).toHaveLength(1);
+	});
+
+	test("RATE_LIMITED is the only 429 and carries Retry-After", async () => {
+		const denied = incidentFailureResponse("RATE_LIMITED", 42);
+		expect(denied.status).toBe(429);
+		expect(denied.headers.get("retry-after")).toBe("42");
+		expect(denied.headers.get("cache-control")).toBe("no-store");
+		// One fixed denial body app-wide; the provider-facing wording is never sent.
+		expect(await denied.json()).toEqual({ error: "too many requests" });
+		for (const code of Object.keys(INCIDENT_FAILURE_STATUS) as Array<
+			keyof typeof INCIDENT_FAILURE_STATUS
+		>) {
+			if (code === "RATE_LIMITED") continue;
+			const response = incidentFailureResponse(code);
+			expect(response.status).toBe(INCIDENT_FAILURE_STATUS[code]);
+			expect(response.headers.get("retry-after")).toBeNull();
+		}
 	});
 });

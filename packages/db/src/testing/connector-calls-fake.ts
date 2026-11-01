@@ -9,6 +9,7 @@ import {
 	clampConnectorCallAwaitOptions,
 	connectorCallOutcome,
 	normalizeBoundedConnectorJsonObject,
+	normalizeConnectorCallClaimLimit,
 	normalizeConnectorCallEnqueueInput,
 	normalizeConnectorCallErrorCode,
 	normalizeConnectorCallWriteInput,
@@ -85,10 +86,14 @@ export class InMemoryConnectorCallRepository
 		return cloneRecord(record);
 	}
 
-	async claimNext(deviceId: string): Promise<ConnectorCallRecord | null> {
+	async claimNext(
+		deviceId: string,
+		limit?: number,
+	): Promise<ConnectorCallRecord[]> {
 		if (typeof deviceId !== "string" || deviceId.trim().length === 0) {
 			throw new PlatformError("VALIDATION_FAILED", "deviceId is required");
 		}
+		const batch = normalizeConnectorCallClaimLimit(limit);
 		const now = this.now();
 		const candidates = [...this.rows.values()]
 			.filter(
@@ -100,13 +105,16 @@ export class InMemoryConnectorCallRepository
 			.sort((left, right) => {
 				const byTime = left.createdAt.getTime() - right.createdAt.getTime();
 				return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
-			});
-		const row = candidates[0];
-		if (row === undefined) return null;
-		row.status = "claimed";
-		row.claimedAt = now;
-		row.attempts += 1;
-		return cloneRecord(row);
+			})
+			.slice(0, batch);
+		const claimed: ConnectorCallRecord[] = [];
+		for (const row of candidates) {
+			row.status = "claimed";
+			row.claimedAt = now;
+			row.attempts += 1;
+			claimed.push(cloneRecord(row));
+		}
+		return claimed;
 	}
 
 	async complete(input: {

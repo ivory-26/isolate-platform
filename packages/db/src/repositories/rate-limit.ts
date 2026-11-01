@@ -65,7 +65,8 @@ function validationError(message: string): PlatformError {
 	return new PlatformError("VALIDATION_FAILED", message);
 }
 
-function normalizeNow(now: unknown): Date {
+/** Shared clock validation; the fake uses the same rejection text. */
+export function normalizeRateLimitNow(now: unknown): Date {
 	if (now === undefined) return new Date();
 	if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
 		throw validationError("now must be a valid Date");
@@ -139,7 +140,7 @@ export function normalizeConsumeRateLimitInput(
 	const key = requireKey(input.key);
 	const limit = requireLimit(input.limit);
 	const windowSeconds = requireWindowSeconds(input.windowSeconds);
-	const now = normalizeNow(input.now);
+	const now = normalizeRateLimitNow(input.now);
 	const windowStart = windowStartFor(now, windowSeconds);
 	return {
 		key,
@@ -185,9 +186,7 @@ const STMT = {
 export class PostgresRateLimitRepository implements RateLimitRepository {
 	constructor(private readonly sql: PgSql) {}
 
-	async consume(
-		input: ConsumeRateLimitInput,
-	): Promise<ConsumeRateLimitResult> {
+	async consume(input: ConsumeRateLimitInput): Promise<ConsumeRateLimitResult> {
 		const normalized = normalizeConsumeRateLimitInput(input);
 		const rows = (await this.sql.unsafe(STMT.consume, [
 			normalized.key,
@@ -228,7 +227,7 @@ export class PostgresRateLimitRepository implements RateLimitRepository {
 		now: Date,
 		maxRows: number = RATE_LIMIT_DEFAULT_DELETE_BATCH,
 	): Promise<number> {
-		const current = normalizeNow(now);
+		const current = normalizeRateLimitNow(now);
 		const batch = normalizeDeleteExpiredBatch(maxRows);
 		const rows = (await this.sql.unsafe(STMT.deleteExpired, [
 			current.toISOString(),

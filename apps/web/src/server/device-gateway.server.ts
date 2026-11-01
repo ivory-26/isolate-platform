@@ -1,5 +1,6 @@
 import "@tanstack/react-start/server-only";
 import {
+	CONNECTOR_CALL_MAX_CLAIM_BATCH,
 	CONNECTOR_CALL_MAX_PARAMS_BYTES,
 	CONNECTOR_CALL_MAX_RESULT_BYTES,
 	type ConnectorCallRecord,
@@ -14,6 +15,7 @@ import {
 	PostgresConnectorCredentialRepository,
 	PostgresConnectorDeviceRepository,
 	PostgresConnectorUsageLedgerRepository,
+	PostgresRateLimitRepository,
 } from "@isolate/db";
 import {
 	DEVICE_PROXY_ERROR_CODES,
@@ -26,6 +28,20 @@ import {
 	type OrganizationId,
 	PlatformError,
 } from "@isolate/shared";
+import {
+	DEVICE_CLAIM_RATE_LIMIT,
+	DEVICE_HEARTBEAT_RATE_LIMIT,
+	DEVICE_IP_RATE_LIMIT,
+	DEVICE_RESULT_RATE_LIMIT,
+	type DeviceRateLimitAction,
+	deviceIpRateLimitKey,
+	deviceRateLimitKey,
+	enforceRateLimit,
+	isTrustProxyHeadersEnabled,
+	RATE_LIMIT_WINDOW_SECONDS,
+	type RateLimitCounter,
+	readClientIp,
+} from "./rate-limit.server";
 
 /**
  * Device daemon poll transport.
@@ -50,6 +66,9 @@ export const DEVICE_GATEWAY_ENABLED_VARIABLE = "DEVICE_GATEWAY_ENABLED";
 export const DEVICE_GATEWAY_MAX_RESULT_BODY_BYTES = 256 * 1024;
 export const DEVICE_GATEWAY_MAX_CLAIM_PARAMS_BYTES =
 	CONNECTOR_CALL_MAX_PARAMS_BYTES;
+/** `?limit=` for a batched claim: 1–10, default 1 (existing contract). */
+export const DEVICE_CLAIM_DEFAULT_LIMIT = 1;
+export const DEVICE_CLAIM_MAX_LIMIT = CONNECTOR_CALL_MAX_CLAIM_BATCH;
 
 const BEARER_PATTERN = /^Bearer ([^\s]+)$/i;
 const UUID_PATTERN =
@@ -103,6 +122,13 @@ export type DeviceGatewayDependencies = {
 	/** Platform guard when the credential has no `requestsPerDay`. */
 	freeDailyLimit?: number;
 	lookupTokenHash: DeviceTokenHashLookup;
+	/**
+	 * Durable throttling (migration 0012). The pre-auth IP bucket runs before any
+	 * token work; the per-device buckets run after authentication.
+	 */
+	rateLimits: RateLimitCounter;
+	/** Read `x-forwarded-for` only behind a proxy that overwrites it. */
+	trustProxyHeaders?: boolean;
 	now?: () => Date;
 };
 
@@ -249,6 +275,28 @@ export function readDeviceCallId(request: Request): string | null {
 	return candidate.toLowerCase();
 }
 
+const CLAIM_LIMIT_PATTERN = /^[0-9]{1,2}$/;
+
+/**
+ * `?limit=` is a bounded batch size: absent is 1 (the single-call contract),
+ * anything not a whole number in 1..10 is a 400 rather than a silent clamp, so
+ * a daemon bug is visible instead of quietly changing how much work it takes.
+ */
+export function readDeviceClaimLimit(request: Request): number | null {
+	let url: URL;
+	try {
+		url = new URL(request.url);
+	} catch {
+		return null;
+	}
+	const raw = url.searchParams.get("limit");
+	if (raw === null) return DEVICE_CLAIM_DEFAULT_LIMIT;
+	if (!CLAIM_LIMIT_PATTERN.test(raw)) return null;
+	const value = Number(raw);
+	if (value < 1 || value > DEVICE_CLAIM_MAX_LIMIT) return null;
+	return value;
+}
+
 type ParsedResult =
 	| { ok: true; data: Record<string, unknown> }
 	| { ok: false; errorCode: string };
@@ -325,6 +373,7 @@ export function createDeviceGateway(
 	dependencies: DeviceGatewayDependencies,
 ): DeviceGateway {
 	const now = dependencies.now ?? (() => new Date());
+	const trustProxy = dependencies.trustProxyHeaders === true;
 
 	const authenticate = async (
 		request: Request,
@@ -352,76 +401,127 @@ export function createDeviceGateway(
 		return { device, organizationId: device.organizationId };
 	};
 
+	/**
+	 * Pre-auth bucket, one per client address (or one shared bucket when proxy
+	 * headers are not trusted). Runs before a token is even hashed, so a flood
+	 * of bogus tokens never reaches the device table.
+	 */
+	const enforceIpLimit = (request: Request): Promise<Response | null> =>
+		enforceRateLimit({
+			limiter: dependencies.rateLimits,
+			key: deviceIpRateLimitKey(readClientIp(request, trustProxy)),
+			limit: DEVICE_IP_RATE_LIMIT,
+			windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+		});
+
+	const enforceDeviceLimit = (
+		deviceId: string,
+		action: DeviceRateLimitAction,
+		limit: number,
+	): Promise<Response | null> =>
+		enforceRateLimit({
+			limiter: dependencies.rateLimits,
+			key: deviceRateLimitKey(deviceId, action),
+			limit,
+			windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+		});
+
 	return {
 		async handleClaim(request) {
+			const ipDenied = await enforceIpLimit(request);
+			if (ipDenied !== null) return ipDenied;
 			const auth = await authenticate(request);
 			if (auth === null) return unauthorized();
-			const call = await dependencies.calls.claimNext(auth.device.id);
-			if (call === null) return response(200, { call: null });
-			if (call.organizationId !== auth.organizationId) {
-				// Defense in depth: a cross-tenant row is never handed to a device.
-				await dependencies.calls.fail({
-					callId: call.id,
-					deviceId: auth.device.id,
-					errorCode: "VALIDATION_FAILED",
-				});
-				return response(200, { call: null });
-			}
-			const credential = await dependencies.credentials.get(
-				auth.organizationId,
-				call.credentialId,
+			const limit = readDeviceClaimLimit(request);
+			if (limit === null) return invalidRequest();
+			const denied = await enforceDeviceLimit(
+				auth.device.id,
+				"claim",
+				DEVICE_CLAIM_RATE_LIMIT,
 			);
-			let payload: ReturnType<typeof claimPayload>;
-			try {
-				if (
-					credential === null ||
-					credential.deviceId !== auth.device.id ||
-					credential.organizationId !== auth.organizationId ||
-					credential.status !== "active"
-				) {
-					throw new PlatformError(
-						"INTEGRATION_UNAVAILABLE",
-						"connector credential is unavailable",
-					);
-				}
-				if (dependencies.usage !== undefined) {
-					const limit = resolveDailyLimit(
-						credential.freeTierProfile.requestsPerDay,
-						dependencies.freeDailyLimit,
-					);
-					const period = now().toISOString().slice(0, 10);
-					const consumed = await dependencies.usage.consume(credential.id, {
-						limitPerPeriod: limit,
-						period,
+			if (denied !== null) return denied;
+
+			// The claim is already scoped to this device; every row still has to
+			// pass the same tenant, credential and free-tier checks as a single
+			// claim, and a row that fails is failed (never handed out).
+			const calls = await dependencies.calls.claimNext(auth.device.id, limit);
+			const payloads: ReturnType<typeof claimPayload>[] = [];
+			for (const call of calls) {
+				if (call.organizationId !== auth.organizationId) {
+					// Defense in depth: a cross-tenant row is never handed to a device.
+					await dependencies.calls.fail({
+						callId: call.id,
+						deviceId: auth.device.id,
+						errorCode: "VALIDATION_FAILED",
 					});
-					if (!consumed.consumed) {
+					continue;
+				}
+				const credential = await dependencies.credentials.get(
+					auth.organizationId,
+					call.credentialId,
+				);
+				try {
+					if (
+						credential === null ||
+						credential.deviceId !== auth.device.id ||
+						credential.organizationId !== auth.organizationId ||
+						credential.status !== "active"
+					) {
 						throw new PlatformError(
-							"RATE_LIMITED",
-							"connector free-tier budget exhausted",
+							"INTEGRATION_UNAVAILABLE",
+							"connector credential is unavailable",
 						);
 					}
+					if (dependencies.usage !== undefined) {
+						const freeLimit = resolveDailyLimit(
+							credential.freeTierProfile.requestsPerDay,
+							dependencies.freeDailyLimit,
+						);
+						const period = now().toISOString().slice(0, 10);
+						const consumed = await dependencies.usage.consume(credential.id, {
+							limitPerPeriod: freeLimit,
+							period,
+						});
+						if (!consumed.consumed) {
+							throw new PlatformError(
+								"RATE_LIMITED",
+								"connector free-tier budget exhausted",
+							);
+						}
+					}
+					payloads.push(claimPayload(call, credential.credentialRef));
+				} catch (error) {
+					// The call cannot be executed without leaking or trusting bad data.
+					await dependencies.calls.fail({
+						callId: call.id,
+						deviceId: auth.device.id,
+						errorCode:
+							error instanceof PlatformError &&
+							(error.code === "INTEGRATION_UNAVAILABLE" ||
+								error.code === "RATE_LIMITED")
+								? error.code
+								: "VALIDATION_FAILED",
+					});
 				}
-				payload = claimPayload(call, credential.credentialRef);
-			} catch (error) {
-				// The call cannot be executed without leaking or trusting bad data.
-				await dependencies.calls.fail({
-					callId: call.id,
-					deviceId: auth.device.id,
-					errorCode:
-						error instanceof PlatformError &&
-						(error.code === "INTEGRATION_UNAVAILABLE" ||
-							error.code === "RATE_LIMITED")
-							? error.code
-							: "VALIDATION_FAILED",
-				});
-				return response(200, { call: null });
 			}
-			return response(200, { call: payload });
+			// A `?limit=1` (or absent) request keeps the single-call envelope so
+			// existing daemons do not change; a batch request always gets `calls`.
+			return limit === DEVICE_CLAIM_DEFAULT_LIMIT
+				? response(200, { call: payloads[0] ?? null })
+				: response(200, { calls: payloads });
 		},
 
 		async handleResult(request) {
+			const ipDenied = await enforceIpLimit(request);
+			if (ipDenied !== null) return ipDenied;
 			const auth = await authenticate(request);
 			if (auth === null) return unauthorized();
+			const denied = await enforceDeviceLimit(
+				auth.device.id,
+				"result",
+				DEVICE_RESULT_RATE_LIMIT,
+			);
+			if (denied !== null) return denied;
 			const callId = readDeviceCallId(request);
 			if (callId === null) return callNotFound();
 
@@ -459,8 +559,17 @@ export function createDeviceGateway(
 		},
 
 		async handleHeartbeat(request) {
+			const ipDenied = await enforceIpLimit(request);
+			if (ipDenied !== null) return ipDenied;
 			const auth = await authenticate(request);
-			return auth === null ? unauthorized() : response(200, { ok: true });
+			if (auth === null) return unauthorized();
+			const denied = await enforceDeviceLimit(
+				auth.device.id,
+				"heartbeat",
+				DEVICE_HEARTBEAT_RATE_LIMIT,
+			);
+			if (denied !== null) return denied;
+			return response(200, { ok: true });
 		},
 	};
 }
@@ -474,6 +583,7 @@ function getDatabase(databaseUrl: string): {
 	credentials: ConnectorCredentialRepository;
 	calls: ConnectorCallRepository;
 	usage: ConnectorUsageLedgerRepository;
+	rateLimits: PostgresRateLimitRepository;
 	lookupTokenHash: DeviceTokenHashLookup;
 } {
 	if (sql === undefined || sqlUrl !== databaseUrl) {
@@ -486,6 +596,7 @@ function getDatabase(databaseUrl: string): {
 		credentials: new PostgresConnectorCredentialRepository(database),
 		calls: new PostgresConnectorCallRepository(database),
 		usage: new PostgresConnectorUsageLedgerRepository(database),
+		rateLimits: new PostgresRateLimitRepository(database),
 		lookupTokenHash: async (tokenHash) => {
 			if (!/^[0-9a-f]{64}$/.test(tokenHash)) return null;
 			const rows = (await database.unsafe(
@@ -519,6 +630,7 @@ export function getDeviceGateway(
 	const configured = Number(env.CONNECTOR_FREE_DAILY_CALLS?.trim() ?? "");
 	gateway = createDeviceGateway({
 		...database,
+		trustProxyHeaders: isTrustProxyHeadersEnabled(env),
 		...(Number.isSafeInteger(configured) && configured > 0
 			? { freeDailyLimit: configured }
 			: {}),

@@ -3,6 +3,7 @@ import {
 	type CreateConnectorDeviceInput,
 	InMemoryConnectorCredentialRepository,
 	InMemoryConnectorDeviceRepository,
+	InMemoryRateLimitRepository,
 	type UserRole,
 } from "@isolate/db";
 import {
@@ -22,6 +23,10 @@ import {
 	handleDeviceRegisterRoute,
 	handleDeviceRevokeRoute,
 } from "./device-registration.server";
+import {
+	createUserRateLimitGate,
+	type UserRateLimitGate,
+} from "./rate-limit.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 const ORG_A = asOrganizationId("11111111-1111-4111-8111-111111111111");
@@ -52,6 +57,8 @@ function setup(
 		role?: UserRole;
 		organizationId?: OrganizationId;
 		resolveScope?: () => Promise<CallerScope>;
+		rateLimiter?: UserRateLimitGate;
+		generateToken?: () => string;
 	} = {},
 ): Harness {
 	const devices = new RecordingDeviceRepository();
@@ -63,7 +70,10 @@ function setup(
 	const routes = createDeviceRegistrationRoutes({
 		resolveScope: options.resolveScope ?? (async () => ({ ...scope })),
 		devices,
-		generateToken: () => FIXED_TOKEN,
+		generateToken: options.generateToken ?? (() => FIXED_TOKEN),
+		...(options.rateLimiter === undefined
+			? {}
+			: { rateLimiter: options.rateLimiter }),
 	});
 	return { devices, routes, token: FIXED_TOKEN, scope };
 }
@@ -416,5 +426,47 @@ describe("device registration route adapters", () => {
 				)
 			).status,
 		).toBe(503);
+	});
+});
+
+describe("device registration throttling", () => {
+	test("the eleventh register in a minute is a fixed 429 with Retry-After", async () => {
+		let lastToken = 0;
+		const h = setup({
+			rateLimiter: createUserRateLimitGate(new InMemoryRateLimitRepository()),
+			// A distinct token per device: a token hash must never be reused.
+			generateToken: () =>
+				`A`.repeat(42) + String.fromCharCode(65 + lastToken++),
+		});
+		for (let index = 0; index < 10; index += 1) {
+			const response = await h.routes.register(
+				post("/api/device/register", { displayName: `Laptop ${index}` }),
+			);
+			expect(response.status).toBe(200);
+		}
+		const denied = await h.routes.register(
+			post("/api/device/register", { displayName: "Laptop 11" }),
+		);
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+		expect(denied.headers.get("cache-control")).toBe("no-store");
+		expect(await denied.json()).toEqual({ error: "too many requests" });
+		// The refused request minted nothing.
+		expect(h.devices.created).toHaveLength(10);
+		// A different action has its own bucket.
+		const listed = await h.routes.list(get("/api/device/list"));
+		expect(listed.status).toBe(200);
+	});
+
+	test("list is denied only after its own 120-per-minute budget", async () => {
+		const h = setup({
+			rateLimiter: createUserRateLimitGate(new InMemoryRateLimitRepository()),
+		});
+		for (let index = 0; index < 120; index += 1) {
+			expect((await h.routes.list(get("/api/device/list"))).status).toBe(200);
+		}
+		const denied = await h.routes.list(get("/api/device/list"));
+		expect(denied.status).toBe(429);
+		expect(Number(denied.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
 	});
 });

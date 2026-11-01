@@ -34,11 +34,7 @@ describe("rate limit window math", () => {
 		expect(start.toISOString()).toBe("2026-11-01T00:00:00.000Z");
 		expect(retryAfterSecondsFor(now, start, 60)).toBe(30);
 		expect(
-			retryAfterSecondsFor(
-				new Date("2026-11-01T00:00:59.001Z"),
-				start,
-				60,
-			),
+			retryAfterSecondsFor(new Date("2026-11-01T00:00:59.001Z"), start, 60),
 		).toBe(1);
 		expect(
 			retryAfterSecondsFor(new Date("2026-11-01T00:01:00.000Z"), start, 60),
@@ -56,7 +52,10 @@ describe("rate limit window math", () => {
 			"2026-11-01T00:00:00.000Z",
 		);
 		expect(
-			windowStartFor(new Date("2026-11-01T12:00:00.000Z"), 86_400).toISOString(),
+			windowStartFor(
+				new Date("2026-11-01T12:00:00.000Z"),
+				86_400,
+			).toISOString(),
 		).toBe("2026-11-01T00:00:00.000Z");
 	});
 });
@@ -135,14 +134,22 @@ describe("in-memory rate limit repository", () => {
 		};
 		const seed = await repo.consume(input);
 		expect(seed).toMatchObject({ allowed: true, count: 1 });
-		const results = await Promise.all([repo.consume(input), repo.consume(input)]);
+		const results = await Promise.all([
+			repo.consume(input),
+			repo.consume(input),
+		]);
 		expect(results.filter((result) => result.allowed)).toHaveLength(1);
 		expect(results.filter((result) => !result.allowed)).toHaveLength(1);
 	});
 
 	test("separate keys and windows never share a counter", async () => {
 		const repo = new InMemoryRateLimitRepository();
-		await repo.consume({ key: "webhook:sentry:global", limit: 1, windowSeconds: 60, now: NOW });
+		await repo.consume({
+			key: "webhook:sentry:global",
+			limit: 1,
+			windowSeconds: 60,
+			now: NOW,
+		});
 		expect(
 			await repo.consume({
 				key: "webhook:github:global",
@@ -151,12 +158,22 @@ describe("in-memory rate limit repository", () => {
 				now: NOW,
 			}),
 		).toMatchObject({ allowed: true });
+		// Same key, different window length: at 00:00 both windows start at
+		// 00:00, so the 300 s window is the same row. At 00:06 the 60 s window
+		// starts at 00:06 while the 300 s one still starts at 00:05.
+		const sameStart = await repo.consume({
+			key: "webhook:sentry:global",
+			limit: 1,
+			windowSeconds: 300,
+			now: NOW,
+		});
+		expect(sameStart.allowed).toBe(false);
 		expect(
 			await repo.consume({
 				key: "webhook:sentry:global",
 				limit: 1,
-				windowSeconds: 300,
-				now: NOW,
+				windowSeconds: 60,
+				now: new Date("2026-11-01T00:06:00.000Z"),
 			}),
 		).toMatchObject({ allowed: true });
 	});
@@ -184,9 +201,9 @@ describe("in-memory rate limit repository", () => {
 		);
 		expect(deleted).toBe(2);
 		expect(repo.rowCount).toBe(2);
-		expect(
-			await repo.deleteExpired(new Date("2026-11-01T00:10:00.000Z")),
-		).toBe(2);
+		expect(await repo.deleteExpired(new Date("2026-11-01T00:10:00.000Z"))).toBe(
+			2,
+		);
 		expect(repo.rowCount).toBe(0);
 	});
 
@@ -235,9 +252,7 @@ describe("in-memory rate limit repository", () => {
 		expect(normalized.windowStart.toISOString()).toBe(
 			"2026-11-01T00:00:00.000Z",
 		);
-		expect(normalized.expiresAt.toISOString()).toBe(
-			"2026-11-01T00:01:00.000Z",
-		);
+		expect(normalized.expiresAt.toISOString()).toBe("2026-11-01T00:01:00.000Z");
 		let queried = false;
 		const sql = {
 			unsafe: async () => {

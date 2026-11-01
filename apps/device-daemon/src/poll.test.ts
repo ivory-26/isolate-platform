@@ -153,7 +153,7 @@ describe("poll loop", () => {
 			const url = String(input);
 			const rawHeaders = init?.headers as Record<string, string> | undefined;
 			headers.push(rawHeaders?.authorization ?? null);
-			if (url.endsWith("/api/device/claim")) {
+			if (url.includes("/api/device/claim")) {
 				claimCount += 1;
 				return Response.json({ call: claimCount === 1 ? call : null });
 			}
@@ -199,7 +199,7 @@ describe("poll loop", () => {
 			input: string | URL | Request,
 			init?: RequestInit,
 		) => {
-			if (String(input).endsWith("/api/device/claim")) {
+			if (String(input).includes("/api/device/claim")) {
 				claimCount += 1;
 				return Response.json({ call: claimCount === 1 ? call : null });
 			}
@@ -226,7 +226,7 @@ describe("poll loop", () => {
 	test("stops when the result endpoint rejects the token", async () => {
 		let claimCount = 0;
 		const fetchImpl = (async (input: string | URL | Request) => {
-			if (String(input).endsWith("/api/device/claim")) {
+			if (String(input).includes("/api/device/claim")) {
 				claimCount += 1;
 				return Response.json({ call: claimCount === 1 ? deviceCall() : null });
 			}
@@ -248,7 +248,7 @@ describe("poll loop", () => {
 		let claimCount = 0;
 		let resultCalls = 0;
 		const fetchImpl = (async (input: string | URL | Request) => {
-			if (String(input).endsWith("/api/device/claim")) {
+			if (String(input).includes("/api/device/claim")) {
 				claimCount += 1;
 				return Response.json({ call: claimCount === 1 ? deviceCall() : null });
 			}
@@ -265,5 +265,118 @@ describe("poll loop", () => {
 			random: () => 1,
 		});
 		expect(resultCalls).toBe(2);
+	});
+});
+
+describe("batch claims", () => {
+	test("requests a batch, processes it sequentially and posts every result", async () => {
+		const first = deviceCall();
+		const second = deviceCall({
+			id: "33333333-3333-4333-8333-333333333333",
+			toolName: "sentry.issue_comments",
+		});
+		const claimUrls: string[] = [];
+		const dispatched: string[] = [];
+		const posted: Array<{ callId: string; body: unknown }> = [];
+		let claimCount = 0;
+		const fetchImpl = (async (
+			input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			const url = String(input);
+			if (url.includes("/api/device/claim")) {
+				claimUrls.push(url);
+				claimCount += 1;
+				return claimCount === 1
+					? Response.json({ calls: [first, second] })
+					: Response.json({ call: null });
+			}
+			const match = /\/api\/device\/calls\/([^/]+)\/result$/.exec(url);
+			posted.push({
+				callId: decodeURIComponent(match?.[1] ?? ""),
+				body: JSON.parse(String(init?.body)),
+			});
+			return Response.json({ ok: true });
+		}) as unknown as typeof fetch;
+
+		const result = await runPollLoop({
+			serverUrl: "https://isolate.example.com",
+			deviceToken: TOKEN,
+			dispatch: async (call) => {
+				dispatched.push(call.id);
+				return { ok: true, data: { callId: call.id } };
+			},
+			fetchImpl,
+			sleep: noopSleep,
+			maxClaims: 2,
+		});
+
+		expect(result.reason).toBe("stopped");
+		expect(claimUrls).toHaveLength(2);
+		expect(claimUrls[0]).toContain("/api/device/claim?limit=4");
+		// Strictly sequential and in the server's order.
+		expect(dispatched).toEqual([first.id, second.id]);
+		expect(posted.map((entry) => entry.callId)).toEqual([first.id, second.id]);
+		expect(posted[0]?.body).toEqual({
+			ok: true,
+			data: { callId: first.id },
+		});
+	});
+
+	test("an empty calls envelope is no work and sleeps the poll interval", async () => {
+		const sleeps: number[] = [];
+		const fetchImpl = (async () =>
+			Response.json({ calls: [] })) as unknown as typeof fetch;
+		await runPollLoop({
+			serverUrl: "https://isolate.example.com",
+			deviceToken: TOKEN,
+			dispatch: okDispatch,
+			fetchImpl,
+			sleep: async (ms) => {
+				sleeps.push(ms);
+			},
+			pollIntervalMs: 900,
+			maxClaims: 2,
+		});
+		expect(sleeps).toEqual([900, 900]);
+	});
+
+	test("a malformed batch envelope is retryable", async () => {
+		const sleeps: number[] = [];
+		const fetchImpl = (async () =>
+			Response.json({
+				calls: [{ id: "not-a-uuid" }],
+			})) as unknown as typeof fetch;
+		await runPollLoop({
+			serverUrl: "https://isolate.example.com",
+			deviceToken: TOKEN,
+			dispatch: okDispatch,
+			fetchImpl,
+			sleep: async (ms) => {
+				sleeps.push(ms);
+			},
+			random: () => 1,
+			baseBackoffMs: 500,
+			maxClaims: 1,
+		});
+		expect(sleeps).toEqual([500]);
+	});
+
+	test("the requested batch size is bounded to 1..10", async () => {
+		const urls: string[] = [];
+		const fetchImpl = (async (input: string | URL | Request) => {
+			urls.push(String(input));
+			return Response.json({ call: null });
+		}) as unknown as typeof fetch;
+		await runPollLoop({
+			serverUrl: "https://isolate.example.com",
+			deviceToken: TOKEN,
+			dispatch: okDispatch,
+			fetchImpl,
+			sleep: noopSleep,
+			claimBatchSize: 99,
+			maxClaims: 1,
+		});
+		expect(urls[0]).toContain("?limit=10");
 	});
 });

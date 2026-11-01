@@ -8,6 +8,7 @@ import {
 	type PlatformCapability,
 	PostgresConnectorCredentialRepository,
 	PostgresConnectorDeviceRepository,
+	PostgresRateLimitRepository,
 } from "@isolate/db";
 import {
 	type ConnectorCredentialSummary,
@@ -28,6 +29,13 @@ import {
 	isDeviceGatewayEnabled,
 } from "./device-gateway.server";
 import { readNeonAuthSettings } from "./neon-auth.server";
+import {
+	createUserRateLimitGate,
+	RateLimitExceededError,
+	rateLimitedResponse,
+	type UserRateLimitAction,
+	type UserRateLimitGate,
+} from "./rate-limit.server";
 import { type CallerScope, ControlPlaneError } from "./task-service.server";
 
 /**
@@ -178,6 +186,7 @@ export const CONNECTOR_CONNECT_FAILURE_CODES = [
 	"AUTH_REQUIRED",
 	"FORBIDDEN",
 	"NOT_FOUND",
+	"RATE_LIMITED",
 	"UNAVAILABLE",
 ] as const;
 export type ConnectorConnectFailureCode =
@@ -196,6 +205,7 @@ export const CONNECTOR_CONNECT_FAILURE_MESSAGES: Record<
 	FORBIDDEN:
 		"This action requires an owner or admin role in this organization.",
 	NOT_FOUND: "The connector record was not found.",
+	RATE_LIMITED: "Too many connector requests. Try again shortly.",
 	UNAVAILABLE:
 		"Connector connect is not configured or is temporarily unavailable.",
 };
@@ -207,6 +217,8 @@ export type ConnectorConnectResult<T> =
 			readonly error: {
 				readonly code: ConnectorConnectFailureCode;
 				readonly message: string;
+				/** Set only for RATE_LIMITED; drives the 429 `Retry-After`. */
+				readonly retryAfterSeconds?: number;
 			};
 	  };
 
@@ -215,6 +227,11 @@ export type ConnectorConnectDependencies = {
 	credentials: ConnectorCredentialRepository;
 	/** Trusted server-side identity adapter; never a request field. */
 	resolveScope: () => Promise<CallerScope>;
+	/**
+	 * Per-user throttle, applied after the scope and capability are known.
+	 * Production wiring always supplies it; a missing gate is the test shape.
+	 */
+	rateLimiter?: UserRateLimitGate;
 };
 
 export type ConnectorConnectService = {
@@ -239,15 +256,23 @@ class ConnectorRefusal extends Error {
 
 function failure<T>(
 	code: ConnectorConnectFailureCode,
+	retryAfterSeconds?: number,
 ): ConnectorConnectResult<T> {
 	return {
 		ok: false,
-		error: { code, message: CONNECTOR_CONNECT_FAILURE_MESSAGES[code] },
+		error: {
+			code,
+			message: CONNECTOR_CONNECT_FAILURE_MESSAGES[code],
+			...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+		},
 	};
 }
 
 function failureFromError<T>(error: unknown): ConnectorConnectResult<T> {
 	if (error instanceof ConnectorRefusal) return failure(error.code);
+	if (error instanceof RateLimitExceededError) {
+		return failure("RATE_LIMITED", error.retryAfterSeconds);
+	}
 	if (error instanceof ControlPlaneError) {
 		if (error.code === "AUTH_REQUIRED") return failure("AUTH_REQUIRED");
 		if (error.code === "FORBIDDEN") return failure("FORBIDDEN");
@@ -344,7 +369,8 @@ export function createConnectorConnectService(
 ): ConnectorConnectService {
 	const scoped = async <T>(
 		capability: PlatformCapability | null,
-		action: (scope: CallerScope) => Promise<T>,
+		action: UserRateLimitAction,
+		handler: (scope: CallerScope) => Promise<T>,
 	): Promise<ConnectorConnectResult<T>> => {
 		try {
 			const scope = await dependencies.resolveScope();
@@ -355,7 +381,11 @@ export function createConnectorConnectService(
 			if (capability !== null && !hasCapability(scope.role, capability)) {
 				return failure("FORBIDDEN");
 			}
-			return { ok: true, value: await action(scope) };
+			// Throttle only a caller who passed identity and capability checks.
+			if (dependencies.rateLimiter !== undefined) {
+				await dependencies.rateLimiter.enforce(scope.userId, action);
+			}
+			return { ok: true, value: await handler(scope) };
 		} catch (error) {
 			return failureFromError(error);
 		}
@@ -366,7 +396,7 @@ export function createConnectorConnectService(
 			const parsed = connectBodySchema.safeParse(input);
 			if (!parsed.success) return failure("INVALID_INPUT");
 			const body = parsed.data;
-			return scoped("member:manage", async (scope) => {
+			return scoped("member:manage", "connector:connect", async (scope) => {
 				const metadata = body.metadata ?? {};
 				if (
 					!requestTextIsClean({
@@ -410,7 +440,7 @@ export function createConnectorConnectService(
 		async list(input) {
 			const parsed = listQuerySchema.safeParse(input ?? {});
 			if (!parsed.success) return failure("INVALID_INPUT");
-			return scoped(null, async (scope) => {
+			return scoped(null, "connector:list", async (scope) => {
 				const rows = await dependencies.credentials.listByOrganization(
 					scope.organizationId,
 				);
@@ -425,7 +455,7 @@ export function createConnectorConnectService(
 		async revoke(input) {
 			const parsed = revokeBodySchema.safeParse(input);
 			if (!parsed.success) return failure("INVALID_INPUT");
-			return scoped("member:manage", async (scope) => {
+			return scoped("member:manage", "connector:revoke", async (scope) => {
 				// The update carries organization_id, so a foreign id is a 404 and
 				// never flips another tenant's row. Repeating the call is harmless.
 				const revoked = await dependencies.credentials.revoke(
@@ -497,6 +527,9 @@ export function getConnectorConnectService(
 				memberships: runtime.memberships,
 				preferredOrganizationId: readActiveOrganizationPreference(),
 			}),
+		rateLimiter: createUserRateLimitGate(
+			new PostgresRateLimitRepository(database),
+		),
 	});
 	serviceKey = key;
 	return service;
@@ -522,6 +555,7 @@ const FAILURE_STATUS: Record<ConnectorConnectFailureCode, number> = {
 	AUTH_REQUIRED: 401,
 	FORBIDDEN: 403,
 	NOT_FOUND: 404,
+	RATE_LIMITED: 429,
 	UNAVAILABLE: 503,
 };
 
@@ -548,6 +582,10 @@ function invalidInput(): Response {
 
 function respond<T>(result: ConnectorConnectResult<T>): Response {
 	if (result.ok) return json(200, result.value);
+	// One fixed 429 shape (with Retry-After) across every route in the app.
+	if (result.error.code === "RATE_LIMITED") {
+		return rateLimitedResponse(result.error.retryAfterSeconds ?? 0);
+	}
 	return json(FAILURE_STATUS[result.error.code], {
 		error: result.error.message,
 	});

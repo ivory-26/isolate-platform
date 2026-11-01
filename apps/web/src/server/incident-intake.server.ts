@@ -45,6 +45,13 @@ import {
 import { verifyAndNormalizePagerDuty } from "./incident-intake-pagerduty.server";
 import { verifyAndNormalizeSentry } from "./incident-intake-sentry.server";
 import {
+	RATE_LIMIT_WINDOW_SECONDS,
+	type RateLimitCounter,
+	rateLimitedResponse,
+	WEBHOOK_MODE_RATE_LIMIT,
+	webhookRateLimitKey,
+} from "./rate-limit.server";
+import {
 	readWebhookHeader,
 	verifyWebhookSignature,
 	WEBHOOK_SIGNATURE_HEADER,
@@ -166,6 +173,7 @@ export type IncidentIntakeFailureCode =
 	| "NOT_FOUND"
 	| "INVALID_INPUT"
 	| "CONFLICT"
+	| "RATE_LIMITED"
 	| "UNAVAILABLE";
 
 export type IncidentIntakeResult =
@@ -184,7 +192,62 @@ export type IncidentIntakeResult =
 			/** Set when an adapter normalizer classified the delivery as no incident. */
 			ignored?: boolean;
 	  }
-	| { ok: false; code: IncidentIntakeFailureCode };
+	| {
+			ok: false;
+			code: IncidentIntakeFailureCode;
+			/** Set only for RATE_LIMITED; drives the 429 `Retry-After`. */
+			retryAfterSeconds?: number;
+	  };
+
+/**
+ * HTTP projection of a bounded intake failure. Fixed text, no-store, and the
+ * one machine-readable hint: a throttle answers 429 with `Retry-After`. Lives
+ * here (not in the route) so the mapping is unit-testable without a router.
+ */
+export const INCIDENT_FAILURE_STATUS: Record<
+	IncidentIntakeFailureCode,
+	number
+> = {
+	UNAUTHORIZED: 401,
+	PAYLOAD_TOO_LARGE: 413,
+	FORBIDDEN: 403,
+	NOT_FOUND: 404,
+	INVALID_INPUT: 400,
+	CONFLICT: 409,
+	RATE_LIMITED: 429,
+	UNAVAILABLE: 503,
+};
+
+export const INCIDENT_FAILURE_MESSAGE: Record<
+	IncidentIntakeFailureCode,
+	string
+> = {
+	UNAUTHORIZED: "Signature verification failed.",
+	PAYLOAD_TOO_LARGE: "The webhook payload is too large.",
+	FORBIDDEN: "This webhook is not authorized for the bound organization.",
+	NOT_FOUND: "No repository is bound to this webhook.",
+	INVALID_INPUT: "The webhook payload is not a valid incident signal.",
+	CONFLICT: "The incident could not be accepted as a new task.",
+	RATE_LIMITED: "Too many webhook deliveries. Try again shortly.",
+	UNAVAILABLE:
+		"Webhook intake is not configured or is temporarily unavailable.",
+};
+
+export function incidentFailureResponse(
+	code: IncidentIntakeFailureCode,
+	retryAfterSeconds?: number,
+): Response {
+	if (code === "RATE_LIMITED") {
+		return rateLimitedResponse(retryAfterSeconds ?? 0);
+	}
+	return Response.json(
+		{ error: INCIDENT_FAILURE_MESSAGE[code] },
+		{
+			status: INCIDENT_FAILURE_STATUS[code],
+			headers: { "cache-control": "no-store" },
+		},
+	);
+}
 
 /** Which verifier a delivery goes through; chosen from its headers only. */
 export type IncidentIntakeMode =
@@ -234,6 +297,11 @@ export type IncidentIntakeDependencies = {
 	submitTask: (
 		input: ValidatedSubmission,
 	) => Promise<ServiceResult<SubmissionReceipt>>;
+	/**
+	 * Per-mode global throttle (600/min). Production wiring always supplies it;
+	 * `null`/absent skips it for offline tests and single-process local mode.
+	 */
+	rateLimits?: RateLimitCounter | null;
 	now?: () => Date;
 };
 
@@ -898,6 +966,23 @@ export async function acceptIncident(
 	const mode = detectIncidentIntakeMode(request.headers, {
 		grafanaTimestampHeader: deps.grafanaTimestampHeader,
 	});
+	// Per-mode global bucket, after the mode is known and (in the route) after
+	// the body cap. A flood on one provider cannot exhaust another mode.
+	const limiter = deps.rateLimits;
+	if (limiter !== undefined && limiter !== null) {
+		const consumed = await limiter.consume({
+			key: webhookRateLimitKey(mode),
+			limit: WEBHOOK_MODE_RATE_LIMIT,
+			windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+		});
+		if (!consumed.allowed) {
+			return {
+				ok: false,
+				code: "RATE_LIMITED",
+				retryAfterSeconds: consumed.retryAfterSeconds,
+			};
+		}
+	}
 	switch (mode) {
 		case "github":
 			return acceptGitHubIncident(deps, request, context);

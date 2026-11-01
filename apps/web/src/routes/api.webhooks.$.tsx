@@ -1,5 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import type { IncidentIntakeFailureCode } from "../server/incident-intake.server";
+import {
+	type IncidentIntakeFailureCode,
+	incidentFailureResponse,
+} from "../server/incident-intake.server";
 import { getIncidentIntake } from "../server/incident-intake-runtime.server";
 import {
 	readBoundedWebhookBody,
@@ -30,40 +33,12 @@ export const Route = createFileRoute("/api/webhooks/$")({
 	},
 });
 
-const FAILURE_STATUS: Record<IncidentIntakeFailureCode, number> = {
-	UNAUTHORIZED: 401,
-	PAYLOAD_TOO_LARGE: 413,
-	FORBIDDEN: 403,
-	NOT_FOUND: 404,
-	INVALID_INPUT: 400,
-	CONFLICT: 409,
-	UNAVAILABLE: 503,
-};
-
-const FAILURE_MESSAGE: Record<IncidentIntakeFailureCode, string> = {
-	UNAUTHORIZED: "Signature verification failed.",
-	PAYLOAD_TOO_LARGE: "The webhook payload is too large.",
-	FORBIDDEN: "This webhook is not authorized for the bound organization.",
-	NOT_FOUND: "No repository is bound to this webhook.",
-	INVALID_INPUT: "The webhook payload is not a valid incident signal.",
-	CONFLICT: "The incident could not be accepted as a new task.",
-	UNAVAILABLE:
-		"Webhook intake is not configured or is temporarily unavailable.",
-};
-
-function failure(
-	status: number,
-	message: string,
-	headers: Record<string, string> = {},
+/** Only the bounded failure projection lives outside the intake module. */
+function reject(
+	code: IncidentIntakeFailureCode,
+	retryAfterSeconds?: number,
 ): Response {
-	return Response.json(
-		{ error: message },
-		{ status, headers: { "cache-control": "no-store", ...headers } },
-	);
-}
-
-function reject(code: IncidentIntakeFailureCode): Response {
-	return failure(FAILURE_STATUS[code], FAILURE_MESSAGE[code]);
+	return incidentFailureResponse(code, retryAfterSeconds);
 }
 
 async function handleWebhookRequest(request: Request): Promise<Response> {
@@ -72,16 +47,18 @@ async function handleWebhookRequest(request: Request): Promise<Response> {
 		intake = getIncidentIntake();
 	} catch {
 		// Missing secret or binding configuration fails closed, without detail.
-		return failure(503, FAILURE_MESSAGE.UNAVAILABLE);
+		return reject("UNAVAILABLE");
 	}
 
 	let rawBody: Uint8Array;
 	try {
 		rawBody = await readBoundedWebhookBody(request, WEBHOOK_MAX_BODY_BYTES);
 	} catch (error) {
-		return error instanceof WebhookBodyTooLargeError
-			? reject("PAYLOAD_TOO_LARGE")
-			: failure(400, FAILURE_MESSAGE.INVALID_INPUT);
+		return reject(
+			error instanceof WebhookBodyTooLargeError
+				? "PAYLOAD_TOO_LARGE"
+				: "INVALID_INPUT",
+		);
 	}
 
 	let result: Awaited<ReturnType<typeof intake.acceptIncident>>;
@@ -93,7 +70,7 @@ async function handleWebhookRequest(request: Request): Promise<Response> {
 	} catch {
 		return reject("UNAVAILABLE");
 	}
-	if (!result.ok) return reject(result.code);
+	if (!result.ok) return reject(result.code, result.retryAfterSeconds);
 	// An adapter classified the delivery as "not an incident": no task exists.
 	if ("accepted" in result && result.ignored === true) {
 		return Response.json(

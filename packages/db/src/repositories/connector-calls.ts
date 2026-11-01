@@ -110,7 +110,11 @@ export type ConnectorCallScope = {
 
 export interface ConnectorCallRepository {
 	enqueue(input: EnqueueConnectorCallInput): Promise<ConnectorCallRecord>;
-	claimNext(deviceId: string): Promise<ConnectorCallRecord | null>;
+	/**
+	 * Claims up to `limit` (1–10, default 1) oldest queued calls for the device.
+	 * Returns `[]` when there is no eligible work; order is oldest-first.
+	 */
+	claimNext(deviceId: string, limit?: number): Promise<ConnectorCallRecord[]>;
 	complete(input: {
 		callId: string;
 		deviceId: string;
@@ -314,6 +318,20 @@ export function normalizeConnectorCallErrorCode(value: unknown): string {
 	return value;
 }
 
+/** Claim batch size: whole number, 1–10, default 1. */
+export function normalizeConnectorCallClaimLimit(value: unknown): number {
+	if (value === undefined) return 1;
+	if (
+		typeof value !== "number" ||
+		!Number.isSafeInteger(value) ||
+		value < 1 ||
+		value > CONNECTOR_CALL_MAX_CLAIM_BATCH
+	) {
+		throw validationError("claim limit is invalid");
+	}
+	return value;
+}
+
 const CALL_COLUMNS = `id, organization_id, device_id, credential_id, task_id,
 	connector_id, tool_name, params, status, result, error_code, attempts,
 	claimed_at, completed_at, expires_at, created_at`;
@@ -399,18 +417,18 @@ const STMT = {
 	) VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, 'queued',
 		now() + make_interval(secs => $8::double precision / 1000.0))
 	RETURNING ${CALL_COLUMNS}`,
-	// Atomic claim: SKIP LOCKED so two pollers never receive the same call.
+	// Atomic batch claim: SKIP LOCKED so two pollers never receive the same call.
 	claimNext: `UPDATE connector_calls SET
 			status = 'claimed',
 			claimed_at = now(),
 			attempts = attempts + 1
-		WHERE id = (
+		WHERE id IN (
 			SELECT id FROM connector_calls
 			WHERE device_id = $1
 			  AND status = 'queued'
 			  AND expires_at > now()
 			ORDER BY created_at ASC, id ASC
-			LIMIT 1
+			LIMIT $2
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING ${CALL_COLUMNS}`,
@@ -552,16 +570,26 @@ export class PostgresConnectorCallRepository
 		return mapConnectorCallRow(rows[0]);
 	}
 
-	async claimNext(deviceId: string): Promise<ConnectorCallRecord | null> {
+	async claimNext(
+		deviceId: string,
+		limit?: number,
+	): Promise<ConnectorCallRecord[]> {
 		const id = requireBoundedId(
 			deviceId,
 			"deviceId",
 			CONNECTOR_CALL_MAX_ID_CHARS,
 		);
+		const batch = normalizeConnectorCallClaimLimit(limit);
 		const rows = (await this.sql.unsafe(STMT.claimNext, [
 			id,
+			batch,
 		])) as unknown as Record<string, unknown>[];
-		return rows.length === 0 ? null : mapConnectorCallRow(rows[0]);
+		// `UPDATE ... RETURNING` does not promise row order; oldest-first is part
+		// of the contract, so sort on the same key the SELECT ordered by.
+		return rows.map(mapConnectorCallRow).sort((left, right) => {
+			const byTime = left.createdAt.getTime() - right.createdAt.getTime();
+			return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
+		});
 	}
 
 	async complete(input: {

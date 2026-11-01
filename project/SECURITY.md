@@ -56,7 +56,31 @@
 - **Rotation**: no live credential existed in these fixtures, so there was nothing to
   rotate; the repository's real GitHub App key was never committed.
 
-## 5. Running the loop
+## 5. Wave-18 connector audit (2026-11-01)
+
+Read-only audit of the device-held model. No CRITICAL findings.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | HIGH | No rate limiting on device/user/webhook surfaces | **Lane `w18-rate`** implements `0012` fixed-window limits, gateway/user/intake/worker limits and batched claims |
+| 2 | HIGH | Device tokens never expire or rotate | **Registry layer done** (`8aa5f43`, `0014` unapplied): `expires_at`, expiry-aware verify, summaries. Registration TTL + rotate endpoint follow the rate lane |
+| 3 | HIGH | Webhook cap is non-atomic; capped fingerprints are burned | Pending: one transactional reserve + count in the incident repository, then wire intake |
+| 4 | MEDIUM | `expireStale` has no caller | Pending: worker reaper tick |
+| 5 | MEDIUM | No composite tenant FKs | Pending: migration with `(organization_id, id)` uniques + composite FKs |
+| 6 | MEDIUM | Client controls `requestsPerDay` | Pending: gateway ignores the client profile and uses the server guard only |
+| 7 | MEDIUM | No Origin/CSRF check on cookie POSTs | **Module merged** (`w18-batch`): `request-guard.server.ts`; wiring into routes pending |
+| 8 | MEDIUM | Provider bodies buffered before cap | **Fixed** (`f4a8884`): bounded stream reader wired through all ten adapters |
+| 9 | MEDIUM | Worker lacked per-tool argument schemas | **Fixed** (`646dcbe`): all 31 names validated against adapter schemas before enqueue |
+| 10 | LOW | `touchSeen` on every request; 250 ms result polling | Throttle `touchSeen`; polling stays bounded by TTL |
+| 11 | LOW | Result re-scan depth 6 vs write depth 8 | Align depths in the call repository |
+| 12 | LOW | STATUS claimed registry gated by env | Doc drift; implementations (not names) are gated |
+| 13 | LOW | Social callback origin trusted without allowlist | Neon rejects untrusted callback hosts; add an explicit allowlist as defense |
+
+Verified safe: bearer-hash device auth, capability-before-write, fail-closed gateway, atomic
+queue claim/ownership/expiry, recursive credential scan, no secret columns, https-only
+adapters with `redirect:"error"`, worker queue integrity.
+
+## 6. Running the loop
 
 ```bash
 bun run security:check     # repo-wide credential boundary + migration checks

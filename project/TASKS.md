@@ -2,6 +2,21 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 20 — public landing + authenticated control plane UI (2026-11-01)
+
+| Lane | Branch | Commit | Deliverable |
+|---|---|---|---|
+| W20-FOUNDATION | `task/w20-ui-foundation` | `2937edf` (merge `938855f`) | Isolate tokens, Tailwind v4 + shadcn/ui, Reicon wrapper, app shell, shared primitives, read-model seam, submit form |
+| W20-OVERVIEW | `task/w20-overview` | `9a10bd0` (merge `6d322ec`) | Overview metrics/runs/approvals/activity/devices, approvals page and decisions, repository/workflow selects on submit |
+| W20-RUNS | `task/w20-runs` | `dd5e2dc` (merge `dfafbdf`) | Runs list with filters/sort/URL state, run detail with timeline/logs/tool decisions/artifacts/approvals/retry |
+| W20-CATALOG | `task/w20-catalog` | `4a3ebb1` (merge `d28ebd4`) | Repositories + registration, read-only workflow library, usage analytics with Dither Kit and NumberFlow |
+| W20-SETTINGS | `task/w20-settings` | `0431a09` (merge `40a5da1`) | Settings/members/policy, device + connector management, auth/organization surfaces |
+| W20-FINAL | `task/w20-ui-final` | `18e0418` (merge `7dc5a4d`) | Public Baseten-style landing, real dashboard screenshots, GradientASCII shader, minimal auth shader, unslop pass, provenance |
+
+Gates: Biome clean · typecheck 9/9 · 558 web tests / 0 fail ×2 · web production build · client secret sweep 34 checks · `security:check` PASS · Impeccable detector no findings.
+
+Limitations: workflow canvas builder deferred; authenticated/live-DB visual QA not possible in this environment (marketing screenshots use labeled synthetic data); Dither Kit licensing caveat in `THIRD_PARTY_NOTICES.md`; no provider keys used.
+
 ## Wave 15 — user-connectable connectors + verified free tiers (2026-10-31)
 
 User intent: **users** connect their own free/self-hosted tools; the sandbox agent uses them through server-side tools; zero platform vendor cost. Work was split across eight worktrees, one owner per file group, all merged `--no-ff`.

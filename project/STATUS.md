@@ -1,8 +1,19 @@
 # Status
 
-Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lanes; published history purged of JWT-shaped test fixtures)
+Last updated: 2026-11-01 (wave 20: public landing + authenticated control plane UI)
 
-## Current: wave 19 — rotation, trace API, OTLP, context preloading, E2E (2026-11-01)
+## Current: wave 20 — public landing and control plane UI (2026-11-01)
+
+- **Public landing** at `/`: Baseten-style product-led layout, the real dashboard screenshot in a browser frame, the React Bits `GradientASCII` shader from `project/design.md` as the visual bed, a facts strip, alternating feature sections, lifecycle, trust boundary, CTA and footer. Authenticated and local-demo callers redirect to `/overview`.
+- **Auth** at `/login` and `/signup`: focused layout with a minimal shader variant, the Isolate brand mark, and preserved Neon Auth/Google behavior.
+- **App shell** at `/overview`: 240px collapsible sidebar + mobile sheet, 56px topbar, command palette (Ctrl/Cmd+K), workspace/user menus, Reicon duotone icons, and a quiet session status line.
+- **Routes**: Overview, Runs + run detail, Approvals, Repositories, Workflows library, Usage (Dither Kit charts + NumberFlow), Settings, Devices/connectors, and Submit. Every read goes through tenant-scoped `uiRead` with capability checks, bounded rows, `no-store`, and explicit empty/error/stale states.
+- **Design**: Tailwind v4 + shadcn/ui `radix-nova`; Inter + JetBrains Mono; fixed brand tokens; Reicon Outline/Filled composed into a duotone wrapper; React Bits shadcn registry and Reicon MCP configured; Dither Kit area/bar/sparkline charts.
+- **Lanes merged**: foundation `2937edf` (merge `938855f`), design tooling `69de1fa` (merge `fe7aafe`), overview `9a10bd0` (merge `6d322ec`), runs `dd5e2dc` (merge `dfafbdf`), catalog `4a3ebb1` (merge `d28ebd4`), settings `0431a09` (merge `40a5da1`), final UI `18e0418` (merge `7dc5a4d`).
+- **Gates**: Biome clean · typecheck 9/9 · **558 web tests / 0 fail ×2** · web production build · client secret sweep 34 checks · `security:check` PASS (452 source/migration, 797 tracked). Impeccable detector: no findings. Unslop pass applied (session card removed, heading weights calmed, catch-all transitions removed).
+- **Limitations**: no authenticated/live-DB visual QA was possible in this environment; SQL pages show honest unavailable states and the marketing screenshots use synthetic data (labeled illustrative). The workflow canvas builder remains deferred. Dither Kit source had no LICENSE file at vendor time — verify before commercial redistribution (`THIRD_PARTY_NOTICES.md`). No provider keys were used.
+
+## Previous: wave 19 — rotation, trace API, OTLP, context preloading, E2E (2026-11-01)
 
 - **Device rotation**: `rotateToken` + `POST /api/device/rotate`; the old token stops verifying immediately, the new token gets a fresh 90-day expiry, and the response is shown once with `no-store`.
 - **Trace read API**: `PostgresTraceReadRepository.getTaskTrace` + `GET /api/traces/{taskId}` — tenant-scoped, `task:read`, bounded events/tool invocations/usage/connector calls, derived trace id, no payloads.

@@ -11,6 +11,7 @@ Last updated: 2026-11-01 (wave 18: full connector security audit + hardening lan
 - **Scaling record**: `docs/connectors/SCALING.md` documents the multi-replica model, limits, backpressure, batching and chunking.
 - **CI fix (`56ebea2`, pushed)**: the fixture rewrites needed formatting and the Biome schema was stale (2.2.4 vs CLI 2.4.5); `biome check` now exits 0 with only the 10 pre-existing warnings. GitHub Actions is **green** on `56ebea2`.
 - **Stalled lanes resumed**: the three wave-18 worktrees were salvaged (WIP committed, replayed onto the cleaned `main`), stray tsconfig/stash noise cleared, and fresh agents are finishing rate limiting, validation and streaming. Old pre-rewrite objects are purged locally; `gitleaks` reports **0 leaks** on `main`.
+- **Gates on cleaned main**: biome 0 errors (10 pre-existing warnings) · typecheck 9/9 · **2415 tests / 0 fail / 10 skip** ×2 · offline acceptance 7/7 · `security:check` PASS (284 files, 584 tracked) · GitHub Actions green on `56ebea2`.
 
 ## Previous: wave 17 — device-held credentials, 10-connector cap, binding (2026-11-01)
 

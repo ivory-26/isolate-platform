@@ -1,0 +1,104 @@
+/*
+ * Landing-only motion and atmosphere.
+ * Kept out of src/styles.css so dashboard routes never inherit it.
+ */
+
+@keyframes landing-enter {
+	from {
+		opacity: 0;
+		transform: translate3d(0, 16px, 0);
+	}
+	to {
+		opacity: 1;
+		transform: translate3d(0, 0, 0);
+	}
+}
+
+.landing-enter {
+	opacity: 0;
+	animation: landing-enter 800ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	animation-delay: var(--enter-delay, 0ms);
+}
+
+/*
+ * The shader sits directly under the hero copy. A tight, dark glyph shadow
+ * keeps the type readable over the bright horizon without painting a fill,
+ * panel, or scrim behind it.
+ */
+.landing-hero-copy {
+	text-shadow:
+		0 1px 2px rgb(2 7 10 / 0.8),
+		0 2px 10px rgb(2 7 10 / 0.45);
+}
+
+.landing-reveal {
+	opacity: 1;
+	transform: none;
+}
+
+/*
+ * Scroll reveals only arm after hydration, so the page is fully readable
+ * without JavaScript and crawlers never see opacity: 0 content.
+ */
+.landing-motion-ready .landing-reveal {
+	opacity: 0;
+	transform: translate3d(0, 20px, 0);
+	transition:
+		opacity 750ms cubic-bezier(0.16, 1, 0.3, 1),
+		transform 750ms cubic-bezier(0.16, 1, 0.3, 1);
+	transition-delay: var(--reveal-delay, 0ms);
+}
+
+.landing-motion-ready .landing-reveal.is-in {
+	opacity: 1;
+	transform: translate3d(0, 0, 0);
+}
+
+/* Lifecycle rail: each connector draws from the node before it. */
+.landing-trace-segment {
+	transform-origin: left center;
+}
+
+.landing-trace-segment-v {
+	transform-origin: center top;
+}
+
+.landing-motion-ready .landing-trace-segment {
+	transform: scaleX(0);
+	transition: transform 1100ms cubic-bezier(0.16, 1, 0.3, 1);
+	transition-delay: var(--segment-delay, 0ms);
+}
+
+.landing-motion-ready .landing-trace-segment-v {
+	transform: scaleY(0);
+	transition: transform 900ms cubic-bezier(0.16, 1, 0.3, 1);
+	transition-delay: var(--segment-delay, 0ms);
+}
+
+.landing-trace.is-in .landing-trace-segment {
+	transform: scaleX(1);
+}
+
+.landing-trace.is-in .landing-trace-segment-v {
+	transform: scaleY(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.landing-enter {
+		animation: none;
+		opacity: 1;
+		transform: none;
+	}
+
+	.landing-motion-ready .landing-reveal {
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
+
+	.landing-motion-ready .landing-trace-segment,
+	.landing-motion-ready .landing-trace-segment-v {
+		transform: none;
+		transition: none;
+	}
+}

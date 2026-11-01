@@ -1,38 +1,39 @@
-type Label = { text: string; accent?: boolean };
+type Feature = {
+	src: string;
+	alt: string;
+	width: number;
+	height: number;
+	wide?: boolean;
+};
 
 const FEATURES: Record<
-	"sandbox" | "approval" | "record",
-	{ src: string; alt: string; labels: readonly Label[] }
+	"sandbox" | "approval" | "record" | "lifecycle",
+	Feature
 > = {
 	sandbox: {
 		src: "/iso/sandbox.svg",
-		alt: "Hairline isometric diagram of a sandbox: a plate holds a stack of cloned repository layers and a task block raised on a column, with a dashed line around the files the run may write. A network wire leaves the task, crosses that line and is cut with a double bar at the plate edge. A budget dial and a tick ruler sit at the front.",
-		labels: [
-			{ text: "clone" },
-			{ text: "ownership" },
-			{ text: "network · denied", accent: true },
-			{ text: "budget" },
-		],
+		alt: "A cloned repository stack and a sealed task block inside a dashed write boundary. A network wire is cut at the plate edge.",
+		width: 720,
+		height: 470,
 	},
 	approval: {
 		src: "/iso/approval.svg",
-		alt: "Hairline isometric diagram of an approval gate: a plinth carries a payload sheet marked with three commit hash dots. A stamp hangs from a slim column and arm above the sheet, and two round buttons set into the plinth read approve and reject.",
-		labels: [
-			{ text: "payload" },
-			{ text: "commit sha" },
-			{ text: "approve" },
-			{ text: "reject", accent: true },
-		],
+		alt: "A payload sheet marked with three commit hash dots, with a stamp held above it and approve and reject buttons set into the plate.",
+		width: 720,
+		height: 470,
 	},
 	record: {
 		src: "/iso/record.svg",
-		alt: "Hairline isometric diagram of a run record: five event tiles sit on a plinth, the fourth lifted above the row on a dashed drop line. A tick ruler along the front edge reads elapsed time, and an archive drawer at the left holds the durable copy.",
-		labels: [
-			{ text: "event" },
-			{ text: "stage" },
-			{ text: "timestamp" },
-			{ text: "durable" },
-		],
+		alt: "Five event tiles on a plinth, one lifted above the row, with a time ruler and an archive drawer holding the durable copy.",
+		width: 720,
+		height: 470,
+	},
+	lifecycle: {
+		src: "/iso/lifecycle.svg",
+		alt: "Four stations on one rail: a stack of queued tasks, a task sealed in a sandbox, a validation gate, and a stamp that approves the change.",
+		width: 1000,
+		height: 560,
+		wide: true,
 	},
 };
 
@@ -41,22 +42,15 @@ export type FeatureKey = keyof typeof FEATURES;
 export function FeatureVisual({ feature }: { feature: FeatureKey }) {
 	const config = FEATURES[feature];
 	return (
-		<figure className="wf-figure">
+		<figure className={config.wide ? "wf-figure wf-figure-wide" : "wf-figure"}>
 			<img
 				src={config.src}
 				alt={config.alt}
-				width={720}
-				height={470}
+				width={config.width}
+				height={config.height}
 				loading="lazy"
 				decoding="async"
 			/>
-			<ul className="wf-labels">
-				{config.labels.map((label) => (
-					<li key={label.text} data-accent={label.accent ? "" : undefined}>
-						{label.text}
-					</li>
-				))}
-			</ul>
 		</figure>
 	);
 }

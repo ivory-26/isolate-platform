@@ -75,6 +75,38 @@ function geometry(P) {
 		return `${line(marks.minor, "faint")}${line(marks.major, tone)}`;
 	};
 
+	/**
+	 * A closed ring at height z, split where the silhouette turns: the near half
+	 * is drawn solid, the far half dashed. Without this an object has a top
+	 * outline and verticals but no base, so it floats.
+	 */
+	const ringSplit = (points, z, nearTone, farTone) => {
+		if (!points.length) return "";
+		let cx = 0;
+		let cy = 0;
+		for (const [x, y] of points) {
+			cx += x;
+			cy += y;
+		}
+		cx /= points.length;
+		cy /= points.length;
+		const centre = k.depthOf([cx, cy, z], P);
+		const near = [];
+		const far = [];
+		for (let index = 0; index < points.length; index += 1) {
+			const a = points[index];
+			const b = points[(index + 1) % points.length];
+			const mid = k.depthOf([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z], P);
+			(mid >= centre ? near : far).push(a);
+		}
+		const out = [];
+		if (farTone && far.length > 2) {
+			out.push(line(k.onTop(far, z, P), farTone, { dashed: true }));
+		}
+		if (near.length > 2) out.push(line(k.onTop(near, z, P), nearTone));
+		return out.join("");
+	};
+
 	/** A box drawn as a wireframe: top edge solid, far edge dashed. */
 	const box = (
 		plan,
@@ -91,7 +123,7 @@ function geometry(P) {
 			[plan.x + inset, plan.y + plan.d - inset],
 		];
 		return [
-			hidden ? planRing(plan, z0, hidden, { dashed: true }) : "",
+			ringSplit(k.ringOf(plan, 10), z0, side, hidden),
 			strokePaths(
 				posts.map(([x, y]) => k.pathOf([iso([x, y, z0]), iso([x, y, z1])])),
 				side,
@@ -112,9 +144,7 @@ function geometry(P) {
 		const [vx, vy] = k.towardViewer(P);
 		const bearing = Math.atan2(vy, vx);
 		const out = [
-			planEdge(k.circleRing(cx, cy, radius, 40), z0, hidden, true, {
-				dashed: true,
-			}),
+			ringSplit(k.circleRing(cx, cy, radius, 40), z0, side, hidden),
 			planEdge(k.circleRing(cx, cy, radius, 40), z1, top, true),
 		];
 		for (const sign of [1, -1]) {
@@ -150,8 +180,16 @@ function shift(P, from, to) {
 	return [b[0] - a[0], b[1] - a[1]];
 }
 
-function writeScene({ name, label, fit, css = "", build }) {
-	const P = k.fitProjection(fit, WIDTH, HEIGHT, {
+function writeScene({
+	name,
+	label,
+	fit,
+	width = WIDTH,
+	height = HEIGHT,
+	css = "",
+	build,
+}) {
+	const P = k.fitProjection(fit, width, height, {
 		pad: PAD,
 		azimuth: AZ,
 		elevation: EL,
@@ -165,8 +203,8 @@ function writeScene({ name, label, fit, css = "", build }) {
 		...build(g, P),
 	];
 	const svg = k.figureSvg({
-		width: WIDTH,
-		height: HEIGHT,
+		width,
+		height,
 		label,
 		body,
 		className: "line-svg",
@@ -488,6 +526,147 @@ writeScene({
 		parts.push(g.ticks(-4, 116, 7, 4, 28, 8, [2.5, 5], "mid"));
 		parts.push(g.edge([47, 28, 8], [47, 28, 18], "red"));
 		parts.push(g.dot([47, 28, 18], 2.2, "red"));
+
+		return parts;
+	},
+});
+
+
+
+
+/* ------------------------------------------------------------------ */
+/* lifecycle: four stations on one rail.                               */
+/* ------------------------------------------------------------------ */
+
+writeScene({
+	name: "lifecycle",
+	label:
+		"A plinth carries a rail with four stations: a stack of queued tasks, a task sealed inside a dashed sandbox, a validation gate, and a stamp that approves the change as it leaves.",
+	width: 1000,
+	height: 560,
+	fit: [
+		...k.boxCorners({ x: -212, y: -52, w: 424, d: 104 }, 0, 12),
+		[-156, -27, 70],
+		[-52, -25, 64],
+		[52, -30, 68],
+		[186, 0, 72],
+	],
+	css: ({ P }) => {
+		const move = shift(P, [160, 0, 48], [160, 0, 26]);
+		return `[data-part="lamp"]{animation:l-lamp 7s ease-in-out infinite}
+@keyframes l-lamp{0%,55%,100%{opacity:.25}66%,82%{opacity:1}}
+[data-part="press"]{animation:l-press 7s cubic-bezier(.32,.72,0,1) infinite}
+@keyframes l-press{0%,30%{transform:translate(0,0)}46%,60%{transform:translate(${px(move[0])},${px(move[1])})}78%,100%{transform:translate(0,0)}}`;
+	},
+	build: (g, P) => {
+		const PLINTH = { x: -212, y: -52, w: 424, d: 104, r: 14 };
+		const RAIL = { x: -198, y: -9, w: 396, d: 18, r: 3 };
+		const PAD = { w: 84, d: 54, r: 6 };
+		const DECK = 19;
+		const stations = [-156, -52, 52, 156];
+		const pad = (cx) => ({
+			x: cx - PAD.w / 2,
+			y: -PAD.d / 2,
+			w: PAD.w,
+			d: PAD.d,
+			r: PAD.r,
+		});
+		const parts = [g.box(PLINTH, 0, 12, { top: "mid", side: "lo" })];
+
+		parts.push(g.box(RAIL, 12, 15, { top: "lo", side: "faint" }));
+		parts.push(g.ticks(-200, 200, 8, 5, PLINTH.y + PLINTH.d - 8, 12, [2, 4]));
+
+		// The event trail, only in the gaps between stations.
+		for (let index = 0; index < stations.length - 1; index += 1) {
+			const from = stations[index] + PAD.w / 2 + 2;
+			const to = stations[index + 1] - PAD.w / 2 - 2;
+			parts.push(g.edge([from, 0, 15], [to, 0, 15], "lo", { dashed: true }));
+			parts.push(g.dot([(from + to) / 2, 0, 15], 1.8, "mid"));
+		}
+
+		for (const cx of stations) {
+			parts.push(g.box(pad(cx), 15, DECK, { top: "mid", side: "lo" }));
+		}
+
+		// 1. queue: submitted tasks wait in a stack.
+		for (let layer = 0; layer < 3; layer += 1) {
+			parts.push(
+				g.box(
+					{
+						x: -188 + layer * 3,
+						y: -17 + layer * 3,
+						w: 62 - layer * 6,
+						d: 34 - layer * 6,
+						r: 2,
+					},
+					DECK + layer * 6,
+					DECK + 3 + layer * 6,
+					{
+						top: layer === 2 ? "mid" : "lo",
+						side: "faint",
+						hidden: null,
+					},
+				),
+			);
+		}
+
+		// 2. execute: one task, sealed inside the sandbox.
+		parts.push(
+			g.planRing({ x: -79, y: -25, w: 54, d: 50, r: 5 }, DECK, "lo", {
+				dashed: true,
+			}),
+		);
+		parts.push(
+			g.box({ x: -67, y: -12, w: 30, d: 30, r: 3 }, DECK, 55, {
+				top: "blue",
+				side: "blue",
+				hidden: null,
+			}),
+		);
+		parts.push(g.dot([-58, -3, 55], 2, "hi"));
+
+		// 3. validate: the gate the change has to pass through.
+		for (const y of [-26, 26]) {
+			parts.push(g.cyl(52, y, 4.5, DECK, 62, { top: "mid", side: "lo" }));
+		}
+		parts.push(
+			g.box({ x: 48, y: -29, w: 8, d: 58, r: 2 }, 62, 66, {
+				top: "mid",
+				side: "lo",
+				hidden: null,
+			}),
+		);
+		parts.push(g.dot([52, 0, DECK], 2, "hi"));
+
+		// 4. approve: the stamp, and the lamp that says a person decided.
+		const POST = [186, 0];
+		parts.push(g.cyl(POST[0], POST[1], 5, DECK, 70, { top: "mid", side: "lo" }));
+		parts.push(
+			g.box({ x: 134, y: -6, w: 52, d: 12, r: 3 }, 62, 68, {
+				top: "mid",
+				side: "lo",
+				hidden: null,
+			}),
+		);
+		parts.push(g.cyl(160, 0, 3, 48, 62, { top: "mid", side: "lo" }));
+		parts.push(
+			`<g data-part="press">${g.box({ x: 142, y: -18, w: 36, d: 36, r: 2 }, 34, 48, {
+				top: "red",
+				side: "red",
+				hidden: null,
+			})}${g.box({ x: 147, y: -13, w: 26, d: 26, r: 1.5 }, 30, 34, {
+				top: "red",
+				side: "red",
+				hidden: null,
+			})}</g>`,
+		);
+		parts.push(
+			`<g data-part="lamp">${g.planEdge(k.circleRing(POST[0], POST[1], 2.8, 20), 70, "red", true)}</g>`,
+		);
+
+		// The change leaves the boundary.
+		parts.push(g.edge([198, 0, 15], [206, 0, 15], "lo", { dashed: true }));
+		parts.push(g.dot([209, 0, 15], 2.2, "red"));
 
 		return parts;
 	},

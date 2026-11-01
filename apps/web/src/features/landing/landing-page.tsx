@@ -116,7 +116,7 @@ export function LandingPage() {
 							style={enterDelay(0)}
 						>
 							Autonomy with an{" "}
-							<span className="text-brand">approval boundary</span>.
+							<span className="text-orange">approval boundary</span>.
 						</h1>
 
 						<p

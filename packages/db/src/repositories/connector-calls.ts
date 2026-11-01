@@ -18,9 +18,10 @@ import { parseJsonbColumn } from "../client";
  * Decisions enforced here and mirrored by the in-memory fake:
  * - `enqueue` validates identifiers, tool name, argument shape, size and
  *   credential-shaped strings before the row exists.
- * - `claimNext` is ONE statement using `FOR UPDATE SKIP LOCKED`; it flips
- *   `queued -> claimed`, increments `attempts` and returns only a call whose
- *   `expires_at` is still in the future. Two concurrent claims cannot collide.
+ * - `claimNext` is ONE statement using `FOR UPDATE SKIP LOCKED`; it flips up to
+ *   `limit` rows (1–10, oldest first) from `queued -> claimed`, increments
+ *   `attempts` and returns only calls whose `expires_at` is still in the
+ *   future. Two concurrent claims cannot collide.
  * - `complete` / `fail` are scoped to the owning device and to `claimed` rows.
  *   A replay of an already terminal call is an idempotent success, so a device
  *   that lost the response does not have to guess.
@@ -41,6 +42,7 @@ export const CONNECTOR_CALL_MIN_POLL_MS = 10;
 export const CONNECTOR_CALL_MAX_POLL_MS = 5_000;
 export const CONNECTOR_CALL_MAX_ID_CHARS = 128;
 export const CONNECTOR_CALL_MAX_TASK_ID_CHARS = 128;
+export const CONNECTOR_CALL_MAX_CLAIM_BATCH = 10;
 
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;

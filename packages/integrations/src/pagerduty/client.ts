@@ -1,4 +1,5 @@
 import { PlatformError } from "@isolate/shared";
+import { readBoundedJson } from "../http/bounded-body";
 
 /**
  * Shared PagerDuty REST v2 transport.
@@ -155,8 +156,6 @@ export function createPagerDutyReadCaller(
 		1,
 		Math.min(dependencies.maxCalls ?? PAGERDUTY_MAX_CONTEXT_CALLS, 64),
 	);
-	const encoder = new TextEncoder();
-
 	let calls = 0;
 	let incomplete = false;
 
@@ -234,26 +233,15 @@ export function createPagerDutyReadCaller(
 				return { kind: "skipped" };
 			}
 
-			let text: string;
-			try {
-				text = await response.text();
-			} catch {
+			// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+			const read = await readBoundedJson(response, {
+				maxBytes: PAGERDUTY_MAX_RESPONSE_BYTES,
+			});
+			if (!read.ok) {
 				incomplete = true;
 				return { kind: "skipped" };
 			}
-			if (encoder.encode(text).byteLength > PAGERDUTY_MAX_RESPONSE_BYTES) {
-				incomplete = true;
-				return { kind: "skipped" };
-			}
-
-			let body: unknown;
-			try {
-				body = JSON.parse(text);
-			} catch {
-				incomplete = true;
-				return { kind: "skipped" };
-			}
-			return { kind: "ok", body };
+			return { kind: "ok", body: read.data };
 		},
 	};
 }

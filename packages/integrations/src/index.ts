@@ -41,6 +41,7 @@ export * from "./honeycomb/redact";
 export * from "./honeycomb/tools";
 export * from "./honeycomb/types";
 export * from "./honeycomb/webhook";
+export * from "./http/bounded-body";
 export * from "./kubernetes";
 export * from "./mcp/guard";
 export * from "./newrelic/context";

@@ -1,4 +1,5 @@
 import { PlatformError } from "@isolate/shared";
+import { readBoundedJson } from "../http/bounded-body";
 import type { HoneycombFetchLike } from "./types";
 
 /**
@@ -46,14 +47,6 @@ export type HoneycombHttpClient = {
 };
 
 const encoder = new TextEncoder();
-
-function parseJson(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-}
 
 /** https origin only: no credentials, query, fragment or path prefix. */
 export function normalizeHoneycombBaseUrl(value: string | undefined): string {
@@ -169,18 +162,12 @@ export function createHoneycombHttpClient(
 			) {
 				return { kind: "failed" };
 			}
-			let text: string;
-			try {
-				text = await response.text();
-			} catch {
-				return { kind: "failed" };
-			}
-			if (encoder.encode(text).byteLength > HONEYCOMB_MAX_RESPONSE_BYTES) {
-				return { kind: "failed" };
-			}
-			const body = parseJson(text);
-			if (body === undefined) return { kind: "failed" };
-			return { kind: "ok", body };
+			// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+			const read = await readBoundedJson(response, {
+				maxBytes: HONEYCOMB_MAX_RESPONSE_BYTES,
+			});
+			if (!read.ok) return { kind: "failed" };
+			return { kind: "ok", body: read.data };
 		},
 	};
 }

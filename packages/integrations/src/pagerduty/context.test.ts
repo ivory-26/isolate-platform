@@ -29,6 +29,7 @@ type RouterOptions = {
 	logCount?: number;
 	logTypeLength?: number;
 	oversizedService?: boolean;
+	serviceStream?: StreamOption;
 	incidentTitle?: string;
 	serviceName?: string;
 };
@@ -39,6 +40,38 @@ function json(status: number, body: unknown): Response {
 		headers: { "Content-Type": "application/json" },
 	});
 }
+
+/**
+ * Pull-based stream body so the adapter — not the test — decides how much of
+ * the payload is consumed; `onCancel` proves the reader is abandoned at the cap.
+ */
+function streamed(chunks: readonly string[], onCancel: () => void): Response {
+	const encoder = new TextEncoder();
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				const next = chunks[index];
+				if (next === undefined) {
+					controller.close();
+					return;
+				}
+				index += 1;
+				controller.enqueue(encoder.encode(next));
+			},
+			cancel() {
+				onCancel();
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return new Response(body, {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
+type StreamOption = { chunks: readonly string[]; onCancel: () => void };
 
 function incidentBody(options: RouterOptions): unknown {
 	return {
@@ -114,6 +147,12 @@ function router(options: RouterOptions = {}): {
 			if (status !== 200) return json(status, { error: "nope" });
 			if (options.oversizedService === true) {
 				return new Response("x".repeat(300 * 1024), { status: 200 });
+			}
+			if (options.serviceStream !== undefined) {
+				return streamed(
+					options.serviceStream.chunks,
+					options.serviceStream.onCancel,
+				);
 			}
 			return json(200, {
 				service: {
@@ -301,6 +340,53 @@ describe("fetchPagerDutyContext", () => {
 		expect(totalBytes(bundle)).toBeLessThanOrEqual(
 			MAX_CONTEXT_TOTAL_EXCERPT_BYTES,
 		);
+	});
+
+	test("reads a multi-chunk provider body and never cancels a bounded stream", async () => {
+		const body = JSON.stringify({
+			service: {
+				id: "PSVC1",
+				name: "checkout",
+				html_url: SERVICE_URL,
+				escalation_policy: { id: "PEP1", name: "Primary" },
+			},
+		});
+		const midpoint = Math.floor(body.length / 2);
+		let cancelled = 0;
+		const { impl } = router({
+			serviceStream: {
+				chunks: [body.slice(0, midpoint), body.slice(midpoint)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchPagerDutyContext(dependencies(impl), {
+			incidentId: "PABC123",
+		});
+		expect(bundle.items.map((item) => item.kind)).toContain("service");
+		expect(bundle.truncated).toBe(false);
+		expect(cancelled).toBe(0);
+	});
+
+	test("cancels a provider stream the moment it crosses the response cap", async () => {
+		const secret = "STREAMED-PROVIDER-SECRET";
+		let cancelled = 0;
+		const { impl } = router({
+			serviceStream: {
+				chunks: ['{"service":', secret, "x".repeat(300 * 1024)],
+				onCancel: () => {
+					cancelled += 1;
+				},
+			},
+		});
+		const bundle = await fetchPagerDutyContext(dependencies(impl), {
+			incidentId: "PABC123",
+		});
+		expect(cancelled).toBe(1);
+		expect(bundle.items.map((item) => item.kind)).not.toContain("service");
+		expect(bundle.truncated).toBe(true);
+		expect(JSON.stringify(bundle)).not.toContain(secret);
 	});
 
 	test("rejects invalid inputs before any fetch", async () => {

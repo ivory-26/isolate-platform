@@ -14,6 +14,7 @@ import {
 	PlatformError,
 } from "@isolate/shared";
 import { z } from "zod";
+import { readBoundedJson } from "../http/bounded-body";
 import { redactAxiomText } from "./redact";
 import {
 	AXIOM_DATASET_PATTERN,
@@ -324,7 +325,6 @@ function prepare(dependencies: AxiomContextDependencies): Config {
 }
 
 function createClient(config: Config): HttpClient {
-	const encoder = new TextEncoder();
 	const client: HttpClient = {
 		calls: 0,
 		async request(path, init, step) {
@@ -375,20 +375,12 @@ function createClient(config: Config): HttpClient {
 			) {
 				return { kind: "failed" };
 			}
-			let text: string;
-			try {
-				text = await response.text();
-			} catch {
-				return { kind: "failed" };
-			}
-			if (encoder.encode(text).byteLength > AXIOM_CONTEXT_MAX_RESPONSE_BYTES) {
-				return { kind: "failed" };
-			}
-			try {
-				return { kind: "ok", body: JSON.parse(text) };
-			} catch {
-				return { kind: "failed" };
-			}
+			// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+			const read = await readBoundedJson(response, {
+				maxBytes: AXIOM_CONTEXT_MAX_RESPONSE_BYTES,
+			});
+			if (!read.ok) return { kind: "failed" };
+			return { kind: "ok", body: read.data };
 		},
 	};
 	return client;

@@ -1,5 +1,6 @@
 import { isBoundedHttpsUrl, PlatformError } from "@isolate/shared";
 import { z } from "zod";
+import { readBoundedJson } from "../http/bounded-body";
 import {
 	createPagerDutyReadCaller,
 	normalizePagerDutyBaseUrl,
@@ -557,14 +558,11 @@ async function updateIncident(
 		);
 	}
 
-	let bodyText = "";
-	try {
-		bodyText = await response.text();
-	} catch {
-		bodyText = "";
-	}
-	const boundedBody =
-		new TextEncoder().encode(bodyText).byteLength <= MAX_ERROR_RESPONSE_BYTES;
+	// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+	const read = await readBoundedJson(response, {
+		maxBytes: MAX_ERROR_RESPONSE_BYTES,
+	});
+	const parsedBody = read.ok ? read.data : undefined;
 
 	if (response.status !== 200) {
 		const code = mapWriteStatus(response.status);
@@ -578,12 +576,6 @@ async function updateIncident(
 		return failure(code, writeMessage(tool, code));
 	}
 
-	let parsedBody: unknown;
-	try {
-		parsedBody = boundedBody ? JSON.parse(bodyText) : undefined;
-	} catch {
-		parsedBody = undefined;
-	}
 	const parsedResponse =
 		pagerDutyIncidentWriteResponseSchema.safeParse(parsedBody);
 	const written =

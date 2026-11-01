@@ -9,6 +9,7 @@ import {
 	PlatformError,
 } from "@isolate/shared";
 import { z } from "zod";
+import { readBoundedJson } from "../http/bounded-body";
 import { redactNewRelicText } from "./redact";
 import {
 	NEWRELIC_ACCOUNT_ID_PATTERN,
@@ -248,7 +249,6 @@ function prepare(dependencies: NewRelicContextDependencies): Config {
 }
 
 function createClient(config: Config): HttpClient {
-	const encoder = new TextEncoder();
 	const client: HttpClient = {
 		calls: 0,
 		async call(query, variables, step) {
@@ -299,24 +299,12 @@ function createClient(config: Config): HttpClient {
 			) {
 				return { kind: "failed" };
 			}
-			let text: string;
-			try {
-				text = await response.text();
-			} catch {
-				return { kind: "failed" };
-			}
-			if (
-				encoder.encode(text).byteLength > NEWRELIC_CONTEXT_MAX_RESPONSE_BYTES
-			) {
-				return { kind: "failed" };
-			}
-			let body: unknown;
-			try {
-				body = JSON.parse(text);
-			} catch {
-				return { kind: "failed" };
-			}
-			const envelope = nerdGraphResponseSchema.safeParse(body);
+			// Chunked read: an oversized stream is abandoned at the cap, never buffered.
+			const read = await readBoundedJson(response, {
+				maxBytes: NEWRELIC_CONTEXT_MAX_RESPONSE_BYTES,
+			});
+			if (!read.ok) return { kind: "failed" };
+			const envelope = nerdGraphResponseSchema.safeParse(read.data);
 			if (!envelope.success) return { kind: "failed" };
 			const parsed: NerdGraphResponse = envelope.data;
 			if ((parsed.errors?.length ?? 0) > 0) return { kind: "failed" };

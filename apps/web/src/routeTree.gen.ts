@@ -27,6 +27,7 @@ import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
 import { Route as ApiDeviceRegisterRouteImport } from './routes/api.device.register'
 import { Route as ApiDeviceRevokeRouteImport } from './routes/api.device.revoke'
 import { Route as ApiDeviceRotateRouteImport } from './routes/api.device.rotate'
+import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
@@ -120,6 +121,11 @@ const ApiDeviceRotateRoute = ApiDeviceRotateRouteImport.update({
   path: '/api/device/rotate',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTracesTaskIdRoute = ApiTracesTaskIdRouteImport.update({
+  id: '/api/traces/$taskId',
+  path: '/api/traces/$taskId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWebhooksSplatRoute = ApiWebhooksSplatRouteImport.update({
   id: '/api/webhooks/$',
   path: '/api/webhooks/$',
@@ -150,6 +156,7 @@ export interface FileRoutesByFullPath {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -194,6 +202,7 @@ export interface FileRoutesById {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   id:
@@ -261,6 +272,7 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
   fileRoutesById: FileRoutesById
@@ -282,6 +294,7 @@ export interface RootRouteChildren {
   ApiDeviceRegisterRoute: typeof ApiDeviceRegisterRoute
   ApiDeviceRevokeRoute: typeof ApiDeviceRevokeRoute
   ApiDeviceRotateRoute: typeof ApiDeviceRotateRoute
+  ApiTracesTaskIdRoute: typeof ApiTracesTaskIdRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
   ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
 }
@@ -414,6 +427,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDeviceRotateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/traces/$taskId': {
+      id: '/api/traces/$taskId'
+      path: '/api/traces/$taskId'
+      fullPath: '/api/traces/$taskId'
+      preLoaderRoute: typeof ApiTracesTaskIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/webhooks/$': {
       id: '/api/webhooks/$'
       path: '/api/webhooks/$'
@@ -461,6 +481,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDeviceRegisterRoute: ApiDeviceRegisterRoute,
   ApiDeviceRevokeRoute: ApiDeviceRevokeRoute,
   ApiDeviceRotateRoute: ApiDeviceRotateRoute,
+  ApiTracesTaskIdRoute: ApiTracesTaskIdRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
   ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,
 }

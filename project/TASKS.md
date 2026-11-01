@@ -27,6 +27,16 @@ biome 0 errors (10 pre-existing warnings) · typecheck 8/8 · 1704 pass / 0 fail
 - Incident end-to-end: **PASS on the approved 1M-budget retry**. Task `2a6d6902-…` → `review_ready`; 12 Meta calls, **170,818 prompt / 13,101 completion**; one Modal sandbox **244 s**; diff artifact 1 file / 26 insertions; push disabled. The earlier 50k run is retained as cap-enforcement evidence.
 - No cost was priced (`cost_usd` null for the Meta contributor model and for Modal without a price table); no GitHub write occurred in the incident run.
 
+## Wave 19 — rotation, trace read API, OTLP, context preloading, E2E (2026-11-01)
+
+| Lane | Branch | Status |
+|---|---|---|
+| W19-ROTATE | `task/w19-rotate` | in flight — `rotateToken`, rotate route, expiry renewal, tests |
+| W19-TRACE | `task/w19-trace` | in flight — tenant-scoped `getTaskTrace` read model + `/api/traces/{taskId}` |
+| W19-OTLP | `task/w19-otlp` | in flight — OTLP/HTTP sink, worker sink composition, device-path SaaS live harness |
+| W19-CONTEXT | pending | non-GitHub context preloading (device `connector.context.fetch` + fingerprint parsers) |
+| W19-E2E | pending | route-level end-to-end flow covering every endpoint |
+
 ## Wave 18 — connector hardening: limits, validation, batching, chunking (2026-11-01)
 
 User request: full security audit plus rate limiting, throttling, validation, Neon Auth verification, load balancing, chunking and batching.

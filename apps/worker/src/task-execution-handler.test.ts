@@ -1286,11 +1286,14 @@ describe("task execution handler — prompt and payload", () => {
 			workspaceRoot: POLICY.workspaceRoot,
 		});
 		expect(observed.sandboxBackend).toBe(backend);
-		expect(observed.toolContext).toEqual({
+		expect(observed.toolContext).toMatchObject({
 			organizationId: ORG_ID,
 			taskId: TASK_ID,
 			scopes: [],
 		});
+		expect(
+			(observed.toolContext as { traceparent?: string }).traceparent,
+		).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
 	});
 
 	test("runs tool-less when no sandbox backend factory is configured", async () => {

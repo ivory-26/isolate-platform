@@ -176,6 +176,7 @@ describe("Postgres connector device repository", () => {
 			"Sahil's laptop",
 			HASH_A,
 			"active",
+			null,
 		]);
 	});
 
@@ -219,5 +220,27 @@ describe("Postgres connector device repository", () => {
 		expect(calls[1].query).toContain("status = 'revoked'");
 		expect(calls[1].query).toContain("WHERE organization_id = $1 AND id = $2");
 		expect(calls[1].params).toEqual([ORG_A, DEVICE_ID]);
+	});
+});
+
+describe("device token expiry", () => {
+	test("rejects an expired token", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		await repo.create(createInput({ expiresAt: new Date(Date.now() - 1_000) }));
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_A)).toBeNull();
+	});
+
+	test("accepts an unexpired token and returns the expiry", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		const expiresAt = new Date(Date.now() + 60_000);
+		await repo.create(createInput({ expiresAt }));
+		const summary = await repo.verifyByTokenHash(ORG_A, HASH_A);
+		expect(summary?.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+	});
+
+	test("a legacy token without expiry still verifies", async () => {
+		const repo = new InMemoryConnectorDeviceRepository();
+		await repo.create(createInput());
+		expect(await repo.verifyByTokenHash(ORG_A, HASH_A)).not.toBeNull();
 	});
 });

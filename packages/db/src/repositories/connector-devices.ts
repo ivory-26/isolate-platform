@@ -34,6 +34,8 @@ export type CreateConnectorDeviceInput = {
 	/** sha256 hex of the device auth token; never the token itself. */
 	tokenHash: string;
 	status?: ConnectorDeviceStatus;
+	/** Token expiry; undefined/null means a legacy non-expiring token. */
+	expiresAt?: Date | null;
 };
 
 export type ConnectorDeviceRecord = {
@@ -44,6 +46,7 @@ export type ConnectorDeviceRecord = {
 	tokenHash: string;
 	status: ConnectorDeviceStatus;
 	lastSeenAt: Date | null;
+	expiresAt: Date | null;
 	createdAt: Date;
 	updatedAt: Date;
 };
@@ -69,7 +72,7 @@ export interface ConnectorDeviceRepository {
 	): Promise<ConnectorDeviceSummary[]>;
 }
 
-const DEVICE_COLUMNS = `id, organization_id, user_id, display_name, token_hash, status, last_seen_at, created_at, updated_at`;
+const DEVICE_COLUMNS = `id, organization_id, user_id, display_name, token_hash, status, last_seen_at, expires_at, created_at, updated_at`;
 
 function validationError(message: string): PlatformError {
 	return new PlatformError("VALIDATION_FAILED", message);
@@ -136,6 +139,7 @@ export function normalizeConnectorDeviceCreate(
 	displayName: string;
 	tokenHash: string;
 	status: ConnectorDeviceStatus;
+	expiresAt: Date | null;
 } {
 	const organizationId = requireNotEmpty(
 		input.organizationId,
@@ -157,7 +161,16 @@ export function normalizeConnectorDeviceCreate(
 		displayName: displayName.data,
 		tokenHash: normalizeConnectorDeviceTokenHash(input.tokenHash),
 		status: status.data,
+		expiresAt: normalizeExpiresAt(input.expiresAt),
 	};
+}
+
+function normalizeExpiresAt(value: Date | null | undefined): Date | null {
+	if (value === undefined || value === null) return null;
+	if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+		throw validationError("expiresAt must be a valid Date");
+	}
+	return new Date(value.getTime());
 }
 
 function toDate(value: unknown, field: string): Date {
@@ -195,6 +208,10 @@ export function mapConnectorDeviceRow(
 			row.last_seen_at === null
 				? null
 				: toDate(row.last_seen_at, "last_seen_at"),
+		expiresAt:
+			row.expires_at === null || row.expires_at === undefined
+				? null
+				: toDate(row.expires_at, "expires_at"),
 		createdAt: toDate(row.created_at, "created_at"),
 		updatedAt: toDate(row.updated_at, "updated_at"),
 	};
@@ -211,6 +228,7 @@ export function toConnectorDeviceSummary(
 		displayName: record.displayName,
 		status: record.status,
 		lastSeenAt: record.lastSeenAt === null ? null : new Date(record.lastSeenAt),
+		expiresAt: record.expiresAt === null ? null : new Date(record.expiresAt),
 		createdAt: new Date(record.createdAt),
 		updatedAt: new Date(record.updatedAt),
 	};
@@ -229,14 +247,15 @@ function requireOptionalTimestamp(
 
 const STMT = {
 	insert: `INSERT INTO connector_devices (
-		organization_id, user_id, display_name, token_hash, status
-	) VALUES ($1, $2, $3, $4, $5)
+		organization_id, user_id, display_name, token_hash, status, expires_at
+	) VALUES ($1, $2, $3, $4, $5, $6::timestamptz)
 	RETURNING ${DEVICE_COLUMNS}`,
 	list: `SELECT ${DEVICE_COLUMNS} FROM connector_devices
 		WHERE organization_id = $1
 		ORDER BY display_name ASC, id ASC`,
 	verify: `SELECT ${DEVICE_COLUMNS} FROM connector_devices
-		WHERE organization_id = $1 AND token_hash = $2 AND status = 'active'`,
+		WHERE organization_id = $1 AND token_hash = $2 AND status = 'active'
+		AND (expires_at IS NULL OR expires_at > now())`,
 	touchSeen: `UPDATE connector_devices
 		SET last_seen_at = $3::timestamptz, updated_at = now()
 		WHERE organization_id = $1 AND id = $2
@@ -262,6 +281,7 @@ export class PostgresConnectorDeviceRepository
 			normalized.displayName,
 			normalized.tokenHash,
 			normalized.status,
+			normalized.expiresAt === null ? null : normalized.expiresAt.toISOString(),
 		])) as unknown as Record<string, unknown>[];
 		if (rows.length === 0) {
 			throw new PlatformError(

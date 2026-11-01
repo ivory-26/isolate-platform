@@ -44,6 +44,7 @@ const device: ConnectorDeviceSummary = {
 	displayName: "Sahil's laptop",
 	status: "active",
 	lastSeenAt: new Date("2026-10-31T12:00:00.000Z"),
+	expiresAt: null,
 	createdAt: new Date("2026-10-31T11:00:00.000Z"),
 	updatedAt: new Date("2026-10-31T12:00:00.000Z"),
 };

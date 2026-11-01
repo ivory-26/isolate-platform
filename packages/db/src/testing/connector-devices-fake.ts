@@ -50,6 +50,7 @@ export class InMemoryConnectorDeviceRepository
 			tokenHash: normalized.tokenHash,
 			status: normalized.status,
 			lastSeenAt: null,
+			expiresAt: normalized.expiresAt,
 			createdAt: now,
 			updatedAt: now,
 		};
@@ -66,6 +67,7 @@ export class InMemoryConnectorDeviceRepository
 			if (
 				row.organizationId === organizationId &&
 				row.status === "active" &&
+				(row.expiresAt === null || row.expiresAt.getTime() > Date.now()) &&
 				constantTimeEqualTokenHash(hash, row.tokenHash)
 			) {
 				return toConnectorDeviceSummary(row);

@@ -157,6 +157,8 @@ export type ConnectorDeviceSummary = {
 	readonly displayName: string;
 	readonly status: ConnectorDeviceStatus;
 	readonly lastSeenAt: Date | null;
+	/** Token expiry; null only for legacy rows created before 0014. */
+	readonly expiresAt: Date | null;
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 };

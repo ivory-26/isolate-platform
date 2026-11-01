@@ -23,6 +23,8 @@ export function AuthLayout({
 		<main className="grid min-h-dvh lg:grid-cols-2">
 			<aside className="relative hidden overflow-hidden border-r border-line-subtle lg:block">
 				<div className="absolute inset-0" aria-hidden="true">
+					<div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_45%_38%,rgba(2,151,222,0.3),transparent_72%)]" />
+					<div className="absolute inset-0 bg-[radial-gradient(ellipse_45%_30%_at_62%_46%,rgba(252,115,77,0.18),transparent_74%)]" />
 					<ShaderField />
 				</div>
 				<div
@@ -57,6 +59,7 @@ export function AuthLayout({
 					aria-hidden="true"
 					className="pointer-events-none absolute inset-x-0 top-0 h-56 overflow-hidden lg:hidden"
 				>
+					<div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_80%_at_50%_40%,rgba(2,151,222,0.28),transparent_74%)]" />
 					<ShaderField />
 					<div className="absolute inset-0 bg-gradient-to-b from-canvas/20 via-canvas/45 to-canvas" />
 				</div>

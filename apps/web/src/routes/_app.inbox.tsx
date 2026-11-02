@@ -1,48 +1,149 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { useMemo } from "react";
+import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
-import { EmptyRow } from "@/components/console/empty-row";
 import { ConsoleNote } from "@/components/console/note";
 import { ConnectorsIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import {
+	filterInboxItems,
+	type InboxSearch,
+	inboxSearchFor,
+	parseInboxSearch,
+} from "@/features/inbox/contracts";
+import {
+	InboxEmptyState,
+	InboxFilters,
+	InboxSkeleton,
+	InboxTable,
+} from "@/features/inbox/inbox-view";
+import { inboxOptions } from "@/features/inbox/queries";
 
-/**
- * Minimal Inbox placeholder for wave 23. The UI-HOME lane owns the event
- * delivery surface and replaces this page; the route exists so primary
- * navigation is never a dead link.
- */
 export const Route = createFileRoute("/_app/inbox")({
-	validateSearch: (search: Record<string, unknown>) => ({
-		status: typeof search.status === "string" ? search.status.slice(0, 32) : "",
-		source: typeof search.source === "string" ? search.source.slice(0, 32) : "",
+	validateSearch: (search: Record<string, unknown>): InboxSearch =>
+		parseInboxSearch(search),
+	loaderDeps: ({ search }) => ({
+		status: search.status,
+		source: search.source,
 	}),
+	loader: async ({ context, deps }) => {
+		await context.queryClient.ensureQueryData(
+			inboxOptions(parseInboxSearch(deps)),
+		);
+	},
 	component: InboxPage,
+	pendingComponent: () => (
+		<PageContainer>
+			<InboxSkeleton />
+		</PageContainer>
+	),
+	errorComponent: InboxError,
 });
 
-function InboxPage() {
+const DESCRIPTION =
+	"Every verified event delivery for this organization: source, event kind, severity, the matched rule outcome and the task it created. Payloads and provider secrets are never stored or shown.";
+
+function InboxError() {
+	const router = useRouter();
 	return (
 		<PageContainer>
-			<PageHeader
-				title="Inbox"
-				description="Event deliveries, source, severity, matched rule, dedupe result and task link for the active organization."
-				actions={
-					<Button asChild size="sm" variant="outline">
-						<Link to="/integrations" search={{ tab: "catalog" }}>
-							<ConnectorsIcon />
-							Connect a source
-						</Link>
-					</Button>
-				}
-			/>
-			<ConsoleNote role="note">
-				Inbox reads the event delivery ledger. Deliveries appear here after a
-				signed provider or bridge delivery is verified; a duplicate is recorded
-				as deduplicated and creates no second task.
-			</ConsoleNote>
-			<EmptyRow
-				title="No deliveries yet"
-				description="Connect an event source and enable a trigger rule, or send a signed delivery to the webhook intake."
+			<PageHeader title="Inbox" description={DESCRIPTION} />
+			<ErrorState
+				message="The inbox could not be loaded. Retry in a moment."
+				onRetry={() => void router.invalidate()}
 			/>
 		</PageContainer>
+	);
+}
+
+function InboxPage() {
+	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const query = useSuspenseQuery(inboxOptions(search));
+
+	const items = useMemo(
+		() =>
+			query.data.ok
+				? filterInboxItems(query.data.value.items, search.severity)
+				: [],
+		[query.data, search.severity],
+	);
+
+	const updateSearch = (changes: Partial<InboxSearch>) => {
+		void navigate({
+			to: "/inbox",
+			search: inboxSearchFor(search, changes),
+			replace: true,
+			resetScroll: false,
+		});
+	};
+
+	const header = (
+		<PageHeader
+			title="Inbox"
+			description={DESCRIPTION}
+			actions={
+				<Button asChild size="sm" variant="outline">
+					<Link to="/integrations" search={{ tab: "catalog" }}>
+						<ConnectorsIcon size={14} />
+						Integrations
+					</Link>
+				</Button>
+			}
+		/>
+	);
+
+	if (!query.data.ok) {
+		return (
+			<PageContainer>
+				{header}
+				<ErrorState
+					message={query.data.error.message}
+					onRetry={() => void query.refetch()}
+				/>
+			</PageContainer>
+		);
+	}
+
+	const total = query.data.value.items.length;
+	const empty = total === 0 && filterIsClear(search);
+
+	return (
+		<PageContainer>
+			{header}
+
+			{empty ? (
+				<InboxEmptyState />
+			) : (
+				<>
+					<InboxFilters
+						search={search}
+						count={items.length}
+						total={total}
+						onChange={updateSearch}
+					/>
+					{query.isRefetchError ? (
+						<ConsoleNote role="alert" tone="warning">
+							Refresh failed. The deliveries below may be stale.
+						</ConsoleNote>
+					) : null}
+					<InboxTable
+						items={items}
+						page={search.page ?? 1}
+						onPageChange={(page) => updateSearch({ page })}
+					/>
+				</>
+			)}
+		</PageContainer>
+	);
+}
+
+function filterIsClear(search: InboxSearch): boolean {
+	return (
+		search.status === undefined &&
+		search.source === undefined &&
+		search.severity === undefined
 	);
 }

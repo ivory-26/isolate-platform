@@ -3,22 +3,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 /**
  * Layout-matched skeleton so the first paint does not shift: the header band,
- * the bare metric strip (borders and cell padding) and the two-column section
- * rhythm mirror the loaded overview.
+ * the compact metric strip and five hairline sections mirror the loaded Home.
  */
 export function OverviewSkeleton() {
 	return (
 		<PageContainer>
-			<div aria-busy="true" aria-live="polite" className="flex flex-col gap-6">
-				<span className="sr-only">Loading overview</span>
+			<div aria-busy="true" aria-live="polite" className="flex flex-col gap-8">
+				<span className="sr-only">Loading home</span>
 				<div className="flex flex-col gap-5 border-b border-line-subtle pb-6 md:flex-row md:items-end md:justify-between">
 					<div className="min-w-0 space-y-2">
-						<Skeleton className="h-[26px] w-44" />
+						<Skeleton className="h-[26px] w-32" />
 						<Skeleton className="h-4 w-full max-w-xl" />
 					</div>
 					<div className="flex shrink-0 items-center gap-2">
-						<Skeleton className="h-8 w-24" />
-						<Skeleton className="h-8 w-24" />
+						<Skeleton className="h-8 w-32" />
+						<Skeleton className="h-8 w-28" />
 					</div>
 				</div>
 				<div className="grid border-y border-line-subtle sm:grid-cols-2 lg:grid-cols-4">
@@ -30,14 +29,19 @@ export function OverviewSkeleton() {
 						</div>
 					))}
 				</div>
-				<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
-					<Skeleton className="h-80 w-full rounded-lg" />
-					<Skeleton className="h-80 w-full rounded-lg" />
-				</div>
-				<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
-					<Skeleton className="h-64 w-full rounded-lg" />
-					<Skeleton className="h-64 w-full rounded-lg" />
-				</div>
+				{["needs-you", "running", "inbox", "sources"].map((key) => (
+					<div key={key} className="space-y-3">
+						<div className="space-y-2">
+							<Skeleton className="h-4 w-32" />
+							<Skeleton className="h-3 w-full max-w-md" />
+						</div>
+						<div className="divide-y divide-line-subtle border-y border-line-subtle">
+							{["one", "two", "three"].map((row) => (
+								<Skeleton key={`${key}-${row}`} className="h-11 w-full" />
+							))}
+						</div>
+					</div>
+				))}
 			</div>
 		</PageContainer>
 	);

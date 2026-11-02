@@ -8,16 +8,25 @@ import { PageHeader } from "@/components/common/page-header";
 import { RelativeTime } from "@/components/common/relative-time";
 import { RetryIcon, SubmitIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import {
-	ActiveRunsSection,
-	PendingApprovalsPreview,
-} from "@/features/overview/components/active-runs";
-import { ActivityFeed } from "@/features/overview/components/activity-feed";
-import { DeviceHealthSection } from "@/features/overview/components/device-health";
+import { SetupChecklist } from "@/features/onboarding/components/setup-checklist";
+import { RunningNowSection } from "@/features/overview/components/active-runs";
+import { HomeInboxPreview } from "@/features/overview/components/home-inbox-preview";
+import { NeedsYouSection } from "@/features/overview/components/needs-you";
 import { OrganizationContextLine } from "@/features/overview/components/org-context";
 import { OverviewSkeleton } from "@/features/overview/components/overview-skeleton";
+import { HomeSourcesSection } from "@/features/overview/components/sources";
+import {
+	type HomeSnapshot,
+	homePrimaryAction,
+	showsSetupBanner,
+} from "@/features/overview/contracts";
 import { overviewOptions } from "@/features/overview/queries";
 
+/**
+ * Home is event-first: what needs a person, what is running, the newest
+ * deliveries and where events come from. Manual delegation is a secondary
+ * action; connected sources are the primary way work starts.
+ */
 export const Route = createFileRoute("/_app/overview")({
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(overviewOptions()),
@@ -33,97 +42,142 @@ function OverviewPage() {
 
 	return (
 		<PageContainer>
+			{snapshot === null ? (
+				<>
+					<PageHeader
+						title="Home"
+						description="What needs you, what is running, and where events come from."
+					/>
+					<ErrorState
+						title="Home unavailable"
+						message={
+							result.ok ? "Home could not be loaded." : result.error.message
+						}
+						onRetry={() => void query.refetch()}
+					/>
+				</>
+			) : (
+				<HomeContent
+					snapshot={snapshot}
+					session={session}
+					isFetching={query.isFetching}
+					isRefetchError={query.isRefetchError}
+					onRefresh={() => void query.refetch()}
+				/>
+			)}
+		</PageContainer>
+	);
+}
+
+function HomeContent({
+	snapshot,
+	session,
+	isFetching,
+	isRefetchError,
+	onRefresh,
+}: {
+	snapshot: HomeSnapshot;
+	session: ReturnType<typeof useSession>;
+	isFetching: boolean;
+	isRefetchError: boolean;
+	onRefresh: () => void;
+}) {
+	const primary = homePrimaryAction({
+		pendingApprovals: snapshot.pendingApprovals.length,
+		retryableFailures: snapshot.retryableFailures.length,
+	});
+	const { metrics } = snapshot;
+
+	return (
+		<>
 			<PageHeader
-				title="Overview"
-				description="What is running, what is waiting for a person, and what changed recently in this organization."
+				title="Home"
+				description="Connected sources create tasks on their own. This page shows what needs a person, what is running, and what just arrived."
 				actions={
 					<>
 						<Button
 							type="button"
 							variant="ghost"
 							size="sm"
-							disabled={query.isFetching}
-							onClick={() => void query.refetch()}
+							disabled={isFetching}
+							onClick={onRefresh}
 						>
 							<RetryIcon />
-							{query.isFetching ? "Refreshing…" : "Refresh"}
+							{isFetching ? "Refreshing…" : "Refresh"}
 						</Button>
-						<Button asChild size="sm">
+						<Button asChild variant="ghost" size="sm">
 							<Link to="/submit">
 								<SubmitIcon />
-								New task
+								Delegate task
 							</Link>
+						</Button>
+						<Button asChild size="sm">
+							{primary === "approvals" ? (
+								<Link to="/approvals">Review approvals</Link>
+							) : (
+								<Link to="/inbox">Open inbox</Link>
+							)}
 						</Button>
 					</>
 				}
 			>
 				<div className="flex flex-wrap items-center gap-x-4 gap-y-1">
 					<OrganizationContextLine session={session} />
-					{snapshot ? (
-						<span className="text-xs text-ink-muted">
-							Snapshot <RelativeTime value={snapshot.generatedAt} />
-						</span>
-					) : null}
+					<span className="text-xs text-ink-muted">
+						Snapshot <RelativeTime value={snapshot.generatedAt} />
+					</span>
 				</div>
 			</PageHeader>
 
-			{snapshot === null ? (
-				<ErrorState
-					title="Overview unavailable"
-					message={
-						result.ok
-							? "The overview could not be loaded."
-							: result.error.message
-					}
-					onRetry={() => void query.refetch()}
+			{isRefetchError ? (
+				<output className="block border-l-2 border-warning/60 py-2 pl-3 text-xs text-warning">
+					Refresh failed. The data below may be stale.
+				</output>
+			) : null}
+
+			{showsSetupBanner(snapshot.setup) ? (
+				<SetupChecklist
+					state={snapshot.setup}
+					title="Finish setup"
+					description="Home fills in as soon as GitHub, a relay, one source and a default trigger exist."
 				/>
-			) : (
-				<>
-					{query.isRefetchError ? (
-						<output className="block rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
-							Refresh failed. The data below may be stale.
-						</output>
-					) : null}
+			) : null}
 
-					<MetricStrip variant="bare">
-						<Metric
-							label="Active tasks"
-							value={snapshot.metrics.activeTasks}
-							tone={snapshot.metrics.activeTasks > 0 ? "brand" : "default"}
-							hint="In flight, not queued"
-						/>
-						<Metric
-							label="Queued"
-							value={snapshot.metrics.queuedTasks}
-							hint="Waiting for a worker"
-						/>
-						<Metric
-							label="Pending approvals"
-							value={snapshot.metrics.pendingApprovals}
-							tone={
-								snapshot.metrics.pendingApprovals > 0 ? "orange" : "default"
-							}
-							hint="Needs a human decision"
-						/>
-						<Metric
-							label="Recent failures"
-							value={snapshot.metrics.recentFailures}
-							tone={snapshot.metrics.recentFailures > 0 ? "danger" : "default"}
-							hint={`Failed in the last ${snapshot.metrics.failureWindowHours}h`}
-						/>
-					</MetricStrip>
+			<MetricStrip variant="bare">
+				<Metric
+					label="Needs you"
+					value={metrics.needsYou}
+					tone={metrics.needsYou > 0 ? "orange" : "default"}
+					hint="Approvals plus retryable failures"
+				/>
+				<Metric
+					label="Running now"
+					value={metrics.running}
+					tone={metrics.running > 0 ? "brand" : "default"}
+					hint="Held by a worker"
+				/>
+				<Metric
+					label="Events"
+					value={metrics.events24h}
+					hint={`Deliveries in the last ${metrics.windowHours}h`}
+				/>
+				<Metric
+					label="Autonomous tasks"
+					value={metrics.autonomousTasks24h}
+					hint={`Created by sources in the last ${metrics.windowHours}h`}
+				/>
+			</MetricStrip>
 
-					<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
-						<ActiveRunsSection runs={snapshot.activeRuns} />
-						<PendingApprovalsPreview approvals={snapshot.pendingApprovals} />
-					</div>
+			<NeedsYouSection
+				approvals={snapshot.pendingApprovals}
+				failures={snapshot.retryableFailures}
+			/>
 
-					<div className="grid gap-10 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-8">
-						<ActivityFeed items={snapshot.activity} />
-						<DeviceHealthSection devices={snapshot.devices} />
-					</div>
-				</>
-			)}
-		</PageContainer>
+			<RunningNowSection runs={snapshot.activeRuns} />
+
+			<HomeInboxPreview items={snapshot.inbox} />
+
+			<HomeSourcesSection sources={snapshot.sources} />
+		</>
 	);
 }

@@ -1,10 +1,17 @@
 import type { ApprovalRisk } from "../approvals/contracts";
+import type { InboxItem } from "../inbox/contracts";
+import type { SetupState } from "../onboarding/contracts";
 
 /**
  * Client-safe Overview read-model contracts and pure derivations.
  *
  * Metrics are derived only from stored task statuses and bounded windows; an
  * unknown or malformed count is treated as zero rather than guessed.
+ *
+ * Wave 23 adds `HomeSnapshot`: the event-first projection (setup, what needs a
+ * person, running work, the newest deliveries and source health). It reuses the
+ * existing task/approval projections and the merged Inbox and setup read models
+ * instead of restating their labels.
  */
 
 export const TERMINAL_TASK_STATUSES = [
@@ -30,8 +37,23 @@ export const ACTIVE_TASK_STATUSES = [
 
 export const QUEUED_TASK_STATUS = "queued";
 
+/**
+ * Work a worker is actively holding. This is narrower than
+ * {@link ACTIVE_TASK_STATUSES}: `awaiting_approval` and `review_ready` are
+ * paused on a person or a review, so they are not counted as running.
+ */
+export const RUNNING_TASK_STATUSES = [
+	"planning",
+	"executing",
+	"validating",
+	"repairing",
+] as const;
+
 /** The stated window for the "recent failures" metric. */
 export const FAILURE_WINDOW_HOURS = 24;
+
+/** The stated window for the Home event and autonomous-task metrics. */
+export const HOME_WINDOW_HOURS = 24;
 
 export const OVERVIEW_LIMITS = {
 	activeRuns: 6,
@@ -40,6 +62,11 @@ export const OVERVIEW_LIMITS = {
 	devices: 8,
 	submitRepositories: 50,
 	submitWorkflowRows: 200,
+	/** Home sections stay bounded; the full pages paginate. */
+	homeRetryableFailures: 5,
+	homeInbox: 8,
+	homeConnectors: 12,
+	homeRelays: 4,
 } as const;
 
 export function isTerminalTaskStatus(status: string): boolean {
@@ -154,6 +181,13 @@ export type ActiveRunSummary = {
 	startedAt: string;
 	elapsedMs: number;
 	latestUpdateAt: string;
+	/**
+	 * Provenance for event-created work. `null` means a person submitted the
+	 * task through the composer (or the column predates wave 23).
+	 */
+	incidentSource: string | null;
+	/** Stored autonomy level (`A0`..`A3`) for event-created tasks. */
+	autonomyLevel: string | null;
 };
 
 export type PendingApprovalPreview = {
@@ -214,3 +248,134 @@ export type SubmitOptions = {
 	repositories: RepositoryOption[];
 	workflows: WorkflowOption[];
 };
+
+/* -------------------------------------------------------------------------- */
+/* Home snapshot (wave 23)                                                    */
+/* -------------------------------------------------------------------------- */
+
+export type HomeMetrics = {
+	/** Pending approvals plus failed runs that are still inside the retry cap. */
+	needsYou: number;
+	/** Tasks a worker is actively holding (planning/executing/validating/repairing). */
+	running: number;
+	/** Event deliveries received in the rolling window. */
+	events24h: number;
+	/** Event-created tasks in the rolling window (autonomy level recorded). */
+	autonomousTasks24h: number;
+	windowHours: number;
+};
+
+/** A failed task that a person may rerun; never a driver error or payload. */
+export type RetryableFailure = {
+	taskId: string;
+	repositoryName: string;
+	branch: string;
+	status: string;
+	/** When the task last changed (the failure time we know). */
+	failedAt: string;
+	retryDepth: number;
+	maxRetryDepth: number;
+};
+
+/** One connected event source (relay-held credential) for the Sources band. */
+export type HomeConnectorSource = {
+	connectorId: string;
+	label: string;
+	/** Stored credential status: `active`, `pending_validation` or `invalid`. */
+	status: string;
+	lastVerifiedAt: string | null;
+	lastEventAt: string | null;
+	triggerCount: number;
+	enabledTriggerCount: number;
+	relayName: string | null;
+	relayStatus: string | null;
+};
+
+/** Relay health as registered; a listing is not a live heartbeat. */
+export type HomeRelaySource = {
+	id: string;
+	displayName: string;
+	status: "pending" | "active" | "revoked";
+	lastSeenAt: string | null;
+};
+
+export type HomeSources = {
+	github: {
+		/** A GitHub installation exists for this organization. */
+		connected: boolean;
+		/** Imported repositories visible to the installation flow. */
+		repositoryCount: number;
+	};
+	connectors: HomeConnectorSource[];
+	relays: HomeRelaySource[];
+};
+
+export type HomeSnapshot = {
+	generatedAt: string;
+	organization: OrganizationContext | null;
+	/** Same derivation the onboarding wizard uses; never re-derived here. */
+	setup: SetupState;
+	metrics: HomeMetrics;
+	activeRuns: ActiveRunSummary[];
+	pendingApprovals: PendingApprovalPreview[];
+	retryableFailures: RetryableFailure[];
+	/** Newest bounded deliveries, already mapped by the Inbox projection. */
+	inbox: InboxItem[];
+	sources: HomeSources;
+};
+
+function runningCount(statusCounts: Readonly<Record<string, number>>): number {
+	let running = 0;
+	for (const status of RUNNING_TASK_STATUSES) {
+		running += count(statusCounts[status]);
+	}
+	return running;
+}
+
+export function deriveHomeMetrics(input: {
+	statusCounts: Readonly<Record<string, number>>;
+	pendingApprovals: number;
+	retryableFailures: number;
+	events24h: number;
+	autonomousTasks24h: number;
+}): HomeMetrics {
+	return {
+		needsYou: count(input.pendingApprovals) + count(input.retryableFailures),
+		running: runningCount(input.statusCounts),
+		events24h: count(input.events24h),
+		autonomousTasks24h: count(input.autonomousTasks24h),
+		windowHours: HOME_WINDOW_HOURS,
+	};
+}
+
+export type HomePrimaryAction = "approvals" | "inbox";
+
+/**
+ * One primary action per Home load: approvals first because they are blocking
+ * work already in flight, otherwise the inbox where new events land.
+ */
+export function homePrimaryAction(input: {
+	pendingApprovals: number;
+	retryableFailures: number;
+}): HomePrimaryAction {
+	return count(input.pendingApprovals) > 0 ? "approvals" : "inbox";
+}
+
+/** True when setup is incomplete and the checklist banner should render. */
+export function showsSetupBanner(setup: SetupState): boolean {
+	return !setup.complete;
+}
+
+/**
+ * A new organization has nothing to operate yet: the setup steps are the
+ * content, not a "no data" message.
+ */
+export function isNewOrganization(snapshot: HomeSnapshot): boolean {
+	return (
+		!snapshot.setup.complete &&
+		!snapshot.setup.hasRepository &&
+		!snapshot.setup.hasRelay &&
+		!snapshot.setup.hasConnection &&
+		!snapshot.setup.firstRun
+	);
+}

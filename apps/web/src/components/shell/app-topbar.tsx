@@ -1,6 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ModShortcut } from "@/components/common/mod-shortcut";
-import { ChevronRightIcon, MenuIcon, SearchIcon } from "@/components/icons";
+import {
+	ChevronRightIcon,
+	MenuIcon,
+	SearchIcon,
+	SubmitIcon,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, NAV_ITEMS } from "./nav";
@@ -17,7 +22,7 @@ function contextFor(pathname: string) {
 		return { group: "Operate", label: "Run detail" };
 	}
 	if (pathname.startsWith("/submit")) {
-		return { group: "Operate", label: "Submit task" };
+		return { group: "Operate", label: "Delegate task" };
 	}
 	return { group: group?.label ?? "Operate", label: item?.label ?? "Overview" };
 }
@@ -97,6 +102,19 @@ export function AppTopbar({
 				aria-label="Search or jump to"
 			>
 				<SearchIcon />
+			</Button>
+
+			{/* Secondary action: connected sources create work on their own. */}
+			<Button
+				asChild
+				variant="ghost"
+				size="sm"
+				className="hidden sm:inline-flex"
+			>
+				<Link to="/submit" aria-label="Delegate a task">
+					<SubmitIcon />
+					Delegate
+				</Link>
 			</Button>
 
 			<div className="flex items-center gap-2 border-l border-line-subtle pl-2">

@@ -2,15 +2,21 @@ import { describe, expect, test } from "bun:test";
 import {
 	clampInboxLimit,
 	EVENT_DELIVERY_STATUSES,
+	filterInboxItems,
 	INBOX_LIMITS,
+	INBOX_PAGE_SIZE,
 	type InboxTone,
+	inboxQueryFor,
 	inboxQuerySchema,
 	inboxReasonLabel,
+	inboxSearchFor,
 	inboxSeverityLabel,
 	inboxSourceLabel,
 	inboxStatusLabel,
 	inboxStatusTone,
+	isInboxSeverity,
 	mapInboxItem,
+	parseInboxSearch,
 } from "./contracts";
 
 /**
@@ -126,5 +132,71 @@ describe("mapInboxItem", () => {
 			"secret",
 		];
 		for (const key of forbidden) expect(Object.hasOwn(item, key)).toBe(false);
+	});
+});
+
+describe("inbox URL search and paging", () => {
+	test("parses known filters and drops malformed values", () => {
+		expect(
+			parseInboxSearch({ status: "task_created", source: "sentry" }),
+		).toEqual({ status: "task_created", source: "sentry" });
+		expect(parseInboxSearch({ status: "bogus", source: "Sentry" })).toEqual({});
+		expect(parseInboxSearch({ severity: "critical", page: "3" })).toEqual({
+			severity: "critical",
+			page: 3,
+		});
+		// Page one is the absence of a page parameter, never `page=1` in the URL.
+		expect(parseInboxSearch({ page: "1" })).toEqual({});
+		expect(parseInboxSearch({ page: "-2" })).toEqual({});
+		expect(parseInboxSearch({})).toEqual({});
+	});
+
+	test("a filter change resets to the first page; a page change keeps filters", () => {
+		expect(
+			inboxSearchFor(
+				{ status: "rejected", source: "sentry", page: 4 },
+				{
+					status: undefined,
+				},
+			),
+		).toEqual({ source: "sentry" });
+		expect(
+			inboxSearchFor({ status: "rejected", page: 2 }, { page: 3 }),
+		).toEqual({ status: "rejected", page: 3 });
+	});
+
+	test("the server query keeps only SQL-side filters and the max window", () => {
+		expect(
+			inboxQueryFor({
+				status: "ignored",
+				source: "pagerduty",
+				severity: "high",
+			}),
+		).toEqual({
+			limit: INBOX_LIMITS.max,
+			status: "ignored",
+			source: "pagerduty",
+		});
+		expect(inboxQueryFor({})).toEqual({ limit: INBOX_LIMITS.max });
+	});
+
+	test("severity narrows the loaded window only", () => {
+		const items = [
+			{ severity: "critical" },
+			{ severity: "high" },
+			{ severity: "critical" },
+		];
+		expect(filterInboxItems(items, undefined)).toHaveLength(3);
+		expect(filterInboxItems(items, "critical")).toEqual([
+			{ severity: "critical" },
+			{ severity: "critical" },
+		]);
+		expect(filterInboxItems(items, "info")).toEqual([]);
+	});
+
+	test("severity guards and the page size are stable", () => {
+		expect(isInboxSeverity("critical")).toBe(true);
+		expect(isInboxSeverity("urgent")).toBe(false);
+		expect(INBOX_PAGE_SIZE).toBe(25);
 	});
 });

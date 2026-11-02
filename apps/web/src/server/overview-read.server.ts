@@ -1,28 +1,49 @@
 import "@tanstack/react-start/server-only";
-import type { PgSql } from "@isolate/db";
+import { MAX_RETRY_DEPTH, type PgSql } from "@isolate/db";
 import {
 	approvalActionLabel,
 	riskForAction,
 } from "../features/approvals/contracts";
 import {
+	clampInboxLimit,
+	type InboxDeliveryRow,
+	type InboxItem,
+	mapInboxItem,
+} from "../features/inbox/contracts";
+import { INTEGRATION_CATALOG } from "../features/integrations/catalog";
+import {
+	type IntegrationAggregate,
+	readIntegrations,
+	summarizeIntegration,
+} from "../features/integrations/integrations-read.server";
+import type { SetupState } from "../features/onboarding/contracts";
+import { readSetupState } from "../features/onboarding/onboarding-read.server";
+import {
 	ACTIVE_TASK_STATUSES,
 	type ActiveRunSummary,
 	type ActivityItem,
 	type DeviceHealthRow,
+	deriveHomeMetrics,
 	deriveOverviewMetrics,
 	elapsedMsSince,
 	eventTypeLabel,
 	FAILURE_WINDOW_HOURS,
+	HOME_WINDOW_HOURS,
+	type HomeConnectorSource,
+	type HomeRelaySource,
+	type HomeSnapshot,
 	type OrganizationContext,
 	OVERVIEW_LIMITS,
 	type OverviewSnapshot,
 	type PendingApprovalPreview,
 	type RepositoryOption,
+	type RetryableFailure,
 	type SubmitOptions,
 	type WorkflowOption,
 	windowStartIso,
 } from "../features/overview/contracts";
 import type { UiResult } from "../features/ui/contracts";
+import { createPostgresInboxRepository } from "./inbox-read.server";
 import type { CallerScope } from "./task-service.server";
 import { iso, isoOrNull, numeric, uiRead } from "./ui-runtime.server";
 
@@ -48,6 +69,18 @@ export type ActiveRunRow = {
 	runStartedAt: string | null;
 	latestEventType: string | null;
 	latestEventAt: string | null;
+	/** Null for a manually delegated task. */
+	incidentSource: string | null;
+	autonomyLevel: string | null;
+};
+
+export type RetryableFailureRow = {
+	taskId: string;
+	repositoryName: string;
+	branch: string;
+	status: string;
+	updatedAt: string;
+	retryDepth: number;
 };
 
 export type PendingApprovalRow = {
@@ -110,6 +143,31 @@ export type OverviewReadRepository = {
 		scope: CallerScope,
 		limit: number,
 	): Promise<WorkflowVersionRow[]>;
+	/* Home snapshot (wave 23). All bounded, all tenant-scoped. */
+	countEventsSince(scope: CallerScope, sinceIso: string): Promise<number>;
+	countAutonomousTasksSince(
+		scope: CallerScope,
+		sinceIso: string,
+	): Promise<number>;
+	countRetryableFailures(
+		scope: CallerScope,
+		maxRetryDepth: number,
+	): Promise<number>;
+	listRetryableFailures(
+		scope: CallerScope,
+		limit: number,
+		maxRetryDepth: number,
+	): Promise<RetryableFailureRow[]>;
+	countRepositories(scope: CallerScope): Promise<number>;
+	/** Reuses the merged Inbox projection; no payloads cross this boundary. */
+	listInboxDeliveries(
+		scope: CallerScope,
+		limit: number,
+	): Promise<InboxDeliveryRow[]>;
+	/** Reuses the merged integrations aggregate for connector/trigger health. */
+	readIntegrationAggregate(scope: CallerScope): Promise<IntegrationAggregate>;
+	/** Reuses the one onboarding derivation; never re-derived here. */
+	readSetup(scope: CallerScope): Promise<SetupState>;
 };
 
 const TASK_STATUS_COUNTS_SQL = `SELECT status, count(*)::int AS count
@@ -132,6 +190,7 @@ WHERE organization_id = $1
 const ORGANIZATION_SQL = `SELECT name, slug FROM organizations WHERE id = $1 LIMIT 1`;
 
 const ACTIVE_RUNS_SQL = `SELECT t.id AS task_id, t.branch, t.status, t.created_at, t.updated_at,
+	t.incident_source, t.autonomy_level,
 	r.external_full_name,
 	wr.status AS run_status, wr.started_at AS run_started_at,
 	ev.type AS latest_event_type, ev.occurred_at AS latest_event_at
@@ -189,6 +248,39 @@ LEFT JOIN workflow_versions v ON v.definition_id = d.id
 WHERE d.organization_id = $1
 ORDER BY d.name ASC, d.id ASC, v.version DESC NULLS LAST
 LIMIT $2`;
+
+/* Home snapshot (wave 23). Every statement binds the organization as $1. */
+
+const EVENTS_WINDOW_SQL = `SELECT count(*)::int AS count
+FROM event_deliveries
+WHERE organization_id = $1
+  AND received_at >= $2::timestamptz`;
+
+const AUTONOMOUS_TASKS_WINDOW_SQL = `SELECT count(*)::int AS count
+FROM tasks
+WHERE organization_id = $1
+  AND created_at >= $2::timestamptz
+  AND autonomy_level IS NOT NULL`;
+
+const RETRYABLE_FAILURE_COUNT_SQL = `SELECT count(*)::int AS count
+FROM tasks
+WHERE organization_id = $1
+  AND status = 'failed'
+  AND retry_depth < $2`;
+
+const RETRYABLE_FAILURES_SQL = `SELECT t.id AS task_id, t.branch, t.status, t.updated_at,
+	t.retry_depth, r.external_full_name
+FROM tasks t
+JOIN repositories r ON r.id = t.repository_id AND r.organization_id = t.organization_id
+WHERE t.organization_id = $1
+  AND t.status = 'failed'
+  AND t.retry_depth < $3
+ORDER BY t.updated_at DESC, t.id DESC
+LIMIT $2`;
+
+const REPOSITORY_COUNT_SQL = `SELECT count(*)::int AS count
+FROM repositories
+WHERE organization_id = $1`;
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
 	return result as unknown as Record<string, unknown>[];
@@ -251,6 +343,14 @@ export function createPostgresOverviewRepository(
 				latestEventType:
 					row.latest_event_type === null ? null : String(row.latest_event_type),
 				latestEventAt: isoOrNull(row.latest_event_at),
+				incidentSource:
+					row.incident_source === null
+						? null
+						: String(row.incident_source).slice(0, 32),
+				autonomyLevel:
+					row.autonomy_level === null
+						? null
+						: String(row.autonomy_level).slice(0, 8),
 			}));
 		},
 		async listPendingApprovals(scope, limit, nowIso) {
@@ -317,6 +417,66 @@ export function createPostgresOverviewRepository(
 				version: row.version === null ? null : numeric(row.version),
 			}));
 		},
+		async countEventsSince(scope, sinceIso) {
+			const rows = rowsOf(
+				await sql.unsafe(EVENTS_WINDOW_SQL, [scope.organizationId, sinceIso]),
+			);
+			return numeric(rows[0]?.count);
+		},
+		async countAutonomousTasksSince(scope, sinceIso) {
+			const rows = rowsOf(
+				await sql.unsafe(AUTONOMOUS_TASKS_WINDOW_SQL, [
+					scope.organizationId,
+					sinceIso,
+				]),
+			);
+			return numeric(rows[0]?.count);
+		},
+		async countRetryableFailures(scope, maxRetryDepth) {
+			const rows = rowsOf(
+				await sql.unsafe(RETRYABLE_FAILURE_COUNT_SQL, [
+					scope.organizationId,
+					maxRetryDepth,
+				]),
+			);
+			return numeric(rows[0]?.count);
+		},
+		async listRetryableFailures(scope, limit, maxRetryDepth) {
+			const rows = rowsOf(
+				await sql.unsafe(RETRYABLE_FAILURES_SQL, [
+					scope.organizationId,
+					limit,
+					maxRetryDepth,
+				]),
+			);
+			return rows.map((row) => ({
+				taskId: String(row.task_id),
+				repositoryName: String(row.external_full_name),
+				branch: String(row.branch),
+				status: String(row.status),
+				updatedAt: iso(row.updated_at),
+				retryDepth: numeric(row.retry_depth),
+			}));
+		},
+		async countRepositories(scope) {
+			const rows = rowsOf(
+				await sql.unsafe(REPOSITORY_COUNT_SQL, [scope.organizationId]),
+			);
+			return numeric(rows[0]?.count);
+		},
+		async listInboxDeliveries(scope, limit) {
+			return createPostgresInboxRepository(sql).listDeliveries(scope, {
+				limit: clampInboxLimit(limit),
+				connector: null,
+				status: null,
+			});
+		},
+		async readIntegrationAggregate(scope) {
+			return readIntegrations(sql, scope.organizationId);
+		},
+		async readSetup(scope) {
+			return readSetupState(sql, scope.organizationId);
+		},
 	};
 }
 
@@ -338,7 +498,59 @@ export function mapActiveRun(row: ActiveRunRow, now: Date): ActiveRunSummary {
 		startedAt,
 		elapsedMs: elapsedMsSince(startedAt, now),
 		latestUpdateAt: row.latestEventAt ?? row.updatedAt,
+		incidentSource: row.incidentSource,
+		autonomyLevel: row.autonomyLevel,
 	};
+}
+
+export function mapRetryableFailure(
+	row: RetryableFailureRow,
+	maxRetryDepth: number = MAX_RETRY_DEPTH,
+): RetryableFailure {
+	return {
+		taskId: row.taskId,
+		repositoryName: row.repositoryName,
+		branch: row.branch,
+		status: row.status,
+		failedAt: row.updatedAt,
+		retryDepth: row.retryDepth,
+		maxRetryDepth,
+	};
+}
+
+/** Relay-paired connectors only: GitHub is authorized by the App, not a relay. */
+export function mapHomeConnectors(
+	aggregate: IntegrationAggregate,
+): HomeConnectorSource[] {
+	const sources: HomeConnectorSource[] = [];
+	for (const entry of INTEGRATION_CATALOG) {
+		if (entry.pairingMode !== "relay") continue;
+		const summary = summarizeIntegration(entry, aggregate);
+		const connection = summary.connection;
+		if (connection === null) continue;
+		sources.push({
+			connectorId: summary.connectorId,
+			label: summary.label,
+			status: connection.status,
+			lastVerifiedAt: connection.lastValidatedAt,
+			lastEventAt: summary.lastEventAt,
+			triggerCount: summary.triggerCount,
+			enabledTriggerCount: summary.enabledTriggerCount,
+			relayName: connection.relayName,
+			relayStatus: connection.relayStatus,
+		});
+		if (sources.length >= OVERVIEW_LIMITS.homeConnectors) break;
+	}
+	return sources;
+}
+
+export function mapHomeRelays(rows: readonly DeviceRow[]): HomeRelaySource[] {
+	return rows.slice(0, OVERVIEW_LIMITS.homeRelays).map((row) => ({
+		id: row.id,
+		displayName: row.displayName,
+		status: deviceStatus(row.status),
+		lastSeenAt: row.lastSeenAt,
+	}));
 }
 
 export function mapPendingApproval(
@@ -404,6 +616,7 @@ export function groupWorkflowOptions(
 
 export type OverviewReadService = {
 	readOverview(scope: CallerScope, now?: Date): Promise<OverviewSnapshot>;
+	readHome(scope: CallerScope, now?: Date): Promise<HomeSnapshot>;
 	readSubmitOptions(scope: CallerScope): Promise<SubmitOptions>;
 };
 
@@ -480,6 +693,87 @@ export function createOverviewReadService(
 				workflows: groupWorkflowOptions(workflowRows),
 			};
 		},
+		async readHome(scope, now = new Date()) {
+			const windowStart = windowStartIso(now, HOME_WINDOW_HOURS);
+			const [
+				organization,
+				statusCounts,
+				pendingApprovals,
+				activeRuns,
+				pendingPreviews,
+				retryableCount,
+				retryableRows,
+				events24h,
+				autonomousTasks24h,
+				inboxRows,
+				setup,
+				integrationAggregate,
+				relayRows,
+				repositoryCount,
+			] = await Promise.all([
+				repository.getOrganization(scope),
+				repository.countTaskStatuses(scope),
+				repository.countPendingApprovals(scope, now.toISOString()),
+				repository.listActiveRuns(scope, OVERVIEW_LIMITS.activeRuns),
+				repository.listPendingApprovals(
+					scope,
+					OVERVIEW_LIMITS.pendingApprovals,
+					now.toISOString(),
+				),
+				repository.countRetryableFailures(scope, MAX_RETRY_DEPTH),
+				repository.listRetryableFailures(
+					scope,
+					OVERVIEW_LIMITS.homeRetryableFailures,
+					MAX_RETRY_DEPTH,
+				),
+				repository.countEventsSince(scope, windowStart),
+				repository.countAutonomousTasksSince(scope, windowStart),
+				repository.listInboxDeliveries(scope, OVERVIEW_LIMITS.homeInbox),
+				repository.readSetup(scope),
+				repository.readIntegrationAggregate(scope),
+				repository.listDevices(scope, OVERVIEW_LIMITS.homeRelays),
+				repository.countRepositories(scope),
+			]);
+
+			const organizationContext: OrganizationContext | null =
+				organization === null
+					? null
+					: {
+							id: scope.organizationId,
+							name: organization.name,
+							slug: organization.slug,
+						};
+			const inbox: InboxItem[] = inboxRows
+				.slice(0, OVERVIEW_LIMITS.homeInbox)
+				.map((row) => mapInboxItem(row));
+
+			return {
+				generatedAt: now.toISOString(),
+				organization: organizationContext,
+				setup,
+				metrics: deriveHomeMetrics({
+					statusCounts,
+					pendingApprovals,
+					retryableFailures: retryableCount,
+					events24h,
+					autonomousTasks24h,
+				}),
+				activeRuns: activeRuns.map((row) => mapActiveRun(row, now)),
+				pendingApprovals: pendingPreviews.map(mapPendingApproval),
+				retryableFailures: retryableRows.map((row) =>
+					mapRetryableFailure(row, MAX_RETRY_DEPTH),
+				),
+				inbox,
+				sources: {
+					github: {
+						connected: setup.githubConnected,
+						repositoryCount,
+					},
+					connectors: mapHomeConnectors(integrationAggregate),
+					relays: mapHomeRelays(relayRows),
+				},
+			};
+		},
 	};
 }
 
@@ -492,6 +786,16 @@ export function readOverviewSnapshot(): Promise<UiResult<OverviewSnapshot>> {
 		createOverviewReadService(
 			createPostgresOverviewRepository(sql),
 		).readOverview(scope, new Date()),
+	);
+}
+
+/** Server-function entry point for Home: the event-first projection. */
+export function readHomeSnapshot(): Promise<UiResult<HomeSnapshot>> {
+	return uiRead("task:read", (scope, sql) =>
+		createOverviewReadService(createPostgresOverviewRepository(sql)).readHome(
+			scope,
+			new Date(),
+		),
 	);
 }
 

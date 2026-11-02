@@ -1,3 +1,5 @@
+import interLatin from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
+import jetBrainsMonoLatin from "@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url";
 import type { QueryClient } from "@tanstack/react-query";
 import {
 	createRootRouteWithContext,
@@ -13,6 +15,30 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SessionProvider } from "../components/auth/SessionProvider";
 import { authStateOptions } from "../features/auth/queries";
 import "../styles.css";
+
+/**
+ * The exact latin-subset woff2 files `@fontsource-variable/*` references from
+ * the stylesheet, resolved through Vite's asset pipeline. Preloading them
+ * starts the download with the document instead of after the CSS is parsed;
+ * both are already `font-display: swap`. `crossOrigin` is required for a font
+ * preload to match the CORS request the browser makes for @font-face.
+ */
+const FONT_PRELOADS = [
+	{
+		rel: "preload",
+		href: interLatin,
+		as: "font",
+		type: "font/woff2",
+		crossOrigin: "anonymous",
+	},
+	{
+		rel: "preload",
+		href: jetBrainsMonoLatin,
+		as: "font",
+		type: "font/woff2",
+		crossOrigin: "anonymous",
+	},
+] as const;
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 	{
@@ -33,6 +59,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 						"Observe, approve and control autonomous engineering work in isolated sandboxes.",
 				},
 			],
+			links: [...FONT_PRELOADS],
 		}),
 		headers: () => ({ "Cache-Control": "private, no-store" }),
 		loader: ({ context }) =>
@@ -75,8 +102,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 );
 
 function RootLayout() {
+	// The root loader resolved and cached this posture before the first paint.
+	const initialState = Route.useLoaderData();
 	return (
-		<SessionProvider>
+		<SessionProvider initialState={initialState}>
 			<TooltipProvider delayDuration={200}>
 				<Outlet />
 				<Toaster position="bottom-right" />

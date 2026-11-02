@@ -1,6 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthLayout } from "../components/auth/AuthLayout";
+import { AuthPending } from "../components/auth/AuthPending";
 import { GoogleSignInButton } from "../components/auth/GoogleSignInButton";
 import { authStateOptions } from "../features/auth/queries";
 
@@ -11,6 +12,7 @@ export const Route = createFileRoute("/signup")({
 		return state;
 	},
 	component: SignupPage,
+	pendingComponent: () => <AuthPending mode="sign-up" />,
 });
 
 function SignupPage() {

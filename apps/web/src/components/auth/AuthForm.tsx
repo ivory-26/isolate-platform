@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn, signUp } from "../../features/auth/auth.functions";
 import { signInSchema, signUpSchema } from "../../features/auth/contracts";
-import { authStateKeys } from "../../features/auth/queries";
+import { authStateOptions } from "../../features/auth/queries";
 
 /**
  * The shared credential form for sign-in and sign-up.
@@ -16,6 +16,7 @@ import { authStateKeys } from "../../features/auth/queries";
  */
 export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 	const navigate = useNavigate();
+	const router = useRouter();
 	const queryClient = useQueryClient();
 	const [error, setError] = useState<string | null>(null);
 	const mutation = useMutation({
@@ -45,7 +46,14 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 				return;
 			}
 			setError(null);
-			await queryClient.invalidateQueries({ queryKey: authStateKeys.all });
+			// Refresh the auth-state cache exactly once, then warm the overview
+			// loader (chunk + data) so navigation paints the shell from cache. A
+			// failing refresh still navigates: the `_app` loader re-checks and
+			// redirects to /login, which keeps the failure contract intact.
+			await queryClient
+				.fetchQuery({ ...authStateOptions(), staleTime: 0 })
+				.catch(() => null);
+			await router.preloadRoute({ to: "/overview" }).catch(() => null);
 			await navigate({ to: "/overview" });
 		},
 		onError: () => {

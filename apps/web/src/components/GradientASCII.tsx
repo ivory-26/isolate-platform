@@ -491,6 +491,511 @@ const buildAtlas = (gl: WebGL2RenderingContext, characters: string, fontFamily: 
   return { texture, count: list.length, grid: [columns, rows] };
 };
 
+const RENDERER_POOL_LIMIT = 2;
+const RENDERER_IDLE_DISPOSE_MS = 20_000;
+const RENDERER_IDLE_TIMEOUT_MS = 1_200;
+
+/** Everything that changes the GPU work, so only an identical field is reused. */
+const settingsKey = (s: Settings): string =>
+  [
+    s.colors.join(','),
+    s.shape,
+    s.characters,
+    s.cellSize,
+    s.density,
+    s.glyphOpacity,
+    s.glow,
+    s.depthOfField,
+    s.flicker,
+    s.softness,
+    s.scale,
+    s.flow,
+    s.speed,
+    s.gradientOpacity,
+    s.grain,
+    s.variation,
+    s.mouseInteraction ? 1 : 0,
+    s.scrambleRadius,
+    s.clickEffect,
+    s.intro ? 1 : 0,
+    s.lightMode ? 1 : 0,
+    s.fontFamily,
+    s.dpr ?? 'auto'
+  ].join('|');
+
+/**
+ * The WebGL field, detached from React's mount lifecycle.
+ *
+ * Creating the context, compiling four programs and rasterising the glyph atlas
+ * costs a visible slice of the main thread, so the component only builds one
+ * after first paint (idle) and only for the field that is actually on screen.
+ * Instances are pooled by their exact visual configuration: a route change that
+ * mounts the same field again reattaches the existing renderer instead of
+ * re-initialising WebGL. Rendering pauses whenever the host leaves the viewport
+ * or the document is hidden.
+ */
+class ShaderRenderer {
+  readonly key: string;
+  private readonly canvas: HTMLCanvasElement;
+  private readonly gl: WebGL2RenderingContext;
+  private readonly field: Program;
+  private readonly halo: Program;
+  private readonly blur: Program;
+  private readonly composite: Program;
+  private readonly vao: WebGLVertexArrayObject | null;
+  private readonly fieldTarget: Target;
+  private readonly haloA: Target;
+  private readonly haloB: Target;
+  private readonly probe: CanvasRenderingContext2D | null;
+  private readonly colorCache = new Map<string, number[]>();
+  private readonly reduce: boolean;
+  private readonly ramp = new Float32Array(MAX_COLORS * 3);
+  private readonly clickData = new Float32Array(MAX_CLICKS * 4);
+  private readonly trailData = new Float32Array(MAX_TRAIL * 4);
+  private readonly clicks: Point[] = [];
+  private readonly trail: Point[] = [];
+  private readonly pointer = { x: 0, y: 0, inside: false };
+  private readonly view = { width: 1, height: 1, ratio: 1 };
+
+  private settings: () => Settings;
+  private host: HTMLElement | null = null;
+  private attached = false;
+  private disposed = false;
+  private visible = true;
+  private raf = 0;
+  private last = 0;
+  private time = 0;
+  private glyphTime = 0;
+  private introClock: number;
+  private frameSeed = 0;
+  private grainClock = 0;
+  private atlas: Atlas | null = null;
+  private atlasKey = '';
+  private paletteKey = '';
+  private resizeObserver: ResizeObserver | null = null;
+  private intersection: IntersectionObserver | null = null;
+
+  private constructor(
+    canvas: HTMLCanvasElement,
+    gl: WebGL2RenderingContext,
+    programs: { field: Program; halo: Program; blur: Program; composite: Program },
+    settings: Settings
+  ) {
+    this.key = settingsKey(settings);
+    this.canvas = canvas;
+    this.gl = gl;
+    this.field = programs.field;
+    this.halo = programs.halo;
+    this.blur = programs.blur;
+    this.composite = programs.composite;
+    this.settings = () => settings;
+    this.reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    this.introClock = settings.intro && !this.reduce ? 0 : 1;
+    this.vao = gl.createVertexArray();
+    this.fieldTarget = createTarget(gl, 2);
+    this.haloA = createTarget(gl, 1);
+    this.haloB = createTarget(gl, 1);
+    this.probe = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  }
+
+  static create(settings: Settings): ShaderRenderer | null {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'absolute inset-0 block h-full w-full';
+    canvas.setAttribute('aria-hidden', 'true');
+    const gl = canvas.getContext('webgl2', {
+      alpha: true,
+      premultipliedAlpha: true,
+      antialias: false,
+      depth: false,
+      stencil: false
+    });
+    if (!gl) return null;
+    const field = link(gl, FIELD);
+    const halo = link(gl, HALO);
+    const blur = link(gl, BLUR);
+    const composite = link(gl, COMPOSITE);
+    if (!field || !halo || !blur || !composite) return null;
+    return new ShaderRenderer(canvas, gl, { field, halo, blur, composite }, settings);
+  }
+
+  attach(host: HTMLElement, settings: () => Settings) {
+    if (this.attached || this.disposed) return;
+    this.host = host;
+    this.settings = settings;
+    this.visible = true;
+    this.last = 0;
+    host.appendChild(this.canvas);
+    this.resizeObserver = new ResizeObserver(this.resize);
+    this.resizeObserver.observe(host);
+    this.intersection = new IntersectionObserver(entries => {
+      this.visible = entries.some(entry => entry.isIntersecting);
+      if (this.visible) {
+        this.last = 0;
+        this.wake();
+      }
+    });
+    this.intersection.observe(host);
+    window.addEventListener('pointermove', this.onPointerMove, { passive: true });
+    window.addEventListener('pointerdown', this.onPointerDown, { passive: true });
+    document.addEventListener('visibilitychange', this.onVisibility);
+    this.attached = true;
+    this.resize();
+    this.wake();
+  }
+
+  /** Stop scheduling and leave the DOM, keeping the compiled GL state alive. */
+  detach() {
+    if (!this.attached) return;
+    this.attached = false;
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.intersection?.disconnect();
+    this.intersection = null;
+    window.removeEventListener('pointermove', this.onPointerMove);
+    window.removeEventListener('pointerdown', this.onPointerDown);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    this.host = null;
+    this.canvas.remove();
+    this.visible = true;
+    this.last = 0;
+  }
+
+  /** Release the context. Never called while the field is on screen. */
+  dispose() {
+    this.detach();
+    if (this.disposed) return;
+    this.disposed = true;
+    const gl = this.gl;
+    [this.fieldTarget, this.haloA, this.haloB].forEach(target => {
+      target.textures.forEach(texture => gl.deleteTexture(texture));
+      gl.deleteFramebuffer(target.framebuffer);
+    });
+    if (this.atlas) gl.deleteTexture(this.atlas.texture);
+    gl.deleteVertexArray(this.vao);
+    [this.field, this.halo, this.blur, this.composite].forEach(item => gl.deleteProgram(item.program));
+    this.canvas.width = 1;
+    this.canvas.height = 1;
+  }
+
+  private wake() {
+    if (this.raf || this.disposed || !this.attached || !this.visible || document.hidden) return;
+    this.raf = requestAnimationFrame(this.frame);
+  }
+
+  private frame = (now: number) => {
+    this.raf = 0;
+    if (this.disposed || !this.attached || !this.visible || document.hidden) return;
+    const s = this.settings();
+    const dt = this.last ? clamp((now - this.last) / 1000, 0.001, 0.05) : 1 / 60;
+    this.last = now;
+    if (!this.reduce) {
+      this.time += dt * s.speed * 0.5;
+      this.glyphTime += dt * Math.max(s.speed, 0.15);
+    }
+    if (this.introClock < 1) this.introClock = Math.min(1, this.introClock + dt / INTRO_SECONDS);
+    this.grainClock += dt;
+    if (!this.reduce && this.grainClock > 1 / 24) {
+      this.grainClock = 0;
+      this.frameSeed = (this.frameSeed + 1) % 97;
+    }
+    this.updateInput(dt);
+    this.draw();
+    const busy = !this.reduce || this.introClock < 1 || this.clicks.length > 0 || this.trail.length > 0;
+    if (busy) this.wake();
+    else this.last = 0;
+  };
+
+  private parse(value: string): number[] {
+    const key = String(value);
+    const cached = this.colorCache.get(key);
+    if (cached) return cached;
+    let rgb: number[] = [0, 0, 0];
+    if (this.probe) {
+      this.probe.clearRect(0, 0, 1, 1);
+      this.probe.fillStyle = '#000000';
+      this.probe.fillStyle = key;
+      this.probe.fillRect(0, 0, 1, 1);
+      const [r, g, b] = this.probe.getImageData(0, 0, 1, 1).data;
+      rgb = [r / 255, g / 255, b / 255];
+    }
+    this.colorCache.set(key, rgb);
+    return rgb;
+  }
+
+  private syncAtlas() {
+    const s = this.settings();
+    const key = `${s.fontFamily}|${s.characters}`;
+    if (key === this.atlasKey && this.atlas) return;
+    this.atlasKey = key;
+    if (this.atlas) this.gl.deleteTexture(this.atlas.texture);
+    this.atlas = buildAtlas(this.gl, s.characters, s.fontFamily);
+    document.fonts?.load?.(`300 64px ${s.fontFamily}`, s.characters).then(
+      () => {
+        if (!this.attached || this.atlasKey !== key) return;
+        if (this.atlas) this.gl.deleteTexture(this.atlas.texture);
+        this.atlas = buildAtlas(this.gl, s.characters, s.fontFamily);
+        this.wake();
+      },
+      () => {}
+    );
+  }
+
+  private syncPalette() {
+    const s = this.settings();
+    const key = s.colors.join(',');
+    if (key === this.paletteKey) return;
+    this.paletteKey = key;
+    s.colors.forEach((color, i) => this.ramp.set(toLab(this.parse(color)), i * 3));
+  }
+
+  private bindGlyphs(program: Program, width: number, height: number) {
+    if (!this.atlas) return;
+    const gl = this.gl;
+    const s = this.settings();
+    const u = program.uniforms;
+    const cellH = s.cellSize * this.view.ratio;
+    const cellW = cellH * (ATLAS_CELL_W / ATLAS_CELL_H);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fieldTarget.textures[0]);
+    gl.uniform1i(u.uField, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.fieldTarget.textures[1]);
+    gl.uniform1i(u.uAux, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
+    gl.uniform1i(u.uAtlas, 2);
+    gl.uniform2f(u.uResolution, width, height);
+    gl.uniform2f(u.uCell, cellW, cellH);
+    gl.uniform2f(
+      u.uOffset,
+      (width - Math.ceil(width / cellW) * cellW) / 2,
+      (height - Math.ceil(height / cellH) * cellH) / 2
+    );
+    gl.uniform2f(u.uAtlasGrid, this.atlas.grid[0], this.atlas.grid[1]);
+    gl.uniform1f(u.uCount, this.atlas.count);
+    gl.uniform1f(u.uDensity, s.density);
+    gl.uniform1f(u.uOpacity, s.glyphOpacity);
+    gl.uniform1f(u.uFlicker, this.reduce ? 0 : s.flicker);
+    gl.uniform1f(u.uDepth, s.depthOfField);
+    gl.uniform1f(u.uGlyphTime, this.glyphTime);
+    gl.uniform1f(u.uSeedValue, s.variation);
+    gl.uniform1f(u.uLight, s.lightMode ? 1 : 0);
+  }
+
+  private draw() {
+    const gl = this.gl;
+    const s = this.settings();
+    const aspect = this.view.width / this.view.height;
+    this.syncAtlas();
+    this.syncPalette();
+    gl.bindVertexArray(this.vao);
+    gl.disable(gl.BLEND);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fieldTarget.framebuffer);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.viewport(0, 0, this.fieldTarget.width, this.fieldTarget.height);
+    gl.useProgram(this.field.program);
+    const fu = this.field.uniforms;
+    gl.uniform1f(fu.uAspect, aspect);
+    gl.uniform1f(fu.uTime, this.time);
+    gl.uniform1i(fu.uShape, s.shape);
+    gl.uniform3fv(fu.uRamp, this.ramp);
+    gl.uniform1i(fu.uCount, s.colors.length);
+    gl.uniform1f(fu.uScale, s.scale);
+    gl.uniform1f(fu.uSoftness, s.softness);
+    gl.uniform1f(fu.uFlow, s.flow);
+    gl.uniform2f(fu.uSeed, s.variation * 3.17, s.variation * 1.91);
+    gl.uniform4fv(fu.uTrail, this.trailData);
+    gl.uniform1f(fu.uRadius, s.scrambleRadius);
+    gl.uniform4fv(fu.uClicks, this.clickData);
+    gl.uniform1i(fu.uClickEffect, s.clickEffect);
+    gl.uniform1f(fu.uIntro, this.introClock);
+    gl.uniform1f(fu.uFrame, this.frameSeed);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    const glowing = s.glow > 0.001;
+    if (glowing) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.haloA.framebuffer);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+      gl.viewport(0, 0, this.haloA.width, this.haloA.height);
+      gl.useProgram(this.halo.program);
+      this.bindGlyphs(this.halo, this.canvas.width, this.canvas.height);
+      gl.uniform1f(this.halo.uniforms.uDownscale, this.canvas.width / this.haloA.width);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      gl.useProgram(this.blur.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(this.blur.uniforms.uSource, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.haloB.framebuffer);
+      gl.bindTexture(gl.TEXTURE_2D, this.haloA.textures[0]);
+      gl.uniform2f(this.blur.uniforms.uStep, 1 / this.haloA.width, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.haloA.framebuffer);
+      gl.bindTexture(gl.TEXTURE_2D, this.haloB.textures[0]);
+      gl.uniform2f(this.blur.uniforms.uStep, 0, 1 / this.haloA.height);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.useProgram(this.composite.program);
+    this.bindGlyphs(this.composite, this.canvas.width, this.canvas.height);
+    const cu = this.composite.uniforms;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.haloA.textures[0]);
+    gl.uniform1i(cu.uHalo, 3);
+    gl.uniform1f(cu.uGlow, glowing ? s.glow : 0);
+    gl.uniform1f(cu.uGradient, s.gradientOpacity);
+    gl.uniform1f(cu.uGrain, s.grain);
+    gl.uniform1f(cu.uFrame, this.frameSeed);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  private resize = () => {
+    const host = this.host;
+    if (!host || !this.attached || this.disposed) return;
+    const s = this.settings();
+    const width = Math.max(0, host.clientWidth);
+    const height = Math.max(0, host.clientHeight);
+    // Display:none hosts report no box; wait for the next resize instead of
+    // drawing a 1x1 field.
+    if (!width || !height) return;
+    this.view.width = width;
+    this.view.height = height;
+    this.view.ratio = Math.min(s.dpr || window.devicePixelRatio || 1, 2);
+    this.canvas.width = Math.max(1, Math.round(this.view.width * this.view.ratio));
+    this.canvas.height = Math.max(1, Math.round(this.view.height * this.view.ratio));
+    sizeTarget(
+      this.gl,
+      this.fieldTarget,
+      Math.max(1, Math.round(this.canvas.width / 2)),
+      Math.max(1, Math.round(this.canvas.height / 2))
+    );
+    const haloWidth = Math.max(1, Math.round(this.canvas.width / 4));
+    const haloHeight = Math.max(1, Math.round(this.canvas.height / 4));
+    sizeTarget(this.gl, this.haloA, haloWidth, haloHeight);
+    sizeTarget(this.gl, this.haloB, haloWidth, haloHeight);
+    this.draw();
+    this.wake();
+  };
+
+  private updateInput(dt: number) {
+    this.trail.forEach(point => {
+      point.age += dt;
+    });
+    while (this.trail.length && this.trail[this.trail.length - 1].age > TRAIL_LIFE) this.trail.pop();
+    for (let i = 0; i < MAX_TRAIL; i++) {
+      const point = this.trail[i];
+      if (!point) {
+        this.trailData[i * 4 + 2] = 0;
+        continue;
+      }
+      const k = 1 - point.age / TRAIL_LIFE;
+      this.trailData.set([point.x, point.y, k * k, 0], i * 4);
+    }
+    this.clicks.forEach(click => {
+      click.age += dt;
+    });
+    while (this.clicks.length && this.clicks[this.clicks.length - 1].age > CLICK_LIFE) this.clicks.pop();
+    for (let i = 0; i < MAX_CLICKS; i++) {
+      const click = this.clicks[i];
+      if (!click) {
+        this.clickData[i * 4 + 3] = 0;
+        continue;
+      }
+      const k = click.age / CLICK_LIFE;
+      const envelope = Math.min(1, click.age / 0.08) * (1 - k) * (1 - k);
+      this.clickData.set([click.x, click.y, click.age, envelope], i * 4);
+    }
+  }
+
+  private locate(event: PointerEvent) {
+    const host = this.host;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / Math.max(1, rect.width);
+    const y = 1 - (event.clientY - rect.top) / Math.max(1, rect.height);
+    const aspect = rect.width / Math.max(1, rect.height);
+    this.pointer.inside = x >= 0 && x <= 1 && y >= 0 && y <= 1;
+    this.pointer.x = (x - 0.5) * aspect;
+    this.pointer.y = y - 0.5;
+  }
+
+  private onPointerMove = (event: PointerEvent) => {
+    if (!this.attached) return;
+    this.locate(event);
+    const s = this.settings();
+    if (!this.pointer.inside || !s.mouseInteraction || this.reduce) return;
+    const head = this.trail[0];
+    const gap = head ? Math.hypot(this.pointer.x - head.x, this.pointer.y - head.y) : Infinity;
+    if (gap < TRAIL_STEP) return;
+    if (head && head.age < 0.1) {
+      const steps = Math.min(6, Math.floor(gap / (TRAIL_STEP * 2)));
+      for (let i = 1; i <= steps; i++) {
+        const k = i / (steps + 1);
+        this.trail.unshift({ x: head.x + (this.pointer.x - head.x) * k, y: head.y + (this.pointer.y - head.y) * k, age: 0 });
+      }
+    }
+    this.trail.unshift({ x: this.pointer.x, y: this.pointer.y, age: 0 });
+    this.trail.length = Math.min(this.trail.length, MAX_TRAIL);
+    this.wake();
+  };
+
+  private onPointerDown = (event: PointerEvent) => {
+    if (!this.attached) return;
+    this.locate(event);
+    const s = this.settings();
+    if (!this.pointer.inside || !s.clickEffect || this.reduce) return;
+    this.clicks.unshift({ x: this.pointer.x, y: this.pointer.y, age: 0 });
+    if (this.clicks.length > MAX_CLICKS) this.clicks.pop();
+    this.wake();
+  };
+
+  private onVisibility = () => {
+    this.last = 0;
+    this.wake();
+  };
+}
+
+const rendererPool: ShaderRenderer[] = [];
+const idleTimers = new Map<ShaderRenderer, ReturnType<typeof setTimeout>>();
+
+function takeRenderer(key: string): ShaderRenderer | null {
+  const index = rendererPool.findIndex(candidate => candidate.key === key);
+  if (index === -1) return null;
+  const [renderer] = rendererPool.splice(index, 1);
+  const timer = idleTimers.get(renderer);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    idleTimers.delete(renderer);
+  }
+  return renderer;
+}
+
+function releaseRenderer(renderer: ShaderRenderer) {
+  renderer.detach();
+  rendererPool.push(renderer);
+  const timer = setTimeout(() => {
+    idleTimers.delete(renderer);
+    const index = rendererPool.indexOf(renderer);
+    if (index !== -1) rendererPool.splice(index, 1);
+    renderer.dispose();
+  }, RENDERER_IDLE_DISPOSE_MS);
+  idleTimers.set(renderer, timer);
+  while (rendererPool.length > RENDERER_POOL_LIMIT) {
+    const oldest = rendererPool.shift();
+    if (!oldest) break;
+    const pending = idleTimers.get(oldest);
+    if (pending !== undefined) {
+      clearTimeout(pending);
+      idleTimers.delete(oldest);
+    }
+    oldest.dispose();
+  }
+}
+
 const GradientASCII = ({
   colors = DEFAULT_COLORS,
   shape = 'horizon',
@@ -520,8 +1025,6 @@ const GradientASCII = ({
   ...rest
 }: GradientASCIIProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wakeRef = useRef<(() => void) | null>(null);
   const palette = (Array.isArray(colors) && colors.length ? colors : DEFAULT_COLORS).slice(0, MAX_COLORS);
   const settings: Settings = {
     colors: palette.length > 1 ? palette : [palette[0], palette[0]],
@@ -553,356 +1056,68 @@ const GradientASCII = ({
 
   useEffect(() => {
     const container = containerRef.current;
-    const canvas = canvasRef.current;
-    const gl = canvas?.getContext('webgl2', {
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: false,
-      depth: false,
-      stencil: false
+    if (!container) return undefined;
+    let cancelled = false;
+    let renderer: ShaderRenderer | null = null;
+    let idle: { kind: 'idle' | 'timeout'; id: number } | null = null;
+    let visible = false;
+    let started = false;
+
+    const cancelIdle = () => {
+      if (!idle) return;
+      if (idle.kind === 'idle' && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idle.id);
+      } else {
+        clearTimeout(idle.id);
+      }
+      idle = null;
+    };
+
+    // Runs after first paint (idle) and only while the field is on screen.
+    const start = () => {
+      idle = null;
+      if (cancelled || started || !visible || document.hidden) return;
+      started = true;
+      const key = settingsKey(settingsRef.current);
+      renderer = takeRenderer(key) ?? ShaderRenderer.create(settingsRef.current);
+      // No WebGL2 or a failed link: the static brand gradients stay visible.
+      renderer?.attach(container, () => settingsRef.current);
+    };
+
+    const schedule = () => {
+      if (cancelled || started || idle || !visible || document.hidden) return;
+      if (typeof window.requestIdleCallback === 'function') {
+        idle = {
+          kind: 'idle',
+          id: window.requestIdleCallback(start, { timeout: RENDERER_IDLE_TIMEOUT_MS })
+        };
+      } else {
+        idle = { kind: 'timeout', id: window.setTimeout(start, 180) };
+      }
+    };
+
+    const observer = new IntersectionObserver(entries => {
+      const entry = entries[entries.length - 1];
+      visible = entry ? entry.isIntersecting : false;
+      if (visible) schedule();
     });
-    if (!container || !canvas || !gl) return undefined;
-
-    const field = link(gl, FIELD);
-    const halo = link(gl, HALO);
-    const blur = link(gl, BLUR);
-    const composite = link(gl, COMPOSITE);
-    if (!field || !halo || !blur || !composite) return undefined;
-    const vao = gl.createVertexArray();
-    const fieldTarget = createTarget(gl, 2);
-    const haloA = createTarget(gl, 1);
-    const haloB = createTarget(gl, 1);
-
-    const probe = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-    const colorCache = new Map<string, number[]>();
-    const parse = (value: string): number[] => {
-      const key = String(value);
-      const cached = colorCache.get(key);
-      if (cached) return cached;
-      let rgb: number[] = [0, 0, 0];
-      if (probe) {
-        probe.clearRect(0, 0, 1, 1);
-        probe.fillStyle = '#000000';
-        probe.fillStyle = key;
-        probe.fillRect(0, 0, 1, 1);
-        const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
-        rgb = [r / 255, g / 255, b / 255];
-      }
-      colorCache.set(key, rgb);
-      return rgb;
-    };
-
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    const view = { width: 1, height: 1, ratio: 1 };
-    const ramp = new Float32Array(MAX_COLORS * 3);
-    const clickData = new Float32Array(MAX_CLICKS * 4);
-    const clicks: Point[] = [];
-    const trailData = new Float32Array(MAX_TRAIL * 4);
-    const trail: Point[] = [];
-    const pointer = { x: 0, y: 0, inside: false };
-    let atlas: Atlas | null = null;
-    let atlasKey = '';
-    let paletteKey = '';
-    let time = 0;
-    let glyphTime = 0;
-    let introClock = settingsRef.current.intro && !reduce ? 0 : 1;
-    let frameSeed = 0;
-    let grainClock = 0;
-    let raf = 0;
-    let last = 0;
-    let visible = true;
-    let disposed = false;
-
-    const syncAtlas = () => {
-      const s = settingsRef.current;
-      const key = `${s.fontFamily}|${s.characters}`;
-      if (key === atlasKey && atlas) return;
-      atlasKey = key;
-      if (atlas) gl.deleteTexture(atlas.texture);
-      atlas = buildAtlas(gl, s.characters, s.fontFamily);
-      document.fonts?.load?.(`300 64px ${s.fontFamily}`, s.characters).then(
-        () => {
-          if (disposed || atlasKey !== key) return;
-          if (atlas) gl.deleteTexture(atlas.texture);
-          atlas = buildAtlas(gl, s.characters, s.fontFamily);
-          draw();
-        },
-        () => {}
-      );
-    };
-
-    const syncPalette = () => {
-      const s = settingsRef.current;
-      const key = s.colors.join(',');
-      if (key === paletteKey) return;
-      paletteKey = key;
-      s.colors.forEach((color, i) => ramp.set(toLab(parse(color)), i * 3));
-    };
-
-    const bindGlyphs = (program: Program, width: number, height: number) => {
-      if (!atlas) return;
-      const s = settingsRef.current;
-      const u = program.uniforms;
-      const cellH = s.cellSize * view.ratio;
-      const cellW = cellH * (ATLAS_CELL_W / ATLAS_CELL_H);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, fieldTarget.textures[0]);
-      gl.uniform1i(u.uField, 0);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, fieldTarget.textures[1]);
-      gl.uniform1i(u.uAux, 1);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, atlas.texture);
-      gl.uniform1i(u.uAtlas, 2);
-      gl.uniform2f(u.uResolution, width, height);
-      gl.uniform2f(u.uCell, cellW, cellH);
-      gl.uniform2f(
-        u.uOffset,
-        (width - Math.ceil(width / cellW) * cellW) / 2,
-        (height - Math.ceil(height / cellH) * cellH) / 2
-      );
-      gl.uniform2f(u.uAtlasGrid, atlas.grid[0], atlas.grid[1]);
-      gl.uniform1f(u.uCount, atlas.count);
-      gl.uniform1f(u.uDensity, s.density);
-      gl.uniform1f(u.uOpacity, s.glyphOpacity);
-      gl.uniform1f(u.uFlicker, reduce ? 0 : s.flicker);
-      gl.uniform1f(u.uDepth, s.depthOfField);
-      gl.uniform1f(u.uGlyphTime, glyphTime);
-      gl.uniform1f(u.uSeedValue, s.variation);
-      gl.uniform1f(u.uLight, s.lightMode ? 1 : 0);
-    };
-
-    const draw = () => {
-      const s = settingsRef.current;
-      const aspect = view.width / view.height;
-      syncAtlas();
-      syncPalette();
-      gl.bindVertexArray(vao);
-      gl.disable(gl.BLEND);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fieldTarget.framebuffer);
-      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
-      gl.viewport(0, 0, fieldTarget.width, fieldTarget.height);
-      gl.useProgram(field.program);
-      const fu = field.uniforms;
-      gl.uniform1f(fu.uAspect, aspect);
-      gl.uniform1f(fu.uTime, time);
-      gl.uniform1i(fu.uShape, s.shape);
-      gl.uniform3fv(fu.uRamp, ramp);
-      gl.uniform1i(fu.uCount, s.colors.length);
-      gl.uniform1f(fu.uScale, s.scale);
-      gl.uniform1f(fu.uSoftness, s.softness);
-      gl.uniform1f(fu.uFlow, s.flow);
-      gl.uniform2f(fu.uSeed, s.variation * 3.17, s.variation * 1.91);
-      gl.uniform4fv(fu.uTrail, trailData);
-      gl.uniform1f(fu.uRadius, s.scrambleRadius);
-      gl.uniform4fv(fu.uClicks, clickData);
-      gl.uniform1i(fu.uClickEffect, s.clickEffect);
-      gl.uniform1f(fu.uIntro, introClock);
-      gl.uniform1f(fu.uFrame, frameSeed);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-      const glowing = s.glow > 0.001;
-      if (glowing) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, haloA.framebuffer);
-        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
-        gl.viewport(0, 0, haloA.width, haloA.height);
-        gl.useProgram(halo.program);
-        bindGlyphs(halo, canvas.width, canvas.height);
-        gl.uniform1f(halo.uniforms.uDownscale, canvas.width / haloA.width);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        gl.useProgram(blur.program);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.uniform1i(blur.uniforms.uSource, 0);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, haloB.framebuffer);
-        gl.bindTexture(gl.TEXTURE_2D, haloA.textures[0]);
-        gl.uniform2f(blur.uniforms.uStep, 1 / haloA.width, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, haloA.framebuffer);
-        gl.bindTexture(gl.TEXTURE_2D, haloB.textures[0]);
-        gl.uniform2f(blur.uniforms.uStep, 0, 1 / haloA.height);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      }
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.useProgram(composite.program);
-      bindGlyphs(composite, canvas.width, canvas.height);
-      const cu = composite.uniforms;
-      gl.activeTexture(gl.TEXTURE3);
-      gl.bindTexture(gl.TEXTURE_2D, haloA.textures[0]);
-      gl.uniform1i(cu.uHalo, 3);
-      gl.uniform1f(cu.uGlow, glowing ? s.glow : 0);
-      gl.uniform1f(cu.uGradient, s.gradientOpacity);
-      gl.uniform1f(cu.uGrain, s.grain);
-      gl.uniform1f(cu.uFrame, frameSeed);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    };
-
-    const resize = () => {
-      const s = settingsRef.current;
-      view.width = Math.max(1, container.clientWidth);
-      view.height = Math.max(1, container.clientHeight);
-      view.ratio = Math.min(s.dpr || window.devicePixelRatio || 1, 2);
-      canvas.width = Math.max(1, Math.round(view.width * view.ratio));
-      canvas.height = Math.max(1, Math.round(view.height * view.ratio));
-      sizeTarget(
-        gl,
-        fieldTarget,
-        Math.max(1, Math.round(canvas.width / 2)),
-        Math.max(1, Math.round(canvas.height / 2))
-      );
-      const haloWidth = Math.max(1, Math.round(canvas.width / 4));
-      const haloHeight = Math.max(1, Math.round(canvas.height / 4));
-      sizeTarget(gl, haloA, haloWidth, haloHeight);
-      sizeTarget(gl, haloB, haloWidth, haloHeight);
-      draw();
-      wake();
-    };
-
-    const updateInput = (dt: number) => {
-      trail.forEach(point => {
-        point.age += dt;
-      });
-      while (trail.length && trail[trail.length - 1].age > TRAIL_LIFE) trail.pop();
-      for (let i = 0; i < MAX_TRAIL; i++) {
-        const point = trail[i];
-        if (!point) {
-          trailData[i * 4 + 2] = 0;
-          continue;
-        }
-        const k = 1 - point.age / TRAIL_LIFE;
-        trailData.set([point.x, point.y, k * k, 0], i * 4);
-      }
-      clicks.forEach(click => {
-        click.age += dt;
-      });
-      while (clicks.length && clicks[clicks.length - 1].age > CLICK_LIFE) clicks.pop();
-      for (let i = 0; i < MAX_CLICKS; i++) {
-        const click = clicks[i];
-        if (!click) {
-          clickData[i * 4 + 3] = 0;
-          continue;
-        }
-        const k = click.age / CLICK_LIFE;
-        const envelope = Math.min(1, click.age / 0.08) * (1 - k) * (1 - k);
-        clickData.set([click.x, click.y, click.age, envelope], i * 4);
-      }
-    };
-
-    const frame = (now: number) => {
-      raf = 0;
-      if (disposed || !visible || document.hidden) return;
-      const s = settingsRef.current;
-      const dt = last ? clamp((now - last) / 1000, 0.001, 0.05) : 1 / 60;
-      last = now;
-      if (!reduce) {
-        time += dt * s.speed * 0.5;
-        glyphTime += dt * Math.max(s.speed, 0.15);
-      }
-      if (introClock < 1) introClock = Math.min(1, introClock + dt / INTRO_SECONDS);
-      grainClock += dt;
-      if (!reduce && grainClock > 1 / 24) {
-        grainClock = 0;
-        frameSeed = (frameSeed + 1) % 97;
-      }
-      updateInput(dt);
-      draw();
-      const busy = !reduce || introClock < 1 || clicks.length > 0 || trail.length > 0;
-      if (busy) raf = requestAnimationFrame(frame);
-      else last = 0;
-    };
-
-    function wake() {
-      if (!raf && !disposed && visible && !document.hidden) raf = requestAnimationFrame(frame);
-    }
-
-    const locate = (event: PointerEvent) => {
-      const rect = container.getBoundingClientRect();
-      const x = (event.clientX - rect.left) / Math.max(1, rect.width);
-      const y = 1 - (event.clientY - rect.top) / Math.max(1, rect.height);
-      const aspect = rect.width / Math.max(1, rect.height);
-      pointer.inside = x >= 0 && x <= 1 && y >= 0 && y <= 1;
-      pointer.x = (x - 0.5) * aspect;
-      pointer.y = y - 0.5;
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      locate(event);
-      const s = settingsRef.current;
-      if (!pointer.inside || !s.mouseInteraction || reduce) return;
-      const head = trail[0];
-      const gap = head ? Math.hypot(pointer.x - head.x, pointer.y - head.y) : Infinity;
-      if (gap < TRAIL_STEP) return;
-      if (head && head.age < 0.1) {
-        const steps = Math.min(6, Math.floor(gap / (TRAIL_STEP * 2)));
-        for (let i = 1; i <= steps; i++) {
-          const k = i / (steps + 1);
-          trail.unshift({ x: head.x + (pointer.x - head.x) * k, y: head.y + (pointer.y - head.y) * k, age: 0 });
-        }
-      }
-      trail.unshift({ x: pointer.x, y: pointer.y, age: 0 });
-      trail.length = Math.min(trail.length, MAX_TRAIL);
-      wake();
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      locate(event);
-      const s = settingsRef.current;
-      if (!pointer.inside || !s.clickEffect || reduce) return;
-      clicks.unshift({ x: pointer.x, y: pointer.y, age: 0 });
-      if (clicks.length > MAX_CLICKS) clicks.pop();
-      wake();
-    };
-
+    observer.observe(container);
     const onVisibility = () => {
-      last = 0;
-      wake();
+      if (!document.hidden && visible) schedule();
     };
-
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(container);
-    const intersection = new IntersectionObserver(entries => {
-      visible = entries.some(entry => entry.isIntersecting);
-      if (visible) {
-        last = 0;
-        wake();
-      }
-    });
-    intersection.observe(container);
-    window.addEventListener('pointermove', onPointerMove, { passive: true });
-    window.addEventListener('pointerdown', onPointerDown, { passive: true });
     document.addEventListener('visibilitychange', onVisibility);
-    resize();
-    wakeRef.current = wake;
 
     return () => {
-      disposed = true;
-      cancelAnimationFrame(raf);
-      wakeRef.current = null;
-      resizeObserver.disconnect();
-      intersection.disconnect();
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerdown', onPointerDown);
+      cancelled = true;
+      cancelIdle();
+      observer.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
-      [fieldTarget, haloA, haloB].forEach(target => {
-        target.textures.forEach(texture => gl.deleteTexture(texture));
-        gl.deleteFramebuffer(target.framebuffer);
-      });
-      if (atlas) gl.deleteTexture(atlas.texture);
-      gl.deleteVertexArray(vao);
-      [field, halo, blur, composite].forEach(item => gl.deleteProgram(item.program));
-      // Never force-lose the context here. React's development double-mount
-      // runs this cleanup and then re-mounts the same canvas; a forced loss
-      // makes the second mount reuse a dead context and the canvas paints
-      // solid white. Let the browser reclaim it with the element instead.
+      if (renderer) {
+        releaseRenderer(renderer);
+        renderer = null;
+      }
     };
   }, []);
-
-  useEffect(() => {
-    wakeRef.current?.();
-  });
 
   return (
     <div
@@ -911,7 +1126,8 @@ const GradientASCII = ({
       style={style}
       {...rest}
     >
-      <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden="true" />
+      {/* The WebGL canvas is attached after first paint/idle; consumers keep a
+          static brand gradient behind this container until then. */}
     </div>
   );
 };

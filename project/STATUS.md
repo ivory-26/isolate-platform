@@ -1,8 +1,54 @@
 # Status
 
-Last updated: 2026-11-02 (wave 23: event-first redesign, web onboarding, execution map, performance)
+Last updated: 2026-11-02 (wave 24: connector verification, vendor selectors, landing capture)
 
-## Current: wave 23 — event-first redesign and web onboarding (2026-11-02)
+## Current: wave 24 — connector verification and vendor selectors (2026-11-02)
+
+Design sources: [`WAVE24.md`](WAVE24.md), [`WAVE23.md`](WAVE23.md), [`docs/USER-SETUP.md`](../docs/USER-SETUP.md), [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md), [`docs/KNOWN-LIMITS.md`](../docs/KNOWN-LIMITS.md).
+
+### What changed
+
+- **Frozen contracts (`7bcef20`).** `CONNECTOR_VERIFY_TOOL_NAME = "connector.verify"`, closed `CONNECTOR_VERIFY_REASON_CODES`, and `connectorVerifyDeviceResultSchema` in `@isolate/shared`; a frozen server/UI verification seam; and `buildPairingLocalUrl` now carries `&connector=<id>` as a non-secret rendering hint. The claim response remains authoritative.
+- **Device selectors and pairing page (`8ce7f81`, merge `5033578`).** Nine vendor specs define secret fields and non-secret selectors (Sentry URL; Grafana URL/org/datasource UIDs; PagerDuty from-email/API origin; Kubernetes API URL/namespace/token-file/CA path; Datadog two keys/site; New Relic account/endpoint; Honeycomb dataset/host; Axiom URL/dataset; SigNoz URL). The loopback page renders labelled vendor fields, validates them, rejects credential-shaped selectors, and keeps the generic secret/JSON fallback. Vendor resolution is paired selectors > static config > legacy env. The daemon table is now 41 entries: 31 agent tools + 9 context tools + `connector.verify`.
+- **Bounded verification read (`8ce7f81`).** `connector.verify` performs exactly one authenticated provider request per connector (5 s timeout, no redirects, at most 64 KiB read and discarded). Provider outcomes reduce to `{ verified, reasonCode }`; missing config is `CONFIG_REQUIRED` before any fetch. Covered for all nine relay connectors with fake fetch; no live vendor call was made.
+- **Server verification (`c3ef687`, merge `3233544`; fixes `0afe701`, `41b9e68`).** Owner/admin-only service enqueues one `connector.verify` call, awaits it with a 20 s bound and a tenant-scoped read, then promotes success to `active` + `last_validated_at`; auth/config rejection sets `invalid`; rate limits, provider faults, network errors and timeouts leave the status unchanged. The gateway can hand a verification call to a `pending_validation`/`invalid`/`active` credential and does not spend the free-tier ledger for it. Verification has its own 30/min per-user bucket.
+- **UI (`770b1df`, merge `ee9ec7b`).** Integration detail now has a real Verify action with busy/success/invalid/unreachable states. Pairing completion says **Stored on relay**, not Connected, and auto-triggers one verification when a credential id is present. Only `active` renders as Connected/verified; `pending_validation` says verification pending; `invalid` says verification failed with a fixed reason. A1 is labelled **unsupported**, not planned.
+- **Landing capture (`a91633f`, merge `3dff8f9`).** The overview and two panel images were recaptured from the wave-23 Home composition with synthetic data: Needs you, Running now, Inbox, Sources and the four metrics. The temporary preview route was removed; provenance and alt text were updated. The Running-now capture asserts only supported A2/A3 labels (no A1/A4; A0 does not create a running task).
+- **Docs (`b0eab5e`, merge `f1f2f63`; coordinator truth pass).** `docs/DEPLOYMENT.md` records the GitHub App secret-manager names; `docs/KNOWN-LIMITS.md` records A1/A4, Datadog canonical re-fetch, Kafka, live-QA and subagent limits; `USER-SETUP`, `connector-onboarding`, `SETUP`, `env-reference`, `DEVICE`, `README` and the stale per-connector status paragraphs now match the shipped relay path and the 8 KiB pairing-field cap.
+
+### Verification semantics
+
+| Outcome | Credential status | Reason |
+|---|---|---|
+| 2xx bounded read | `active` + `last_validated_at` | `OK` |
+| 401/403 | `invalid` | `AUTH_FAILED` |
+| 404 / missing selector | `invalid` | `CONFIG_REQUIRED` |
+| 429 | unchanged | `RATE_LIMITED` |
+| 5xx / other 4xx | unchanged | `PROVIDER_ERROR` |
+| network / timeout | unchanged | `UNREACHABLE` |
+
+Only `active` is described as Connected or verified. Verification proves one bounded authenticated read, not every enabled tool or scope.
+
+### Final gates (2026-11-02)
+
+- `bun scripts/typecheck-all.ts` — **9/9 projects**.
+- `bun test --no-env-file` — **3118 pass / 10 skip / 0 fail** (3128 tests, 219 files), twice, identical.
+- `bunx biome check apps packages scripts` — **0 errors**, 10 pre-existing warnings.
+- `bun --no-env-file scripts/acceptance-offline.ts` — **7/7 PASS** with zero provider credentials.
+- `bun run security:check` — **PASS** (550 source/migration files, 948 tracked files).
+- `apps/web` production build — success (client + SSR); `check:build` PASS (landing 200, anonymous `/runs` and `/organizations` redirect to `/login`, `/login` 200); client sweep **34 checks / 105 files**.
+- No provider keys were used and no live vendor call was made in this wave.
+
+### Known gaps / follow-ups
+
+1. **A1 investigate remains unsupported.** A0/A2/A3 are honest; A4 production mutation remains out of scope. No read-only investigation task is executed; the intake records `AUTONOMY_LEVEL_UNSUPPORTED`.
+2. **Datadog canonical re-fetch and the Kafka bridge remain design-only.** A Datadog webhook is still an untrusted hint; trust it only through a verified bridge or a future canonical re-fetch.
+3. **SaaS live acceptance is still pending.** Verification probes and all nine adapters are fake-tested; Kubernetes has the prior local live proof. No SaaS vendor credential was supplied, so do not present Sentry/Grafana/PagerDuty/Datadog/New Relic/Honeycomb/Axiom/SigNoz as live-proven.
+4. **Authenticated live-data visual QA was not possible here.** Landing/login and the production build were checked; authenticated pages are covered by tests/build. The landing capture was refreshed from a synthetic preview, not live tenant data.
+5. **GitHub App operator setup is a deployment action.** `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, the private key, and `GITHUB_APP_STATE_SECRET` (>= 32 chars) must be set in the deployment secret manager; missing configuration returns the fixed `GITHUB_APP_NOT_CONFIGURED`. See `docs/DEPLOYMENT.md`.
+6. **No subagent tree** is emitted by the worker; the execution map remains the real tree and must not invent delegated agents.
+
+## Previous: wave 23 — event-first redesign and web onboarding (2026-11-02)
 
 Design sources: remote [`docs/spec.md`](../docs/spec.md) (integrated in `314a40a`), [`project/WAVE23.md`](WAVE23.md), and [`docs/USER-SETUP.md`](../docs/USER-SETUP.md). The spec's baseline table was corrected in WAVE23 §1.1: the device poll transport and Datadog adapter are implemented, while the browser pairing/verification and per-org GitHub installation were the real gaps.
 

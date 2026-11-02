@@ -2,6 +2,22 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 24 — connector verification, selectors, landing truth (2026-11-02)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W24-DEVICE | `task/w24-device` | `8ce7f81` (merge `5033578`) | **done** — nine vendor pairing specs, guided loopback fields, selector precedence, real 41-entry table, bounded `connector.verify` probes |
+| W24-VERIFY | `task/w24-verify` | `c3ef687` (merge `3233544`); fixes `0afe701`, `41b9e68` | **done** — enqueue/await verification, status transition, pending-credential gateway exception, dedicated rate bucket |
+| W24-UI | `task/w24-ui` | `770b1df` (merge `ee9ec7b`) | **done** — Verify action, auto-verify after pairing, honest pending/invalid/active copy, A1 unsupported |
+| W24-LANDING | `task/w24-landing` | `a91633f` (merge `3dff8f9`) | **done** — wave-23 Home capture, three images + provenance, no A1/A4 in Running now |
+| W24-DOCS | `task/w24-docs` | `b0eab5e` (merge `f1f2f63`) | **done** — pairing fields, verification flow, deployment env, known limits |
+
+Contracts committed first on `main`: `7bcef20` (verification tool/reason codes, frozen server seam, connector-aware pairing URL). Coordinator truth pass: per-connector stale status paragraphs, ledger wording, 8 KiB pairing-field cap, and A1 label corrected.
+
+Gates: typecheck 9/9 · **3118 pass / 10 skip / 0 fail ×2** · biome 0 errors (10 pre-existing warnings) · acceptance 7/7 with zero provider credentials · security PASS (550 source/migration files, 948 tracked) · web production build + `check:build` + 34-check client sweep.
+
+Remaining: A1 unsupported, A4 out of scope, Datadog canonical re-fetch and Kafka bridge design-only, SaaS live acceptance pending, authenticated live visual QA unavailable here, GitHub operator env is a deployment action. No provider keys used.
+
 ## Wave 20 — public landing + authenticated control plane UI (2026-11-01)
 
 | Lane | Branch | Commit | Deliverable |

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { CopyButton } from "@/components/common/copy-button";
 import { RelativeTime } from "@/components/common/relative-time";
 import { ConsoleNote } from "@/components/console/note";
@@ -35,6 +35,14 @@ import {
 	pairingErrorMessage,
 } from "../pairing";
 import { integrationKeys } from "../queries";
+import {
+	autoVerificationCredentialId,
+	verificationFailureMessage,
+	verificationIncompleteMessage,
+	verificationRejectionMessage,
+	verificationStatusLabel,
+} from "../verification";
+import { verifyConnectorCredentialAction } from "../verification.functions";
 
 const SELECT_CLASS =
 	"h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
@@ -63,7 +71,7 @@ export function ConnectPairingPanel({
 	const [pairing, setPairing] = useState<PairingCreateView | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [started, setStarted] = useState(false);
-	const [notified, setNotified] = useState(false);
+	const [pairingCompleted, setPairingCompleted] = useState(false);
 
 	const statusQuery = useQuery({
 		queryKey: ["integrations", "pairing", pairing?.pairingId ?? "none"],
@@ -79,13 +87,29 @@ export function ConnectPairingPanel({
 	});
 	const status: PairingSessionView | undefined = statusQuery.data;
 
+	// Auto-verify once when pairing stores a credential id. The guard survives
+	// React's development double-effect so exactly one bounded read is asked for.
+	const autoVerified = useRef<string | null>(null);
+	const verify = useMutation({
+		mutationFn: (credentialId: string) =>
+			verifyConnectorCredentialAction(credentialId),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({
+				queryKey: integrationKeys.all,
+			});
+		},
+	});
+	const verifyCredential = verify.mutate;
+
 	const create = useMutation({
 		mutationFn: (input: CreatePairingInput) => createPairing(input),
 		onSuccess: (result) => {
 			setPairing(result);
 			setStarted(false);
-			setNotified(false);
+			setPairingCompleted(false);
 			setError(null);
+			autoVerified.current = null;
+			verify.reset();
 		},
 		onError: (cause) => setError(pairingErrorMessage(cause)),
 	});
@@ -99,12 +123,19 @@ export function ConnectPairingPanel({
 	});
 
 	useEffect(() => {
-		if (status?.status === "completed" && !notified) {
-			setNotified(true);
-			void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
-			onConnected();
+		if (status?.status !== "completed" || pairingCompleted) return;
+		setPairingCompleted(true);
+		void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
+		onConnected();
+		const credentialId = autoVerificationCredentialId(
+			status,
+			autoVerified.current,
+		);
+		if (credentialId !== null) {
+			autoVerified.current = credentialId;
+			verifyCredential(credentialId);
 		}
-	}, [status?.status, notified, onConnected, queryClient]);
+	}, [status, pairingCompleted, onConnected, queryClient, verifyCredential]);
 
 	function onSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -131,6 +162,13 @@ export function ConnectPairingPanel({
 	const terminal =
 		status !== undefined &&
 		["completed", "expired", "cancelled"].includes(status.status);
+	const pairingLabel =
+		status === undefined
+			? "Starting pairing…"
+			: status.status === "completed"
+				? "Stored on relay — verification pending"
+				: PAIRING_STATUS_LABELS[status.status];
+	const verificationOutcome = verify.data;
 
 	return (
 		<ConsoleSection
@@ -156,7 +194,10 @@ export function ConnectPairingPanel({
 			{connection !== null && !started ? (
 				<div className="flex flex-col gap-3 border-y border-line-subtle py-4 sm:flex-row sm:items-center sm:justify-between">
 					<div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-						<StatusMark status={connection.status} />
+						<StatusMark
+							status={connection.status}
+							label={verificationStatusLabel(connection.status)}
+						/>
 						<span className="text-sm text-ink">{connection.displayName}</span>
 						<span className="text-xs text-ink-muted">
 							on {connection.relayName}
@@ -187,11 +228,66 @@ export function ConnectPairingPanel({
 			) : null}
 
 			{connection !== null && !started ? (
-				<ConsoleNote role="note" className="mt-3">
-					Verification is pending until the connector verify route lands; the
-					server will perform one bounded read. Reconnecting repeats the pairing
-					flow with a new key and keeps this display name.
-				</ConsoleNote>
+				pairingCompleted ? (
+					verify.isPending ? (
+						<ConsoleNote tone="warning" role="status" className="mt-3">
+							Stored on relay. Running one bounded verification read…
+						</ConsoleNote>
+					) : verificationOutcome?.ok === true &&
+						verificationOutcome.value.status === "active" ? (
+						<ConsoleNote role="status" className="mt-3">
+							Stored on relay and verified. The server reported the connection
+							active; details are in the Verification section below.
+						</ConsoleNote>
+					) : verificationOutcome?.ok === true &&
+						verificationOutcome.value.status === "invalid" ? (
+						<ConsoleNote tone="danger" role="alert" className="mt-3">
+							Stored on relay but rejected.{" "}
+							{verificationRejectionMessage(
+								verificationOutcome.value.reasonCode,
+							)}{" "}
+							Reconnect with valid credentials, then verify again.
+						</ConsoleNote>
+					) : verificationOutcome?.ok === true &&
+						verificationOutcome.value.status === "pending_validation" ? (
+						<ConsoleNote tone="warning" role="status" className="mt-3">
+							Stored on relay.{" "}
+							{verificationIncompleteMessage(
+								verificationOutcome.value.reasonCode,
+							)}
+						</ConsoleNote>
+					) : verificationOutcome?.ok === false ? (
+						<ConsoleNote tone="danger" role="alert" className="mt-3">
+							Stored on relay but not verified.{" "}
+							{verificationFailureMessage(verificationOutcome.error.code)} Run{" "}
+							<a
+								href="#verification"
+								className="font-medium underline underline-offset-2"
+							>
+								Verify connection
+							</a>{" "}
+							in the Verification section below.
+						</ConsoleNote>
+					) : (
+						<ConsoleNote tone="warning" role="status" className="mt-3">
+							Stored on relay. The credential is not verified yet. Run{" "}
+							<a
+								href="#verification"
+								className="font-medium underline underline-offset-2"
+							>
+								Verify connection
+							</a>{" "}
+							in the Verification section below.
+						</ConsoleNote>
+					)
+				) : (
+					<ConsoleNote role="note" className="mt-3">
+						The connection is stored on the relay but is not verified until the
+						bounded read succeeds. A pending or invalid connection is not
+						production-ready. Reconnecting repeats the pairing flow with a new
+						key and keeps this display name.
+					</ConsoleNote>
+				)
 			) : null}
 
 			{!canManage ? (
@@ -286,17 +382,13 @@ export function ConnectPairingPanel({
 						<StatusMark
 							status={
 								status?.status === "completed"
-									? "connected"
+									? "pending_validation"
 									: status?.status === "expired" ||
 											status?.status === "cancelled"
 										? "expired"
 										: "pending"
 							}
-							label={
-								status === undefined
-									? "Starting pairing…"
-									: PAIRING_STATUS_LABELS[status.status]
-							}
+							label={pairingLabel}
 						/>
 						<span className="text-xs text-ink-muted">
 							Code expires{" "}

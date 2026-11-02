@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/table";
 import { revokeConnector, toDeviceApiError } from "@/features/devices/api";
 import type { IntegrationConnection, IntegrationSummary } from "../contracts";
+import { verificationStatusLabel } from "../verification";
 
 /**
  * Connected sources: one row per connector that has a non-revoked credential.
@@ -63,7 +64,7 @@ export function ConnectedIntegrationsPanel({
 		<ConsoleSection
 			id="connected-sources"
 			title="Connected sources"
-			description="Status, relay, verification and event counters come from stored metadata. A verification action lands with the connector verify route; until then a new connection stays pending validation."
+			description="Status, relay, verification and event counters come from stored metadata. A row becomes Connected only after a bounded verification read succeeds; pending and invalid rows are not ready for production."
 			action={
 				<Button asChild size="sm" variant="outline">
 					<Link to="/integrations" search={{ tab: "catalog" }}>
@@ -147,7 +148,10 @@ export function ConnectedIntegrationsPanel({
 											{connection.relayName}
 										</TableCell>
 										<TableCell className="py-2">
-											<StatusMark status={connection.status} />
+											<StatusMark
+												status={connection.status}
+												label={verificationStatusLabel(connection.status)}
+											/>
 										</TableCell>
 										<TableCell className="py-2 text-xs text-ink-secondary">
 											{connection.lastValidatedAt ? (

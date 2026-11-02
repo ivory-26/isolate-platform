@@ -9,7 +9,6 @@ import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
 import { RelativeTime } from "@/components/common/relative-time";
 import { ConsoleNote } from "@/components/console/note";
-import { ConsoleSection } from "@/components/console/section";
 import { StatusMark } from "@/components/console/status-mark";
 import { ArrowRightIcon, ConnectorsIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -23,10 +22,12 @@ import { CapabilitySections } from "@/features/integrations/components/capabilit
 import { ConnectPairingPanel } from "@/features/integrations/components/connect-pairing-panel";
 import { DeliveriesPanel } from "@/features/integrations/components/deliveries-panel";
 import { TriggerRulesPanel } from "@/features/integrations/components/trigger-rules";
+import { VerificationPanel } from "@/features/integrations/components/verification-panel";
 import {
 	integrationKeys,
 	integrationOptions,
 } from "@/features/integrations/queries";
+import { verificationStatusLabel } from "@/features/integrations/verification";
 
 export const Route = createFileRoute("/_app/integrations/$connectorId")({
 	loader: async ({ context, params }) => {
@@ -145,7 +146,10 @@ function ConnectorDetail({
 					</span>
 					{connection ? (
 						<>
-							<StatusMark status={connection.status} />
+							<StatusMark
+								status={connection.status}
+								label={verificationStatusLabel(connection.status)}
+							/>
 							<span className="text-xs text-ink-muted">
 								on {connection.relayName}
 							</span>
@@ -179,33 +183,11 @@ function ConnectorDetail({
 						onConnected={refresh}
 					/>
 
-					<ConsoleSection
-						id="verification"
-						title="Verification"
-						description="A connection is verified with exactly one bounded read on the relay."
-						action={
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								disabled
-								title="The connector verify route has not landed in this wave."
-								aria-describedby="verification-pending"
-							>
-								Verify connection
-							</Button>
-						}
-					>
-						<output
-							id="verification-pending"
-							className="block text-xs leading-5 text-ink-muted"
-						>
-							Verification pending: this wave has no connector verify route, so
-							a new credential stays{" "}
-							<span className="font-mono">pending_validation</span>. No test
-							call is attempted from the browser.
-						</output>
-					</ConsoleSection>
+					<VerificationPanel
+						connectorId={connectorId}
+						connection={connection}
+						canManage={canManage}
+					/>
 
 					<TriggerRulesPanel
 						entry={entry}

@@ -110,7 +110,7 @@ export type PairingStatus = z.infer<typeof pairingStatusSchema>;
 export const PAIRING_STATUS_LABELS: Record<PairingStatus, string> = {
 	pending: "Waiting for the relay",
 	claimed: "Relay claimed the code",
-	completed: "Connected",
+	completed: "Stored on relay",
 	expired: "Code expired",
 	cancelled: "Cancelled",
 };

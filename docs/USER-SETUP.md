@@ -76,8 +76,10 @@ private networks. You install it once per environment; every connector reuses it
      --name sre-laptop
    ```
 
-   Docker and Helm equivalents use the same token and server URL. The token is
-   written to the relay's private config and is never shown again.
+   Docker and Helm equivalents use the same token and server URL. For a private
+   fork, set `ISOLATE_RELAY_ARCHIVE_URL` on the relay machine to an https tarball
+   of your release before running the command. The token is written to the
+   relay's private config and is never shown again.
 3. The relay starts, prints its loopback pairing URL and begins polling Isolate.
    Isolate flips the relay to **Active** on the first heartbeat. If it stays
    **Offline**, check outbound HTTPS and the server URL; no inbound port is required.

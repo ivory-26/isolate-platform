@@ -1,20 +1,32 @@
-import type { IncidentSeverity, OrganizationId } from "@isolate/shared";
-import { INCIDENT_SEVERITIES } from "@isolate/shared";
+import type {
+	IncidentLink,
+	IncidentSeverity,
+	OrganizationId,
+} from "@isolate/shared";
+import {
+	INCIDENT_SEVERITIES,
+	incidentLinkSchema,
+	MAX_INCIDENT_LINKS,
+} from "@isolate/shared";
 import type { PgSql } from "../client";
 
 /**
- * Tenant-scoped incident signal store (wave 13, migration 0009).
+ * Tenant-scoped incident signal store (wave 13, migration 0009; bounded display
+ * fields added by 0016).
  *
  * A signal is the normalized identity of one inbound delivery (GitHub failed
- * run / failing check suite today). The table is deliberately narrow: no
- * payload, summary, log excerpt or credential is stored here — those belong to
- * the context bundle, which is assembled later and cited per item.
+ * run / failing check suite today). The table stays deliberately narrow: it
+ * keeps a bounded title/summary/links projection for the inbox and
+ * `occurrence_count` for correlation, never a provider payload, log excerpt or
+ * credential. Full evidence is assembled later through the cited context
+ * bundle.
  *
  * Dedupe:
  * - `(organization_id, source, fingerprint, 30-minute bucket)` is unique in
  *   the database. `recordIfNew` inserts with `ON CONFLICT DO NOTHING`; when no
- *   row comes back it reads the surviving row by the same dedupe key, so two
- *   racing deliveries resolve to one signal id (`created: false`).
+ *   row comes back it reads and touches the surviving row by the same dedupe
+ *   key, so two racing deliveries resolve to one signal id (`created: false`)
+ *   and the occurrence counter advances.
  * - The bucket is computed from `received_at` (not `now()`), so a replayed
  *   delivery with the same timestamp is a no-op while a genuinely later
  *   incident opens a new row.
@@ -35,6 +47,10 @@ export const MAX_INCIDENT_KIND_CHARS = 64;
 export const MAX_INCIDENT_SERVICE_CHARS = 128;
 export const MAX_INCIDENT_FINGERPRINT_CHARS = 128;
 export const MAX_INCIDENT_DELIVERY_ID_CHARS = 128;
+/** Mirrors the 0016 CHECK constraints on the bounded display columns. */
+export const MAX_INCIDENT_TITLE_DB_CHARS = 400;
+export const MAX_INCIDENT_SUMMARY_DB_CHARS = 8000;
+export const MAX_INCIDENT_OCCURRENCES = 1_000_000;
 
 export type IncidentSignalInput = {
 	organizationId: OrganizationId;
@@ -48,6 +64,12 @@ export type IncidentSignalInput = {
 	fingerprint: string;
 	/** Provider delivery id (GitHub `x-github-delivery`); audit only. */
 	deliveryId?: string | null;
+	/** Bounded display evidence (0016); empty when the source has none. */
+	title?: string;
+	summary?: string;
+	links?: readonly IncidentLink[];
+	/** Initial occurrence count; a dedupe hit always increments it by one. */
+	occurrenceCount?: number;
 	/** Delivery time; defaults to the moment the intake calls the repository. */
 	receivedAt?: Date;
 };
@@ -60,6 +82,10 @@ export type NormalizedIncidentSignal = {
 	service: string;
 	fingerprint: string;
 	deliveryId: string | null;
+	title: string;
+	summary: string;
+	links: IncidentLink[];
+	occurrenceCount: number;
 	receivedAt: Date;
 };
 
@@ -189,6 +215,48 @@ export function normalizeIncidentSignalInput(
 					"deliveryId",
 					MAX_INCIDENT_DELIVERY_ID_CHARS,
 				);
+	const title = input.title ?? "";
+	if (typeof title !== "string") {
+		throw new Error("title must be a string");
+	}
+	const normalizedTitle = title.trim();
+	if (normalizedTitle.length > MAX_INCIDENT_TITLE_DB_CHARS) {
+		throw new Error(
+			`title must be at most ${MAX_INCIDENT_TITLE_DB_CHARS} characters`,
+		);
+	}
+	const summary = input.summary ?? "";
+	if (typeof summary !== "string") {
+		throw new Error("summary must be a string");
+	}
+	if (summary.length > MAX_INCIDENT_SUMMARY_DB_CHARS) {
+		throw new Error(
+			`summary must be at most ${MAX_INCIDENT_SUMMARY_DB_CHARS} characters`,
+		);
+	}
+	const rawLinks = input.links ?? [];
+	if (!Array.isArray(rawLinks) || rawLinks.length > MAX_INCIDENT_LINKS) {
+		throw new Error(
+			`links must be an array of at most ${MAX_INCIDENT_LINKS} entries`,
+		);
+	}
+	const links = rawLinks.map((link) => {
+		const parsed = incidentLinkSchema.safeParse(link);
+		if (!parsed.success) {
+			throw new Error("links must be bounded label/https-url pairs");
+		}
+		return parsed.data;
+	});
+	const occurrenceCount = input.occurrenceCount ?? 1;
+	if (
+		!Number.isSafeInteger(occurrenceCount) ||
+		occurrenceCount < 1 ||
+		occurrenceCount > MAX_INCIDENT_OCCURRENCES
+	) {
+		throw new Error(
+			`occurrenceCount must be an integer between 1 and ${MAX_INCIDENT_OCCURRENCES}`,
+		);
+	}
 	return {
 		organizationId: input.organizationId,
 		source: requireBoundedText(
@@ -209,6 +277,10 @@ export function normalizeIncidentSignalInput(
 			MAX_INCIDENT_FINGERPRINT_CHARS,
 		),
 		deliveryId,
+		title: normalizedTitle,
+		summary,
+		links,
+		occurrenceCount,
 		receivedAt: new Date(receivedAt.getTime()),
 	};
 }
@@ -274,10 +346,18 @@ const STMT = {
 	// `DO NOTHING` covers any unique violation and there is exactly one.
 	insert: `INSERT INTO incident_signals (
 		organization_id, source, kind, severity, service, fingerprint,
-		delivery_id, received_at
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+		delivery_id, title, summary, links, occurrence_count, received_at
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text::jsonb, $11,
+		$12::timestamptz)
 	ON CONFLICT DO NOTHING
 	RETURNING id`,
+	// A dedupe hit advances correlation state and refreshes the bounded display
+	// projection. Tenant-scoped, so a replay can never touch another org's row.
+	touchExisting: `UPDATE incident_signals
+		SET occurrence_count = occurrence_count + 1,
+			title = $4, summary = $5, links = $6::text::jsonb
+		WHERE organization_id = $1 AND id = $2 AND source = $3
+		RETURNING id`,
 	// Same dedupe key as the index: tenant, source, fingerprint and bucket.
 	findByDedupeKey: `SELECT id FROM incident_signals
 		WHERE organization_id = $1
@@ -319,13 +399,18 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			signal.service,
 			signal.fingerprint,
 			signal.deliveryId,
+			signal.title,
+			signal.summary,
+			JSON.stringify(signal.links),
+			signal.occurrenceCount,
 			receivedAt,
 		])) as unknown as Record<string, unknown>[];
 		if (inserted.length > 0) {
 			return { ok: true, signalId: String(inserted[0].id), created: true };
 		}
 		// Dedupe hit (possibly a concurrent insert): read the surviving row by
-		// the same key instead of failing or creating a second signal.
+		// the same key instead of failing or creating a second signal, then
+		// advance its occurrence counter.
 		const existing = (await this.sql.unsafe(STMT.findByDedupeKey, [
 			signal.organizationId,
 			signal.source,
@@ -337,7 +422,16 @@ export class PostgresIncidentRepository implements IncidentRepository {
 				"incident signal insert conflicted but no row matches the dedupe key",
 			);
 		}
-		return { ok: true, signalId: String(existing[0].id), created: false };
+		const signalId = String(existing[0].id);
+		await this.sql.unsafe(STMT.touchExisting, [
+			signal.organizationId,
+			signalId,
+			signal.source,
+			signal.title,
+			signal.summary,
+			JSON.stringify(signal.links),
+		]);
+		return { ok: true, signalId, created: false };
 	}
 
 	async getLatestSignal(
@@ -413,6 +507,10 @@ export class PostgresIncidentRepository implements IncidentRepository {
 				signal.service,
 				signal.fingerprint,
 				signal.deliveryId,
+				signal.title,
+				signal.summary,
+				JSON.stringify(signal.links),
+				signal.occurrenceCount,
 				receivedAt,
 			])) as unknown as Record<string, unknown>[];
 			if (inserted.length > 0) {
@@ -434,9 +532,18 @@ export class PostgresIncidentRepository implements IncidentRepository {
 					"incident signal insert conflicted but no row matches the dedupe key",
 				);
 			}
+			const signalId = String(existing[0].id);
+			await tx.unsafe(STMT.touchExisting, [
+				signal.organizationId,
+				signalId,
+				signal.source,
+				signal.title,
+				signal.summary,
+				JSON.stringify(signal.links),
+			]);
 			return {
 				ok: true as const,
-				signalId: String(existing[0].id),
+				signalId,
 				created: false,
 				capped: false,
 			};

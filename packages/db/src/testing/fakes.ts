@@ -167,6 +167,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			retry_depth: 0,
 			incident_source: incident.incidentSource,
 			incident_fingerprint: incident.incidentFingerprint,
+			autonomy_level: "A2",
 			created_by: input.createdBy as TaskRow["created_by"],
 			created_at: now,
 			updated_at: now,
@@ -332,6 +333,7 @@ export class InMemoryTaskRepository implements TaskRepository {
 			// columns column-to-column).
 			incident_source: source.incident_source,
 			incident_fingerprint: source.incident_fingerprint,
+			autonomy_level: source.autonomy_level,
 			created_by: source.created_by,
 			created_at: now,
 			updated_at: now,
@@ -370,6 +372,12 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 				incidentDedupeBucketStart(row.receivedAt) === bucket,
 		);
 		if (existing) {
+			// Same correlation semantics as the driver: a dedupe hit advances the
+			// occurrence counter and refreshes the bounded display projection.
+			existing.occurrenceCount += 1;
+			existing.title = signal.title;
+			existing.summary = signal.summary;
+			existing.links = signal.links.map((link) => ({ ...link }));
 			return { ok: true, signalId: existing.id, created: false };
 		}
 		const id = crypto.randomUUID();

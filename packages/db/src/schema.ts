@@ -1,7 +1,15 @@
 import type {
 	AcceptanceCheck,
 	ApprovalId,
+	AutonomyLevel,
+	EventDeliveryStatus,
+	EventVerificationMethod,
+	GitHubAccountType,
+	GitHubInstallationStatus,
+	GitHubRepositorySelection,
+	IncidentLink,
 	IncidentSeverity,
+	IntegrationConnectorId,
 	IntegrationId,
 	OrganizationId,
 	RepositoryId,
@@ -57,6 +65,8 @@ export type RepositoryRow = {
 	// repository layer; the DB CHECK enforces the length only.
 	validation_command: string | null;
 	validation_timeout_ms: number; // 1000..900000 ms, default 300000
+	/** GitHub App installation (0016); NULL keeps legacy registrations. */
+	github_installation_id: string | null;
 	created_at: Date;
 };
 
@@ -224,6 +234,8 @@ export type TaskRow = {
 	 */
 	incident_source: string | null;
 	incident_fingerprint: string | null;
+	/** A0-A3 autonomy (0016); default A2 for rows created before wave 23. */
+	autonomy_level: AutonomyLevel;
 	created_by: UserId;
 	created_at: Date;
 	updated_at: Date;
@@ -380,6 +392,73 @@ export type IncidentSignalRow = {
 	service: string;
 	fingerprint: string;
 	delivery_id: string | null;
+	/** Bounded display evidence added by 0016; never a provider payload. */
+	title: string;
+	summary: string;
+	links: IncidentLink[];
+	occurrence_count: number;
 	received_at: Date;
+	created_at: Date;
+};
+
+/**
+ * One GitHub App installation per organization (migration 0016). The numeric
+ * installation id is stored as a string because PostgreSQL `bigint` exceeds
+ * JavaScript's safe-integer range; no token or App key is stored here.
+ */
+export type GitHubInstallationRow = {
+	id: string;
+	organization_id: OrganizationId;
+	installation_id: string;
+	account_login: string;
+	account_type: GitHubAccountType;
+	repository_selection: GitHubRepositorySelection;
+	status: GitHubInstallationStatus;
+	created_by: UserId | null;
+	created_at: Date;
+	updated_at: Date;
+};
+
+/** Tenant-scoped trigger rule (migration 0016). No credential column. */
+export type IntegrationSubscriptionRow = {
+	id: string;
+	organization_id: OrganizationId;
+	connector_id: IntegrationConnectorId;
+	display_name: string;
+	event_kinds: string[];
+	environment_allowlist: string[];
+	min_severity: IncidentSeverity;
+	repository_id: RepositoryId | null;
+	base_branch: string | null;
+	autonomy_level: AutonomyLevel;
+	enabled: boolean;
+	config: Record<string, unknown>;
+	created_by: UserId | null;
+	created_at: Date;
+	updated_at: Date;
+};
+
+/**
+ * Bounded delivery receipt (migration 0016). A row keeps a body hash and
+ * bounded display fields, never the provider body or a credential.
+ */
+export type EventDeliveryRow = {
+	id: string;
+	organization_id: OrganizationId;
+	connector_id: IntegrationConnectorId;
+	subscription_id: string | null;
+	delivery_id: string | null;
+	source: string;
+	event_kind: string;
+	severity: IncidentSeverity;
+	fingerprint: string;
+	verification: EventVerificationMethod;
+	status: EventDeliveryStatus;
+	reason_code: string | null;
+	signal_id: string | null;
+	task_id: TaskId | null;
+	body_sha256: string;
+	received_at: Date;
+	processed_at: Date | null;
 	created_at: Date;
 };

@@ -23,6 +23,7 @@ export * from "./datadog/webhook";
 export * from "./github/auth";
 export * from "./github/context";
 export * from "./github/incidents";
+export * from "./github/installations";
 export * from "./github/pull-requests";
 export * from "./github/redact";
 export * from "./github/rest-client";

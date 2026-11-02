@@ -6,5 +6,6 @@ export * from "./connector-devices-fake";
 export * from "./connector-usage-ledger-fake";
 export * from "./execution-truth-fakes";
 export * from "./fakes";
+export * from "./integration-events-fakes";
 export * from "./rate-limit-fake";
 export * from "./workflow-compilation";

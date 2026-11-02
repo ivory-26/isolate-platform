@@ -2,18 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-	ArtifactRow,
-	PgSql,
-	RepositoryRepository,
-	RepositoryRow,
-	RunEventRow,
-	TaskAttemptRow,
-	TaskRepository,
-	TaskRow,
+import {
+	InMemoryGitHubInstallationRepository,
+	type ArtifactRow,
+	type PgSql,
+	type RepositoryRepository,
+	type RepositoryRow,
+	type RunEventRow,
+	type TaskAttemptRow,
+	type TaskRepository,
+	type TaskRow,
 } from "@isolate/db";
 import { NullProvider } from "@isolate/sandbox";
-import type { Logger, OrganizationId, TaskId } from "@isolate/shared";
+import {
+	asOrganizationId,
+	type Logger,
+	type OrganizationId,
+	type TaskId,
+} from "@isolate/shared";
 import { workerConfigSchema } from "./config";
 import {
 	createConfiguredConnectorTools,
@@ -27,6 +33,8 @@ import {
 	loadValidationPolicyForTask,
 	parseGitHubFullName,
 	readInferenceProvider,
+	resolveGitHubInstallationIdForOrganization,
+	selectGitHubAppCredentials,
 	selectGitHubTokenProvider,
 	selectRuntimeFactory,
 	selectSandboxProvider,
@@ -568,6 +576,133 @@ describe("wave-13 incident context seam", () => {
 		);
 		expect(composed.githubAuth).toBe(true);
 		expect(typeof composed.overrides.loadContextBundle).toBe("function");
+	});
+});
+
+describe("wave 23 per-organization GitHub installation", () => {
+	const ORG_A = asOrganizationId("11111111-1111-4111-8111-111111111111");
+	const ORG_B = asOrganizationId("22222222-2222-4222-8222-222222222222");
+
+	test("an active tenant installation wins over the legacy fallback", async () => {
+		const installations = new InMemoryGitHubInstallationRepository();
+		await installations.upsert({
+			organizationId: ORG_A,
+			installationId: "123",
+			accountLogin: "acme",
+			accountType: "Organization",
+			repositorySelection: "selected",
+		});
+		expect(
+			await resolveGitHubInstallationIdForOrganization({
+				organizationId: ORG_A,
+				installations,
+				fallbackInstallationId: "999",
+			}),
+		).toBe("123");
+	});
+
+	test("falls back only when no active tenant installation exists", async () => {
+		const installations = new InMemoryGitHubInstallationRepository();
+		expect(
+			await resolveGitHubInstallationIdForOrganization({
+				organizationId: ORG_B,
+				installations,
+				fallbackInstallationId: "999",
+			}),
+		).toBe("999");
+		expect(
+			await resolveGitHubInstallationIdForOrganization({
+				organizationId: ORG_B,
+				installations: null,
+				fallbackInstallationId: "999",
+			}),
+		).toBe("999");
+		await installations.upsert({
+			organizationId: ORG_B,
+			installationId: "456",
+			accountLogin: "acme",
+			accountType: "Organization",
+			repositorySelection: "all",
+		});
+		await installations.revoke(ORG_B, "456");
+		expect(
+			await resolveGitHubInstallationIdForOrganization({
+				organizationId: ORG_B,
+				installations,
+				fallbackInstallationId: "999",
+			}),
+		).toBe("999");
+	});
+
+	test("fails closed without borrowing a fallback on a database error", async () => {
+		const broken = {
+			async findActiveByOrganization() {
+				throw new Error("database unavailable");
+			},
+		};
+		expect(
+			await resolveGitHubInstallationIdForOrganization({
+				organizationId: ORG_A,
+				installations: broken,
+				fallbackInstallationId: "999",
+			}),
+		).toBeNull();
+	});
+
+	test("rejects invalid organizations and malformed fallbacks", async () => {
+		for (const organizationId of ["", "   "]) {
+			expect(
+				await resolveGitHubInstallationIdForOrganization({
+					organizationId: organizationId as OrganizationId,
+					installations: null,
+					fallbackInstallationId: "999",
+				}),
+			).toBeNull();
+		}
+		for (const fallbackInstallationId of ["0", "-1", "12ab", "1".repeat(21), null]) {
+			expect(
+				await resolveGitHubInstallationIdForOrganization({
+					organizationId: ORG_A,
+					installations: null,
+					fallbackInstallationId,
+				}),
+			).toBeNull();
+		}
+	});
+
+	test("App credentials no longer require a deployment-bound installation id", async () => {
+		const credentials = selectGitHubAppCredentials({
+			GITHUB_APP_ID: "1",
+			GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+		});
+		expect(credentials).toMatchObject({ appId: "1", installationId: null });
+
+		// Boot with credentials but no installation id: no network call is made,
+		// and the GitHub seams are bound so a tenant row can be resolved later.
+		const composed = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+			},
+			{ createDb: () => ({}) as PgSql },
+		);
+		expect(composed.githubAuth).toBe(true);
+		expect(typeof composed.overrides.loadContextBundle).toBe("function");
+		expect(composed.overrides.resolveSandboxEnv).toBeUndefined();
+	});
+
+	test("partial App credentials still fail closed", () => {
+		expect(() =>
+			selectGitHubAppCredentials({ GITHUB_APP_INSTALLATION_ID: "2" }),
+		).toThrow(/GITHUB_APP_ID/);
+		expect(() =>
+			selectGitHubAppCredentials({
+				GITHUB_APP_ID: "1",
+				GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----",
+			}),
+		).toThrow(/incomplete/);
 	});
 });
 

@@ -37,6 +37,10 @@ import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
 import { Route as ApiDeviceRegisterRouteImport } from './routes/api.device.register'
 import { Route as ApiDeviceRevokeRouteImport } from './routes/api.device.revoke'
 import { Route as ApiDeviceRotateRouteImport } from './routes/api.device.rotate'
+import { Route as ApiGithubCallbackRouteImport } from './routes/api.github.callback'
+import { Route as ApiGithubInstallRouteImport } from './routes/api.github.install'
+import { Route as ApiGithubRepositoriesRouteImport } from './routes/api.github.repositories'
+import { Route as ApiRepositoriesImportRouteImport } from './routes/api.repositories.import'
 import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
@@ -180,6 +184,26 @@ const ApiDeviceRotateRoute = ApiDeviceRotateRouteImport.update({
   path: '/api/device/rotate',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGithubCallbackRoute = ApiGithubCallbackRouteImport.update({
+  id: '/api/github/callback',
+  path: '/api/github/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubInstallRoute = ApiGithubInstallRouteImport.update({
+  id: '/api/github/install',
+  path: '/api/github/install',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubRepositoriesRoute = ApiGithubRepositoriesRouteImport.update({
+  id: '/api/github/repositories',
+  path: '/api/github/repositories',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRepositoriesImportRoute = ApiRepositoriesImportRouteImport.update({
+  id: '/api/repositories/import',
+  path: '/api/repositories/import',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTracesTaskIdRoute = ApiTracesTaskIdRouteImport.update({
   id: '/api/traces/$taskId',
   path: '/api/traces/$taskId',
@@ -224,6 +248,10 @@ export interface FileRoutesByFullPath {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/install': typeof ApiGithubInstallRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
@@ -255,6 +283,10 @@ export interface FileRoutesByTo {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/install': typeof ApiGithubInstallRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
@@ -289,6 +321,10 @@ export interface FileRoutesById {
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/install': typeof ApiGithubInstallRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
@@ -323,6 +359,10 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/github/callback'
+    | '/api/github/install'
+    | '/api/github/repositories'
+    | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
@@ -354,6 +394,10 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/github/callback'
+    | '/api/github/install'
+    | '/api/github/repositories'
+    | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
@@ -387,6 +431,10 @@ export interface FileRouteTypes {
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
+    | '/api/github/callback'
+    | '/api/github/install'
+    | '/api/github/repositories'
+    | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
     | '/api/device/calls/$id/result'
@@ -409,6 +457,10 @@ export interface RootRouteChildren {
   ApiDeviceRegisterRoute: typeof ApiDeviceRegisterRoute
   ApiDeviceRevokeRoute: typeof ApiDeviceRevokeRoute
   ApiDeviceRotateRoute: typeof ApiDeviceRotateRoute
+  ApiGithubCallbackRoute: typeof ApiGithubCallbackRoute
+  ApiGithubInstallRoute: typeof ApiGithubInstallRoute
+  ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
+  ApiRepositoriesImportRoute: typeof ApiRepositoriesImportRoute
   ApiTracesTaskIdRoute: typeof ApiTracesTaskIdRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
   ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
@@ -612,6 +664,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDeviceRotateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/github/callback': {
+      id: '/api/github/callback'
+      path: '/api/github/callback'
+      fullPath: '/api/github/callback'
+      preLoaderRoute: typeof ApiGithubCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/install': {
+      id: '/api/github/install'
+      path: '/api/github/install'
+      fullPath: '/api/github/install'
+      preLoaderRoute: typeof ApiGithubInstallRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/repositories': {
+      id: '/api/github/repositories'
+      path: '/api/github/repositories'
+      fullPath: '/api/github/repositories'
+      preLoaderRoute: typeof ApiGithubRepositoriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/repositories/import': {
+      id: '/api/repositories/import'
+      path: '/api/repositories/import'
+      fullPath: '/api/repositories/import'
+      preLoaderRoute: typeof ApiRepositoriesImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/traces/$taskId': {
       id: '/api/traces/$taskId'
       path: '/api/traces/$taskId'
@@ -703,6 +783,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDeviceRegisterRoute: ApiDeviceRegisterRoute,
   ApiDeviceRevokeRoute: ApiDeviceRevokeRoute,
   ApiDeviceRotateRoute: ApiDeviceRotateRoute,
+  ApiGithubCallbackRoute: ApiGithubCallbackRoute,
+  ApiGithubInstallRoute: ApiGithubInstallRoute,
+  ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
+  ApiRepositoriesImportRoute: ApiRepositoriesImportRoute,
   ApiTracesTaskIdRoute: ApiTracesTaskIdRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
   ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,

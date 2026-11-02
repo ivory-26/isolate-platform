@@ -92,6 +92,7 @@ export class InMemoryRepositoryRepository implements RepositoryRepository {
 			default_branch: validated.defaultBranch,
 			validation_command: null,
 			validation_timeout_ms: DEFAULT_VALIDATION_TIMEOUT_MS,
+			github_installation_id: validated.githubInstallationId,
 			created_at: this.clock(),
 		};
 		this.rows.set(row.id, row);

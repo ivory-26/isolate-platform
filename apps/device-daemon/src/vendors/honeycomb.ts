@@ -5,7 +5,12 @@ import {
 	listHoneycombSlos,
 	runHoneycombQuery,
 } from "@isolate/integrations";
-import { type Env, type HoneycombVendorConfig, resolveSecret } from "../config";
+import {
+	type Env,
+	type HoneycombVendorConfig,
+	resolveVendorSecret,
+	type SecretLookup,
+} from "../config";
 import type { ToolHandler } from "../contracts";
 import {
 	parseContextFingerprint,
@@ -44,14 +49,23 @@ function honeycombQueryKind(value: string): HoneycombQueryKind | null {
 	return HONEYCOMB_QUERY_KINDS.find((candidate) => candidate === value) ?? null;
 }
 
-/** Honeycomb handlers: environment-scoped key bound to one dataset. */
+/** Honeycomb handlers: paired key first, legacy env var second; one dataset. */
 export function createHoneycombHandlers(
 	config: HoneycombVendorConfig,
 	env: Env,
 	fetchImpl: typeof fetch,
+	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (): HoneycombToolDependencies | null => {
-		const apiKey = resolveSecret(config.secretEnv, "apiKey", env);
+	const dependencies = (
+		credentialRef: string,
+	): HoneycombToolDependencies | null => {
+		const apiKey = resolveVendorSecret(
+			config.secretEnv,
+			"apiKey",
+			env,
+			credentialRef,
+			secretStore,
+		);
 		if (apiKey === null) return null;
 		return {
 			apiKey,
@@ -66,19 +80,19 @@ export function createHoneycombHandlers(
 		};
 	};
 	return {
-		"honeycomb.run_query": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"honeycomb.run_query": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				runHoneycombQuery(deps, params),
 			),
-		"honeycomb.get_trigger": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"honeycomb.get_trigger": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				getHoneycombTrigger(deps, params),
 			),
-		"honeycomb.list_slos": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"honeycomb.list_slos": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				listHoneycombSlos(deps, params),
 			),
-		"honeycomb.context.fetch": async (params) => {
+		"honeycomb.context.fetch": async (params, context) => {
 			const parsed = readContextParams(params);
 			if (parsed === null) return failure("VALIDATION_FAILED");
 			const ref = parseContextFingerprint(
@@ -100,7 +114,7 @@ export function createHoneycombHandlers(
 				if (requested === null) return failure("VALIDATION_FAILED");
 				kind = requested;
 			}
-			return withDependencies(dependencies(), (deps) =>
+			return withDependencies(dependencies(context.credentialRef), (deps) =>
 				fetchHoneycombIncidentContext(
 					{
 						...deps,

@@ -8,8 +8,9 @@ import { z } from "zod";
  *
  * The daemon is the only place a provider key lives. This module validates the
  * non-secret selector file (`ISOLATE_DEVICE_CONFIG` or
- * `~/.isolate/connectors.json`) and resolves provider secrets from the
- * daemon's own environment, as named by `vendors.<vendor>.secretEnv`.
+ * `~/.isolate/connectors.json`) and resolves provider secrets from the daemon's
+ * encrypted local store first, then from its own environment, as named by
+ * `vendors.<vendor>.secretEnv` (compatibility only).
  *
  * Rules:
  * - Every object is strict: an unknown key is a configuration error, never a
@@ -17,8 +18,8 @@ import { z } from "zod";
  * - Provider URLs are https-only with no userinfo, query or fragment.
  * - Errors name a field path and a Zod code; they never echo a value, so a
  *   secret pasted into the wrong field cannot appear in a log.
- * - A keychain adapter is a later seam: `resolveSecret` is the single function
- *   that would read the OS keychain instead of `process.env`.
+ * - The paired secret store is the product path; `resolveSecret` remains the
+ *   env-var fallback for existing installs.
  */
 
 export const DEVICE_CONFIG_PATH_ENV = "ISOLATE_DEVICE_CONFIG";
@@ -27,6 +28,18 @@ export const DEFAULT_DEVICE_CONFIG_PATH = join(
 	".isolate",
 	"connectors.json",
 );
+
+/** Device-local encrypted secret store (0600, AES-256-GCM). */
+export const DEVICE_SECRETS_PATH_ENV = "ISOLATE_DEVICE_SECRETS";
+export const DEFAULT_DEVICE_SECRETS_PATH = join(
+	homedir(),
+	".isolate",
+	"secrets.json",
+);
+
+/** Localhost pairing page: loopback only, configurable port. */
+export const PAIRING_LOOPBACK_HOST = "127.0.0.1";
+export const PAIRING_DEFAULT_PORT = 47821;
 
 /** `generateConnectorDeviceToken()` produces 32 bytes as 43 base64url chars. */
 export const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -217,12 +230,23 @@ const signozVendorSchema = z.strictObject({
 	timeoutMs: timeoutSchema.optional(),
 });
 
+const pairingSchema = z
+	.strictObject({
+		/** The localhost pairing page; no network exposure beyond loopback. */
+		enabled: z.boolean().default(true),
+		port: z.number().int().min(1024).max(65_535).default(PAIRING_DEFAULT_PORT),
+		/** Overrides `~/.isolate/secrets.json`; never a secret itself. */
+		secretsPath: z.string().trim().min(1).max(1024).optional(),
+	})
+	.default({ enabled: true, port: PAIRING_DEFAULT_PORT });
+
 export const deviceConfigSchema = z.strictObject({
 	/** Platform origin; the daemon appends `/api/device/...` itself. */
 	serverUrl: serverOriginSchema,
 	/** Name of the env var holding the 43-character device token. */
 	deviceTokenEnv: envNameSchema,
 	pollIntervalMs: z.number().int().min(250).max(60_000).default(2_000),
+	pairing: pairingSchema,
 	vendors: z
 		.strictObject({
 			sentry: sentryVendorSchema.optional(),
@@ -239,6 +263,7 @@ export const deviceConfigSchema = z.strictObject({
 });
 
 export type DeviceConfig = z.output<typeof deviceConfigSchema>;
+export type PairingConfig = z.output<typeof pairingSchema>;
 export type Env = Record<string, string | undefined>;
 export type SentryVendorConfig = z.output<typeof sentryVendorSchema>;
 export type GrafanaVendorConfig = z.output<typeof grafanaVendorSchema>;
@@ -262,6 +287,19 @@ export function resolveConfigPath(env: Env = process.env): string {
 	return override !== undefined && override.length > 0
 		? override
 		: DEFAULT_DEVICE_CONFIG_PATH;
+}
+
+/**
+ * `ISOLATE_DEVICE_SECRETS` wins, then `pairing.secretsPath`, then
+ * `~/.isolate/secrets.json`. The path is a location, never a secret.
+ */
+export function resolveSecretsPath(
+	config: DeviceConfig,
+	env: Env = process.env,
+): string {
+	const override = env[DEVICE_SECRETS_PATH_ENV]?.trim();
+	if (override !== undefined && override.length > 0) return override;
+	return config.pairing.secretsPath ?? DEFAULT_DEVICE_SECRETS_PATH;
 }
 
 /**
@@ -314,9 +352,9 @@ export function readDeviceToken(config: DeviceConfig, env: Env): string {
 /**
  * Resolves one provider secret by the env var name in `secretEnv`.
  *
- * This is the keychain seam: a later adapter would look up
- * `keychain:isolate/<vendor>/<field>` here instead of reading the environment.
- * A missing or empty value returns `null`; the caller fails closed and no
+ * Compatibility path only: new connections store the secret in the encrypted
+ * device-local store and resolve it through `resolveVendorSecret` first. A
+ * missing or empty value returns `null`; the caller fails closed and no
  * provider call is made.
  */
 export function resolveSecret(
@@ -330,6 +368,46 @@ export function resolveSecret(
 	if (typeof value !== "string") return null;
 	const trimmed = value.trim();
 	return trimmed.length === 0 ? null : trimmed;
+}
+
+/** Read-only view of the encrypted local secret store used at dispatch time. */
+export type SecretLookup = {
+	getFields(credentialRef: string): Readonly<Record<string, string>> | null;
+};
+
+function nonEmpty(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * Store-first secret resolution.
+ *
+ * 1. The paired entry for `credentialRef` is checked for the exact field name
+ *    (for example `apiKey`), so a multi-field secret is unambiguous.
+ * 2. A single-value entry satisfies any field name: a simple pairing page can
+ *    store one pasted key without knowing the vendor's field vocabulary.
+ * 3. Only then does the legacy env-var name apply.
+ */
+export function resolveVendorSecret(
+	secretEnv: Record<string, string> | undefined,
+	field: string,
+	env: Env,
+	credentialRef: string,
+	store?: SecretLookup,
+): string | null {
+	const fields = store?.getFields(credentialRef) ?? null;
+	if (fields !== null) {
+		const direct = nonEmpty(fields[field]);
+		if (direct !== null) return direct;
+		const values = Object.values(fields);
+		if (values.length === 1) {
+			const only = nonEmpty(values[0]);
+			if (only !== null) return only;
+		}
+	}
+	return resolveSecret(secretEnv, field, env);
 }
 
 /** Boot summary: configured vendor names only, sorted, never a secret. */

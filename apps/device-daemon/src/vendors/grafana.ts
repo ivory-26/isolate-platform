@@ -5,7 +5,12 @@ import {
 	queryGrafanaLogs,
 	queryGrafanaMetrics,
 } from "@isolate/integrations";
-import { type Env, type GrafanaVendorConfig, resolveSecret } from "../config";
+import {
+	type Env,
+	type GrafanaVendorConfig,
+	resolveVendorSecret,
+	type SecretLookup,
+} from "../config";
 import type { ToolHandler } from "../contracts";
 import {
 	parseContextFingerprint,
@@ -16,15 +21,25 @@ import { failure, withDependencies } from "./shared";
 
 /**
  * Grafana handlers. The datasource UIDs are configuration, not tool input: the
- * model cannot select another datasource or compose a query.
+ * model cannot select another datasource or compose a query. The token resolves
+ * from the paired store first, then the legacy env var.
  */
 export function createGrafanaHandlers(
 	config: GrafanaVendorConfig,
 	env: Env,
 	fetchImpl: typeof fetch,
+	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (): GrafanaContextDependencies | null => {
-		const token = resolveSecret(config.secretEnv, "token", env);
+	const dependencies = (
+		credentialRef: string,
+	): GrafanaContextDependencies | null => {
+		const token = resolveVendorSecret(
+			config.secretEnv,
+			"token",
+			env,
+			credentialRef,
+			secretStore,
+		);
 		if (token === null) return null;
 		return {
 			baseUrl: config.baseUrl,
@@ -43,19 +58,19 @@ export function createGrafanaHandlers(
 		};
 	};
 	return {
-		"grafana.query_metrics": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"grafana.query_metrics": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				queryGrafanaMetrics(deps, params),
 			),
-		"grafana.query_logs": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"grafana.query_logs": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				queryGrafanaLogs(deps, params),
 			),
-		"grafana.get_alert_rule": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"grafana.get_alert_rule": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				getGrafanaAlertRule(deps, params),
 			),
-		"grafana.context.fetch": async (params) => {
+		"grafana.context.fetch": async (params, context) => {
 			const parsed = readContextParams(params);
 			if (parsed === null) return failure("VALIDATION_FAILED");
 			const ref = parseContextFingerprint(
@@ -66,7 +81,7 @@ export function createGrafanaHandlers(
 			if (ref === null || service === null) {
 				return failure("VALIDATION_FAILED");
 			}
-			return withDependencies(dependencies(), (deps) =>
+			return withDependencies(dependencies(context.credentialRef), (deps) =>
 				fetchGrafanaContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					service,

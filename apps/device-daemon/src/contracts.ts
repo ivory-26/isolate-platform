@@ -79,6 +79,11 @@ export function claimedCalls(response: ClaimResponse): DeviceCall[] {
 
 export type ToolParams = Record<string, unknown>;
 
+/** Per-call context: which device-side secret slot this call may resolve. */
+export type ToolContext = {
+	readonly credentialRef: string;
+};
+
 export type DispatchSuccess = {
 	readonly ok: true;
 	readonly data: Record<string, unknown>;
@@ -91,7 +96,10 @@ export type DispatchFailure = {
 
 export type DispatchOutcome = DispatchSuccess | DispatchFailure;
 
-export type ToolHandler = (params: ToolParams) => Promise<DispatchOutcome>;
+export type ToolHandler = (
+	params: ToolParams,
+	context: ToolContext,
+) => Promise<DispatchOutcome>;
 
 export type DeviceDispatcher = (call: DeviceCall) => Promise<DispatchOutcome>;
 

@@ -1,19 +1,28 @@
-import { describeVendors, loadDeviceConfig, readDeviceToken } from "./config";
+import {
+	describeVendors,
+	loadDeviceConfig,
+	readDeviceToken,
+	resolveSecretsPath,
+} from "./config";
 import { createDispatcher } from "./dispatch";
 import { createConsoleLogger } from "./logger";
+import { startPairingServer } from "./pairing-server";
 import { runPollLoop } from "./poll";
+import { openSecretStore } from "./secret-store";
 
 /**
  * Device daemon entry point.
  *
  * Boot order: load and validate the device-local config, read the bearer token
- * from the daemon's own environment, build the 31-entry connector table, then
- * poll. The startup summary lists configured vendor names and the poll
- * interval only — never a token, env value, provider URL with credentials, tool
- * param or provider response.
+ * from the daemon's own environment, open the encrypted secret store, start the
+ * loopback pairing page when enabled, build the 40-entry connector table, then
+ * poll. The startup summary lists configured vendor names, the poll interval
+ * and the pairing listener URL (never a code or a secret) only — never a token,
+ * env value, provider URL with credentials, tool param or provider response.
  *
  * SIGINT/SIGTERM abort the loop; an in-flight claim or provider call finishes
- * within its own timeout, then the process exits 0.
+ * within its own timeout, then the process exits 0. The pairing listener is
+ * always stopped in `finally`.
  */
 
 export type DaemonMainOptions = {
@@ -33,13 +42,43 @@ export async function runDaemon(
 			: { configPath: options.configPath }),
 	});
 	const deviceToken = readDeviceToken(config, env);
-	const dispatch = createDispatcher({ config, env });
+	const secretStore = await openSecretStore({
+		path: resolveSecretsPath(config, env),
+		deviceToken,
+	});
+	const dispatch = createDispatcher({ config, env, secretStore });
 
 	logger.info("boot", {
 		verdict: "starting",
 		vendors: describeVendors(config).join(",") || "none",
 		pollIntervalMs: config.pollIntervalMs,
+		pairing: config.pairing.enabled ? "enabled" : "disabled",
 	});
+
+	let pairing: Awaited<ReturnType<typeof startPairingServer>> | null = null;
+	if (config.pairing.enabled === true) {
+		try {
+			pairing = await startPairingServer({
+				serverUrl: config.serverUrl,
+				deviceToken,
+				secretStore,
+				port: config.pairing.port,
+				logger,
+			});
+		} catch {
+			// A busy or unavailable local port must not stop connector polling.
+			logger.warn("pairing", { status: "unavailable" });
+		}
+	}
+	if (config.pairing.enabled !== true) {
+		logger.info("pairing", { status: "disabled" });
+	} else if (pairing !== null) {
+		// Visible boot output: the base URL only, never a pairing code.
+		logger.info("pairing", {
+			status: "listening",
+			localUrl: pairing.localUrl,
+		});
+	}
 
 	const controller = new AbortController();
 	const stop = (): void => controller.abort();
@@ -73,6 +112,7 @@ export async function runDaemon(
 	} finally {
 		process.off("SIGINT", stop);
 		process.off("SIGTERM", stop);
+		await pairing?.stop().catch(() => undefined);
 	}
 }
 

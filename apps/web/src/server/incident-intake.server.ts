@@ -34,6 +34,20 @@ import {
 	type SubmissionReceipt,
 	type ValidatedSubmission,
 } from "../features/tasks/contracts";
+import {
+	boundedSignalDisplay,
+	type ConnectorEventHints,
+	type DeliveryReasonCode,
+	deliveryBodyFingerprint,
+	type EventDeliveryLedger,
+	type EventDeliveryVerification,
+	githubEventHints,
+	grafanaEventHints,
+	normalizeDeliveryId,
+	pagerDutyEventHints,
+	sentryEventHints,
+	sha256Hex,
+} from "./incident-delivery.server";
 import type {
 	ConnectorIntakeFailure,
 	ConnectorIntakeOutcome,
@@ -44,6 +58,13 @@ import {
 } from "./incident-intake-grafana.server";
 import { verifyAndNormalizePagerDuty } from "./incident-intake-pagerduty.server";
 import { verifyAndNormalizeSentry } from "./incident-intake-sentry.server";
+import {
+	type IntegrationSubscriptionRecord,
+	resolveSubscriptionMatch,
+	type SubscriptionAutonomyLevel,
+	type SubscriptionEventDescriptor,
+	type SubscriptionRegistry,
+} from "./incident-subscription.server";
 import {
 	RATE_LIMIT_WINDOW_SECONDS,
 	type RateLimitCounter,
@@ -142,6 +163,10 @@ export type IncidentRepositoryRoute = {
 export type ResolveIncidentRepository = (input: {
 	organizationId: OrganizationId;
 	service: string;
+	/** Wave 23: the repository named by the matched subscription, if any. */
+	repositoryId?: string;
+	/** Wave 23: the base branch named by the matched subscription, if any. */
+	baseBranch?: string;
 }) => Promise<IncidentRepositoryRoute | null>;
 
 export type IncidentDedupeKey = {
@@ -292,6 +317,26 @@ export type IncidentIntakeDependencies = {
 	 * modes fail closed (503) without it; generic mode does not use it.
 	 */
 	incidentRepository?: IncidentRepository | null;
+	/**
+	 * Wave 23 subscription registry. Absent keeps the legacy single-binding
+	 * path byte-for-byte; present switches to subscription-aware intake with the
+	 * legacy binding as the fallback when the organization has no subscription.
+	 */
+	subscriptions?: SubscriptionRegistry | null;
+	/**
+	 * Wave 23 delivery ledger. When present every verified/rejected delivery is
+	 * recorded exactly once (dedupe by provider delivery id) and the normalized
+	 * title/summary/links are attached to the signal row.
+	 */
+	deliveries?: EventDeliveryLedger | null;
+	/** Persists the subscription's autonomy level on a created task. */
+	recordTaskAutonomy?:
+		| ((input: {
+				organizationId: OrganizationId;
+				taskId: string;
+				autonomyLevel: SubscriptionAutonomyLevel;
+		  }) => Promise<void>)
+		| null;
 	dedupe: IncidentDedupeStore;
 	/** The existing submission path, already bound to the route's scope. */
 	submitTask: (
@@ -596,22 +641,35 @@ function parseJsonBody(rawBody: string | Uint8Array): unknown | undefined {
  * Resolves the bound repository and submits one task. Shared by both modes so
  * the tenant, ownership and idempotency rules cannot drift; `provenance` is set
  * only by the GitHub path.
+ *
+ * Wave 23 adds an optional pre-resolved route (a subscription's repository
+ * mapping) and autonomy level. The route is still re-validated here, so a
+ * malformed or foreign mapping can never reach the submission path, and A2/A3
+ * submit exactly the same payload as before.
  */
 async function createTaskForSignal(
 	deps: IncidentIntakeDependencies,
 	context: AcceptanceContext,
 	signal: IncidentSignal,
 	provenance?: IncidentProvenance,
+	options: {
+		route?: IncidentRepositoryRoute;
+		autonomyLevel?: SubscriptionAutonomyLevel;
+	} = {},
 ): Promise<IncidentIntakeResult> {
 	const { organizationId, nowMs } = context;
 	let resolved: unknown;
-	try {
-		resolved = await deps.resolveRepository({
-			organizationId,
-			service: signal.service,
-		});
-	} catch {
-		return { ok: false, code: "UNAVAILABLE" };
+	if (options.route !== undefined) {
+		resolved = options.route;
+	} else {
+		try {
+			resolved = await deps.resolveRepository({
+				organizationId,
+				service: signal.service,
+			});
+		} catch {
+			return { ok: false, code: "UNAVAILABLE" };
+		}
 	}
 	if (resolved === null || resolved === undefined)
 		return { ok: false, code: "NOT_FOUND" };
@@ -666,6 +724,23 @@ async function createTaskForSignal(
 		});
 	} catch {
 		// Intentionally ignored; see above.
+	}
+	if (
+		options.autonomyLevel !== undefined &&
+		deps.recordTaskAutonomy !== undefined &&
+		deps.recordTaskAutonomy !== null
+	) {
+		// The task exists; an audit write failure must not turn a durable
+		// acceptance into a provider retry.
+		try {
+			await deps.recordTaskAutonomy({
+				organizationId,
+				taskId: receipt.value.task.id,
+				autonomyLevel: options.autonomyLevel,
+			});
+		} catch {
+			// Intentionally ignored; see above.
+		}
 	}
 	return {
 		ok: true,
@@ -942,9 +1017,903 @@ async function acceptAdapterIncident(
 }
 
 /**
+ * Wave 23: one verified delivery, in the shape the subscription policy and the
+ * delivery ledger need. `signal` is null for lifecycle/non-incident events.
+ */
+type IngestedIncident = {
+	connectorId: string;
+	verification: EventDeliveryVerification;
+	deliveryId: string | null;
+	bodySha256: string;
+	signal: IncidentSignal | null;
+	hints: ConnectorEventHints;
+	eventKind: string;
+	severity: IncidentSeverity;
+	fingerprint: string;
+	lifecycle: "open" | "resolved" | "acknowledged" | "regression";
+};
+
+type IngestFailure = {
+	ok: false;
+	code: IncidentIntakeFailureCode;
+	connectorId: string;
+	verification: EventDeliveryVerification;
+	reasonCode: DeliveryReasonCode;
+};
+
+type IngestResult = { ok: true; event: IngestedIncident } | IngestFailure;
+
+function verificationFor(
+	deps: IncidentIntakeDependencies,
+	headers: IncidentRequestHeaders,
+	mode: IncidentIntakeMode,
+): EventDeliveryVerification {
+	if (mode === "generic") return "shared_hmac";
+	if (
+		mode === "grafana" &&
+		deps.grafanaAllowUnsigned === true &&
+		!hasHeader(headers, GRAFANA_SIGNATURE_HEADER)
+	) {
+		// An explicitly unsigned Grafana contact point has no provider signature
+		// to claim; it is the customer's bridge identity, not a signature.
+		return "bridge_identity";
+	}
+	return "provider_signature";
+}
+
+function rejectionReason(code: IncidentIntakeFailureCode): DeliveryReasonCode {
+	return code === "UNAUTHORIZED" ? "SIGNATURE_REJECTED" : "INVALID_PAYLOAD";
+}
+
+function ingestFailure(
+	code: IncidentIntakeFailureCode,
+	connectorId: string,
+	verification: EventDeliveryVerification,
+): IngestFailure {
+	return {
+		ok: false,
+		code,
+		connectorId,
+		verification,
+		reasonCode: rejectionReason(code),
+	};
+}
+
+/**
+ * Verifies and normalizes one delivery for the managed pipeline. Each mode keeps
+ * its own verifier and normalizer; the only additions are the bounded event
+ * hints (environment/branch/lifecycle) and the body hash. Nothing from the body
+ * selects the mode, tenant, connector or verifier.
+ */
+function ingestIncident(
+	deps: IncidentIntakeDependencies,
+	request: IncidentIntakeRequest,
+	context: AcceptanceContext,
+	mode: IncidentIntakeMode,
+): IngestResult {
+	const verification = verificationFor(deps, request.headers, mode);
+	const bodySha256 = sha256Hex(request.rawBody);
+
+	const failure = (
+		code: IncidentIntakeFailureCode,
+		connectorId: string,
+	): IngestFailure => ingestFailure(code, connectorId, verification);
+
+	if (mode === "generic") {
+		const check = verifyWebhookSignature({
+			rawBody: request.rawBody,
+			timestamp: readWebhookHeader(request.headers, WEBHOOK_TIMESTAMP_HEADER),
+			signature: readWebhookHeader(request.headers, WEBHOOK_SIGNATURE_HEADER),
+			secret: deps.signingSecret,
+			now: context.nowMs,
+		});
+		if (!check.ok) {
+			switch (check.reason) {
+				case "body_too_large":
+					return failure("PAYLOAD_TOO_LARGE", "generic");
+				case "not_configured":
+					return failure("UNAVAILABLE", "generic");
+				default:
+					return failure("UNAUTHORIZED", "generic");
+			}
+		}
+		const body = parseJsonBody(request.rawBody);
+		if (body === undefined) return failure("INVALID_INPUT", "generic");
+		const parsed = incidentSignalSchema.safeParse(body);
+		if (!parsed.success) return failure("INVALID_INPUT", "generic");
+		const signal = parsed.data;
+		return {
+			ok: true,
+			event: {
+				// A signed generic bridge names its source in the body; the source
+				// token is the integration connector the subscription is written for.
+				connectorId: signal.source,
+				verification,
+				deliveryId: null,
+				bodySha256,
+				signal,
+				hints: {
+					environment: null,
+					production: true,
+					branch: null,
+					baseBranch: null,
+					lifecycle: "open",
+					fingerprint: null,
+					severity: signal.severity,
+				},
+				eventKind: signal.kind,
+				severity: signal.severity,
+				fingerprint: signal.fingerprint,
+				lifecycle: "open",
+			},
+		};
+	}
+
+	if (mode === "github") {
+		const check = verifyGitHubWebhook({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.githubSecret,
+		});
+		if (!check.ok) {
+			switch (check.reason) {
+				case "body_too_large":
+					return failure("PAYLOAD_TOO_LARGE", "github");
+				case "not_configured":
+					return failure("UNAVAILABLE", "github");
+				default:
+					return failure("UNAUTHORIZED", "github");
+			}
+		}
+		const body = parseJsonBody(request.rawBody);
+		if (body === undefined) return failure("INVALID_INPUT", "github");
+		const signal = normalizeGitHubIncident(
+			{ name: check.event, payload: body },
+			{
+				id: check.delivery,
+				receivedAt: new Date(context.nowMs).toISOString(),
+			},
+		);
+		const hints = githubEventHints(body, signal?.severity ?? null);
+		return {
+			ok: true,
+			event: {
+				connectorId: "github",
+				verification,
+				deliveryId: normalizeDeliveryId(check.delivery),
+				bodySha256,
+				signal,
+				hints,
+				eventKind: (signal?.kind ?? check.event).slice(0, 64),
+				severity: signal?.severity ?? "info",
+				fingerprint:
+					signal?.fingerprint ?? deliveryBodyFingerprint(request.rawBody),
+				lifecycle: "open",
+			},
+		};
+	}
+
+	let outcome: ConnectorIntakeOutcome;
+	if (mode === "sentry") {
+		outcome = verifyAndNormalizeSentry({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.sentrySecret,
+			nowMs: context.nowMs,
+		});
+	} else if (mode === "grafana") {
+		outcome = verifyAndNormalizeGrafana({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.grafanaSecret,
+			timestampHeader:
+				deps.grafanaTimestampHeader === undefined
+					? GRAFANA_DEFAULT_TIMESTAMP_HEADER
+					: deps.grafanaTimestampHeader,
+			allowUnsigned: deps.grafanaAllowUnsigned === true,
+			nowMs: context.nowMs,
+		});
+	} else {
+		outcome = verifyAndNormalizePagerDuty({
+			rawBody: request.rawBody,
+			headers: request.headers,
+			secret: deps.pagerdutySecret,
+			nowMs: context.nowMs,
+		});
+	}
+	if (!outcome.ok) {
+		return failure(CONNECTOR_FAILURE_CODE[outcome.reason], mode);
+	}
+
+	const body = parseJsonBody(request.rawBody);
+	const hints =
+		mode === "sentry"
+			? sentryEventHints(body)
+			: mode === "grafana"
+				? grafanaEventHints(body)
+				: pagerDutyEventHints(body);
+	const signal = outcome.signal;
+	const lifecycle: IngestedIncident["lifecycle"] =
+		hints.lifecycle !== "open"
+			? hints.lifecycle
+			: signal !== null && signal.kind === "issue_unresolved"
+				? "regression"
+				: "open";
+	const deliveryHeader =
+		mode === "pagerduty"
+			? normalizeDeliveryId(readWebhookHeader(request.headers, "x-webhook-id"))
+			: null;
+	return {
+		ok: true,
+		event: {
+			connectorId: mode,
+			verification,
+			deliveryId: deliveryHeader,
+			bodySha256,
+			signal,
+			hints,
+			eventKind: (signal?.kind ?? `${mode}_lifecycle`).slice(0, 64),
+			severity: signal?.severity ?? hints.severity,
+			fingerprint:
+				signal?.fingerprint ??
+				hints.fingerprint ??
+				deliveryBodyFingerprint(request.rawBody),
+			lifecycle,
+		},
+	};
+}
+
+/** Best-effort ledger row for a delivery rejected before normalization. */
+async function recordRejectedDelivery(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	ingest: IngestFailure,
+	request: IncidentIntakeRequest,
+): Promise<void> {
+	const ledger = deps.deliveries;
+	if (ledger === undefined || ledger === null) return;
+	if (ingest.code === "UNAVAILABLE") return;
+	const receivedAt = new Date(context.nowMs);
+	const deliveryId =
+		normalizeDeliveryId(
+			readWebhookHeader(request.headers, "x-github-delivery") ??
+				readWebhookHeader(request.headers, "x-webhook-id"),
+		) ?? null;
+	try {
+		await ledger.record({
+			organizationId: context.organizationId,
+			connectorId: ingest.connectorId,
+			subscriptionId: null,
+			deliveryId,
+			source: ingest.connectorId,
+			eventKind: "unverified",
+			severity: "info",
+			fingerprint: deliveryBodyFingerprint(request.rawBody),
+			verification: ingest.verification,
+			status: "rejected",
+			reasonCode: ingest.reasonCode,
+			signalId: null,
+			taskId: null,
+			bodySha256: sha256Hex(request.rawBody),
+			receivedAt,
+			processedAt: receivedAt,
+		});
+	} catch {
+		// The rejection is already being reported; a ledger write must never
+		// change the HTTP answer or leak a driver detail.
+	}
+}
+
+type SignalAdmission =
+	| { kind: "prior"; taskId: string; jobId: string }
+	| { kind: "deduplicated"; signalId: string | null }
+	| { kind: "capped" }
+	| { kind: "created"; signalId: string }
+	| { kind: "failed"; code: IncidentIntakeFailureCode };
+
+/**
+ * 30-minute live dedupe, then one transactional admission (signal + cap). The
+ * legacy and subscription paths share it so dedupe and the per-org cap cannot
+ * drift between them.
+ */
+async function admitSignal(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	signal: IncidentSignal,
+	deliveryId: string | null,
+	repository: IncidentRepository,
+): Promise<SignalAdmission> {
+	const prior = await lookupPriorTask(
+		deps,
+		{
+			organizationId: context.organizationId,
+			source: signal.source,
+			fingerprint: signal.fingerprint,
+		},
+		context.nowMs,
+	);
+	if (prior === undefined) return { kind: "failed", code: "UNAVAILABLE" };
+	if (prior !== null) {
+		return { kind: "prior", taskId: prior.taskId, jobId: prior.jobId };
+	}
+	let reserved: Awaited<ReturnType<IncidentRepository["reserveIfNewUnderCap"]>>;
+	try {
+		reserved = await repository.reserveIfNewUnderCap({
+			organizationId: context.organizationId,
+			source: signal.source,
+			kind: signal.kind,
+			severity: signal.severity,
+			service: signal.service,
+			fingerprint: signal.fingerprint,
+			deliveryId,
+			receivedAt: new Date(signal.receivedAt),
+			maxActive: MAX_ACTIVE_INCIDENT_TASKS,
+			activeSince: new Date(context.nowMs - INCIDENT_TASK_CAP_WINDOW_MS),
+			capSources: [signal.source],
+		});
+	} catch {
+		return { kind: "failed", code: "UNAVAILABLE" };
+	}
+	if (reserved.capped) return { kind: "capped" };
+	if (!reserved.created) {
+		return { kind: "deduplicated", signalId: reserved.signalId };
+	}
+	return { kind: "created", signalId: reserved.signalId ?? "" };
+}
+
+async function attachSignalDisplay(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	signal: IncidentSignal,
+	signalId: string | null,
+): Promise<void> {
+	const ledger = deps.deliveries;
+	if (ledger === undefined || ledger === null || signalId === null) return;
+	const display = boundedSignalDisplay(
+		signal.title,
+		signal.summary,
+		signal.links,
+	);
+	try {
+		await ledger.attachSignalDisplay({
+			organizationId: context.organizationId,
+			signalId,
+			...display,
+		});
+	} catch {
+		// Display fields are cosmetic; the task receipt is authoritative.
+	}
+}
+
+type ManagedFinalize = (
+	status:
+		| "rejected"
+		| "deduplicated"
+		| "task_created"
+		| "task_updated"
+		| "ignored",
+	reasonCode: DeliveryReasonCode | null,
+	signalId?: string | null,
+	taskId?: string | null,
+	subscriptionId?: string | null,
+) => Promise<void>;
+
+/**
+ * Subscription-aware task path. Preconditions: the delivery is verified, the
+ * ledger row exists (status `verified`) and the event is not a lifecycle
+ * update. A0/A1 are handled before any repository work.
+ */
+async function acceptSubscriptionTask(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	event: IngestedIncident,
+	signal: IncidentSignal,
+	subscription: IntegrationSubscriptionRecord,
+	finalize: ManagedFinalize,
+	ignored: () => IncidentIntakeResult,
+): Promise<IncidentIntakeResult> {
+	const repository = deps.incidentRepository;
+	if (repository === undefined || repository === null)
+		return { ok: false, code: "UNAVAILABLE" };
+
+	// A0 and A1 never run an agent. A0 only records the event; A1 is not
+	// supported yet, so it is recorded as ignored with an explicit reason rather
+	// than pretending a read-only investigation happened.
+	if (
+		subscription.autonomyLevel === "A0" ||
+		subscription.autonomyLevel === "A1"
+	) {
+		let signalId: string | null = null;
+		try {
+			const recorded = await repository.recordIfNew({
+				organizationId: context.organizationId,
+				source: signal.source,
+				kind: signal.kind,
+				severity: signal.severity,
+				service: signal.service,
+				fingerprint: signal.fingerprint,
+				deliveryId: event.deliveryId,
+				receivedAt: new Date(signal.receivedAt),
+			});
+			signalId = recorded.signalId;
+		} catch {
+			signalId = null;
+		}
+		await attachSignalDisplay(deps, context, signal, signalId);
+		await finalize(
+			"ignored",
+			subscription.autonomyLevel === "A0"
+				? "AUTONOMY_OBSERVE_ONLY"
+				: "AUTONOMY_LEVEL_UNSUPPORTED",
+			signalId,
+			null,
+			subscription.id,
+		);
+		return ignored();
+	}
+
+	let resolved: IncidentRepositoryRoute | null;
+	try {
+		resolved = await deps.resolveRepository({
+			organizationId: context.organizationId,
+			service: signal.service,
+			...(subscription.repositoryId === null
+				? {}
+				: { repositoryId: subscription.repositoryId }),
+			...(subscription.baseBranch === null
+				? {}
+				: { baseBranch: subscription.baseBranch }),
+		});
+	} catch {
+		resolved = null;
+	}
+	if (resolved === null) {
+		await finalize(
+			"rejected",
+			"REPOSITORY_UNMAPPED",
+			null,
+			null,
+			subscription.id,
+		);
+		return { ok: false, code: "NOT_FOUND" };
+	}
+	if (resolved.organizationId !== context.organizationId) {
+		await finalize("rejected", "TENANT_MISMATCH", null, null, subscription.id);
+		return { ok: false, code: "FORBIDDEN" };
+	}
+	if (
+		subscription.repositoryId !== null &&
+		resolved.repositoryId.toLowerCase() !==
+			subscription.repositoryId.toLowerCase()
+	) {
+		// A resolver that answered for a different repository would silently
+		// cross the subscription's mapping; treat it as unmapped.
+		await finalize(
+			"rejected",
+			"REPOSITORY_UNMAPPED",
+			null,
+			null,
+			subscription.id,
+		);
+		return { ok: false, code: "NOT_FOUND" };
+	}
+
+	const admission = await admitSignal(
+		deps,
+		context,
+		signal,
+		event.deliveryId,
+		repository,
+	);
+	switch (admission.kind) {
+		case "failed":
+			await finalize(
+				"rejected",
+				"TASK_SUBMISSION_FAILED",
+				null,
+				null,
+				subscription.id,
+			);
+			return { ok: false, code: admission.code };
+		case "prior":
+			await finalize(
+				"deduplicated",
+				"DUPLICATE_FINGERPRINT",
+				null,
+				admission.taskId,
+				subscription.id,
+			);
+			return {
+				ok: true,
+				taskId: admission.taskId,
+				jobId: admission.jobId,
+				deduped: true,
+			};
+		case "capped":
+			await finalize("ignored", "THROTTLED", null, null, subscription.id);
+			return {
+				ok: true,
+				accepted: false,
+				deduped: false,
+				throttled: true,
+			};
+		case "deduplicated":
+			await finalize(
+				"deduplicated",
+				"DUPLICATE_FINGERPRINT",
+				admission.signalId,
+				null,
+				subscription.id,
+			);
+			return {
+				ok: true,
+				accepted: false,
+				deduped: true,
+				throttled: false,
+			};
+		case "created": {
+			const result = await createTaskForSignal(
+				deps,
+				context,
+				signal,
+				{
+					incidentSource: signal.source,
+					incidentFingerprint: signal.fingerprint,
+				},
+				{ route: resolved, autonomyLevel: subscription.autonomyLevel },
+			);
+			if (!result.ok) {
+				await finalize(
+					"rejected",
+					result.code === "FORBIDDEN"
+						? "TENANT_MISMATCH"
+						: "TASK_SUBMISSION_FAILED",
+					admission.signalId,
+					null,
+					subscription.id,
+				);
+				return result;
+			}
+			if ("taskId" in result) {
+				await finalize(
+					"task_created",
+					null,
+					admission.signalId,
+					result.taskId,
+					subscription.id,
+				);
+			}
+			await attachSignalDisplay(deps, context, signal, admission.signalId);
+			return result;
+		}
+	}
+}
+
+/**
+ * Legacy fallback used when the organization has no subscription for this
+ * connector: the single binding (environment configuration) plus the wave-13
+ * trigger policy. Kept behaviorally identical to `acceptProviderSignal`, with
+ * the delivery ledger recording the outcome.
+ */
+async function acceptLegacyManagedTask(
+	deps: IncidentIntakeDependencies,
+	context: AcceptanceContext,
+	event: IngestedIncident,
+	signal: IncidentSignal,
+	mode: IncidentIntakeMode,
+	finalize: ManagedFinalize,
+	ignored: () => IncidentIntakeResult,
+): Promise<IncidentIntakeResult> {
+	// GitHub keeps its wave-13 trigger policy: critical-with-production in, high
+	// only on the default branch, everything else ignored.
+	if (mode === "github") {
+		const decision = evaluateIncidentTrigger({
+			severity: signal.severity,
+			production: signal.severity === "critical",
+			onDefaultBranch:
+				event.hints.branch !== null &&
+				event.hints.baseBranch !== null &&
+				event.hints.branch === event.hints.baseBranch,
+		});
+		if (!decision.accepted) {
+			await finalize("ignored", "TRIGGER_POLICY_REJECTED");
+			return ignored();
+		}
+	}
+
+	if (mode === "generic") {
+		// Generic mode historically never touched the signal store or the cap.
+		const prior = await lookupPriorTask(
+			deps,
+			{
+				organizationId: context.organizationId,
+				source: signal.source,
+				fingerprint: signal.fingerprint,
+			},
+			context.nowMs,
+		);
+		if (prior === undefined) {
+			await finalize("rejected", "TASK_SUBMISSION_FAILED");
+			return { ok: false, code: "UNAVAILABLE" };
+		}
+		if (prior !== null) {
+			await finalize(
+				"deduplicated",
+				"DUPLICATE_FINGERPRINT",
+				null,
+				prior.taskId,
+			);
+			return {
+				ok: true,
+				taskId: prior.taskId,
+				jobId: prior.jobId,
+				deduped: true,
+			};
+		}
+		const result = await createTaskForSignal(deps, context, signal);
+		if (result.ok && "taskId" in result) {
+			await finalize("task_created", null, null, result.taskId);
+		} else if (!result.ok) {
+			await finalize(
+				"rejected",
+				result.code === "FORBIDDEN"
+					? "TENANT_MISMATCH"
+					: "TASK_SUBMISSION_FAILED",
+			);
+		}
+		return result;
+	}
+
+	const repository = deps.incidentRepository;
+	if (repository === undefined || repository === null)
+		return { ok: false, code: "UNAVAILABLE" };
+
+	const admission = await admitSignal(
+		deps,
+		context,
+		signal,
+		event.deliveryId,
+		repository,
+	);
+	switch (admission.kind) {
+		case "failed":
+			await finalize("rejected", "TASK_SUBMISSION_FAILED");
+			return { ok: false, code: admission.code };
+		case "prior":
+			await finalize(
+				"deduplicated",
+				"DUPLICATE_FINGERPRINT",
+				null,
+				admission.taskId,
+			);
+			return {
+				ok: true,
+				taskId: admission.taskId,
+				jobId: admission.jobId,
+				deduped: true,
+			};
+		case "capped":
+			await finalize("ignored", "THROTTLED");
+			return {
+				ok: true,
+				accepted: false,
+				deduped: false,
+				throttled: true,
+			};
+		case "deduplicated":
+			await finalize(
+				"deduplicated",
+				"DUPLICATE_FINGERPRINT",
+				admission.signalId,
+			);
+			return {
+				ok: true,
+				accepted: false,
+				deduped: true,
+				throttled: false,
+			};
+		case "created": {
+			const result = await createTaskForSignal(deps, context, signal, {
+				incidentSource: signal.source,
+				incidentFingerprint: signal.fingerprint,
+			});
+			if (!result.ok) {
+				await finalize(
+					"rejected",
+					result.code === "FORBIDDEN"
+						? "TENANT_MISMATCH"
+						: "TASK_SUBMISSION_FAILED",
+					admission.signalId,
+				);
+				return result;
+			}
+			if ("taskId" in result) {
+				await finalize("task_created", null, admission.signalId, result.taskId);
+			}
+			await attachSignalDisplay(deps, context, signal, admission.signalId);
+			return result;
+		}
+	}
+}
+
+/**
+ * Managed intake: verify → normalize → lifecycle → subscription/legacy policy →
+ * dedupe → cap → durable task, with one ledger row per delivery. No provider
+ * fetch and no agent call happens here; the worker picks the task up later.
+ */
+async function acceptManagedIncident(
+	deps: IncidentIntakeDependencies,
+	request: IncidentIntakeRequest,
+	context: AcceptanceContext,
+	mode: IncidentIntakeMode,
+): Promise<IncidentIntakeResult> {
+	const ingest = ingestIncident(deps, request, context, mode);
+	if (!ingest.ok) {
+		await recordRejectedDelivery(deps, context, ingest, request);
+		return { ok: false, code: ingest.code };
+	}
+	const event = ingest.event;
+	const ledger = deps.deliveries;
+	if (ledger === undefined || ledger === null)
+		return { ok: false, code: "UNAVAILABLE" };
+
+	const receivedAt = new Date(context.nowMs);
+	let recorded: { id: string; duplicate: boolean };
+	try {
+		recorded = await ledger.record({
+			organizationId: context.organizationId,
+			connectorId: event.connectorId,
+			subscriptionId: null,
+			deliveryId: event.deliveryId,
+			source: event.connectorId,
+			eventKind: event.eventKind,
+			severity: event.severity,
+			fingerprint: event.fingerprint,
+			verification: event.verification,
+			status: "verified",
+			reasonCode: null,
+			signalId: null,
+			taskId: null,
+			bodySha256: event.bodySha256,
+			receivedAt,
+			processedAt: null,
+		});
+	} catch {
+		return { ok: false, code: "UNAVAILABLE" };
+	}
+	if (recorded.duplicate) {
+		return {
+			ok: true,
+			accepted: false,
+			deduped: true,
+			throttled: false,
+		};
+	}
+
+	const finalize: ManagedFinalize = async (
+		status,
+		reasonCode,
+		signalId,
+		taskId,
+		subscriptionId,
+	) => {
+		try {
+			await ledger.finalize({
+				organizationId: context.organizationId,
+				id: recorded.id,
+				status,
+				reasonCode,
+				signalId: signalId ?? null,
+				taskId: taskId ?? null,
+				subscriptionId: subscriptionId ?? null,
+				processedAt: new Date(context.nowMs),
+			});
+		} catch {
+			// The acceptance answer must not depend on a cosmetic ledger update.
+		}
+	};
+	const ignored = (): IncidentIntakeResult => ({
+		ok: true,
+		accepted: false,
+		deduped: false,
+		throttled: false,
+		ignored: true,
+	});
+
+	// Resolved/closed/recovered/acknowledged events never create tasks: update
+	// the existing incident when a prior delivery carries a task, otherwise
+	// record a bounded ignore. A regression is not a close: it continues to the
+	// trigger policy below and may create only when its fingerprint matches a
+	// prior incident (the 30-minute dedupe would otherwise suppress it).
+	if (event.lifecycle === "resolved" || event.lifecycle === "acknowledged") {
+		let taskId: string | null = null;
+		try {
+			taskId = await ledger.findLatestTask({
+				organizationId: context.organizationId,
+				connectorId: event.connectorId,
+				fingerprint: event.fingerprint,
+			});
+		} catch {
+			taskId = null;
+		}
+		if (taskId !== null) {
+			await finalize("task_updated", "LIFECYCLE_UPDATE", null, taskId);
+			return ignored();
+		}
+		await finalize("ignored", "LIFECYCLE_UNMATCHED");
+		return ignored();
+	}
+
+	const signal = event.signal;
+	if (signal === null) {
+		await finalize("ignored", "NOT_AN_INCIDENT");
+		return ignored();
+	}
+
+	let subscriptions: IntegrationSubscriptionRecord[] = [];
+	if (deps.subscriptions !== undefined && deps.subscriptions !== null) {
+		try {
+			subscriptions = await deps.subscriptions.listEnabled({
+				organizationId: context.organizationId,
+				connectorId: event.connectorId,
+			});
+		} catch {
+			await finalize("rejected", "TASK_SUBMISSION_FAILED");
+			return { ok: false, code: "UNAVAILABLE" };
+		}
+	}
+	// Defense in depth: a reader bug or a leaked row must never let a foreign
+	// organization's subscription drive this tenant's task.
+	subscriptions = subscriptions.filter(
+		(subscription) => subscription.organizationId === context.organizationId,
+	);
+
+	if (subscriptions.length === 0) {
+		return acceptLegacyManagedTask(
+			deps,
+			context,
+			event,
+			signal,
+			mode,
+			finalize,
+			ignored,
+		);
+	}
+
+	const descriptor: SubscriptionEventDescriptor = {
+		connectorId: event.connectorId,
+		eventKind: event.eventKind,
+		severity: event.severity,
+		environment: event.hints.environment,
+		production: event.hints.production,
+		branch: event.hints.branch,
+		baseBranch: event.hints.baseBranch,
+		lifecycle: event.lifecycle,
+	};
+	const match = resolveSubscriptionMatch(subscriptions, descriptor);
+	if (!match.matched) {
+		await finalize("ignored", match.reason);
+		return ignored();
+	}
+	return acceptSubscriptionTask(
+		deps,
+		context,
+		event,
+		signal,
+		match.subscription,
+		finalize,
+		ignored,
+	);
+}
+
+/**
  * Accepts one delivery. The mode is chosen from the headers, each mode verifies
  * with its own secret, and every failure is a bounded code: never the payload,
  * the signature, the secret or a provider/manifest detail.
+ *
+ * Wave 23: when a subscription registry or delivery ledger is wired, the
+ * managed pipeline (ledger + subscription policy + autonomy) runs; otherwise
+ * the wave-13/17 path is used unchanged.
  */
 export async function acceptIncident(
 	deps: IncidentIntakeDependencies,
@@ -977,6 +1946,12 @@ export async function acceptIncident(
 				retryAfterSeconds: consumed.retryAfterSeconds,
 			};
 		}
+	}
+	if (
+		(deps.subscriptions !== undefined && deps.subscriptions !== null) ||
+		(deps.deliveries !== undefined && deps.deliveries !== null)
+	) {
+		return acceptManagedIncident(deps, request, context, mode);
 	}
 	switch (mode) {
 		case "github":

@@ -30,8 +30,10 @@ import { activeRole, requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
 import { ApprovalActions } from "@/features/runs/components/approval-actions";
 import { RetryRunButton } from "@/features/runs/components/retry-run-button";
+import { RunExecutionMap } from "@/features/runs/components/run-execution-map";
 import { RunLogViewer } from "@/features/runs/components/run-log-viewer";
 import { RunTimeline } from "@/features/runs/components/run-timeline";
+import { RunSourceBadge } from "@/features/runs/components/source-badge";
 import { ToolDecisionBadge } from "@/features/runs/components/tool-decision-badge";
 import type {
 	RunArtifact,
@@ -42,6 +44,7 @@ import { RUN_MAX_RETRY_DEPTH } from "@/features/runs/contracts";
 import { runDetailOptions } from "@/features/runs/queries";
 import {
 	approvalActionLabel,
+	autonomyLevelLabel,
 	canRetryTask,
 	effectiveApprovalStatus,
 	formatBytes,
@@ -231,6 +234,32 @@ function RunDetailPage() {
 				}
 			/>
 
+			{task.retryOf !== null || task.incidentSource !== null ? (
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+					{task.retryOf !== null ? (
+						<>
+							<span className="text-ink-muted">Retry of</span>
+							<Link
+								to="/runs/$taskId"
+								params={{ taskId: task.retryOf }}
+								className="rounded-sm font-mono text-brand underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+							>
+								{shortId(task.retryOf, 12)}
+							</Link>
+							<span className="text-ink-muted">
+								· retry depth {task.retryDepth} / {RUN_MAX_RETRY_DEPTH}
+							</span>
+						</>
+					) : null}
+					{task.incidentSource !== null ? (
+						<>
+							<span className="text-ink-muted">Source</span>
+							<RunSourceBadge source={task.incidentSource} />
+						</>
+					) : null}
+				</div>
+			) : null}
+
 			<MetricStrip variant="bare">
 				<Metric
 					label="Task status"
@@ -377,6 +406,14 @@ function RunDetailPage() {
 
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
 				<div className="min-w-0 space-y-6">
+					<Section
+						variant="plain"
+						title="Execution map"
+						description="Task → attempt → agent turn → tool, connector, validation, approval and artifact steps, built from recorded rows. A single-agent run shows one primary agent."
+					>
+						<RunExecutionMap detail={detail} />
+					</Section>
+
 					<Section
 						variant="plain"
 						title="Lifecycle"
@@ -652,6 +689,13 @@ function RunDetailPage() {
 
 function provenanceItems(task: RunTaskIdentity) {
 	const items = [];
+	const autonomy = autonomyLevelLabel(task.autonomyLevel);
+	if (autonomy !== null) {
+		items.push({
+			label: "Autonomy",
+			value: autonomy,
+		});
+	}
 	if (task.retryOf) {
 		items.push({
 			label: "Retry of",

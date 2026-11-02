@@ -113,6 +113,68 @@ export function approvalActionLabel(action: string): string {
 	return action;
 }
 
+/** Autonomy levels from the product spec; unknown values stay verbatim. */
+const AUTONOMY_LABELS: Record<string, string> = {
+	A0: "A0 — Observe",
+	A1: "A1 — Investigate",
+	A2: "A2 — Prepare fix",
+	A3: "A3 — Propose PR",
+	A4: "A4 — Production mutation",
+};
+
+export function autonomyLevelLabel(
+	level: string | null | undefined,
+): string | null {
+	if (typeof level !== "string" || level.trim().length === 0) return null;
+	const key = level.trim().toUpperCase();
+	return AUTONOMY_LABELS[key] ?? level.trim();
+}
+
+export type RunSourceTone =
+	| "neutral"
+	| "brand"
+	| "success"
+	| "warning"
+	| "danger";
+
+export type RunSourceBadge = {
+	label: string;
+	tone: RunSourceTone;
+};
+
+/** Known incident sources get a readable label; null is a manual submission. */
+const SOURCE_BADGES: Record<string, RunSourceBadge> = {
+	github: { label: "GitHub", tone: "brand" },
+	sentry: { label: "Sentry", tone: "danger" },
+	pagerduty: { label: "PagerDuty", tone: "warning" },
+	datadog: { label: "Datadog", tone: "brand" },
+	grafana: { label: "Grafana", tone: "brand" },
+	kubernetes: { label: "Kubernetes", tone: "brand" },
+	newrelic: { label: "New Relic", tone: "brand" },
+	honeycomb: { label: "Honeycomb", tone: "brand" },
+	axiom: { label: "Axiom", tone: "neutral" },
+	signoz: { label: "SigNoz", tone: "neutral" },
+	generic: { label: "Webhook", tone: "neutral" },
+};
+
+/**
+ * Maps a task's `incident_source` to a bounded display badge. Unknown values
+ * are title-cased and capped rather than echoed as raw provider text.
+ */
+export function sourceBadge(source: string | null | undefined): RunSourceBadge {
+	if (typeof source !== "string" || source.trim().length === 0) {
+		return { label: "Manual", tone: "neutral" };
+	}
+	const key = source.trim().toLowerCase();
+	const known = SOURCE_BADGES[key];
+	if (known !== undefined) return known;
+	const label = key
+		.replaceAll(/[._-]+/g, " ")
+		.replace(/\b\w/g, (letter) => letter.toUpperCase())
+		.slice(0, 32);
+	return { label, tone: "neutral" };
+}
+
 export function approveConsequence(action: string): string {
 	if (action === approvalActionPushBranch) {
 		return "Approving pushes this task branch to the connected repository, outside the sandbox. The exact payload hash is recorded in the audit trail.";

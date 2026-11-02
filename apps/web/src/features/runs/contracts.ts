@@ -11,6 +11,10 @@ import { z } from "zod";
 /** One page of runs; the row cap is enforced again on the server. */
 export const RUNS_PAGE_LIMIT_DEFAULT = 25;
 export const RUNS_PAGE_LIMIT_MAX = 100;
+/** `OFFSET` is bounded so a hostile search value cannot scan the table. */
+export const RUNS_OFFSET_MAX = 10_000;
+/** Highest page accepted by `parseRunsSearch` (10_000 / 25 pages). */
+export const RUNS_PAGE_MAX = 400;
 /** Free-text search is bounded before it reaches a parameter. */
 export const RUNS_QUERY_MAX_LENGTH = 80;
 /** Repository filter options are a bounded tenant list. */
@@ -20,6 +24,7 @@ export const RUN_DETAIL_EVENT_LIMIT = 200;
 export const RUN_DETAIL_RUN_LIMIT = 20;
 export const RUN_DETAIL_APPROVAL_LIMIT = 50;
 export const RUN_DETAIL_ARTIFACT_LIMIT = 20;
+export const RUN_DETAIL_ATTEMPT_LIMIT = 10;
 /** Inline artifact preview bound (the DB itself caps content at 256 KiB). */
 export const RUN_ARTIFACT_PREVIEW_CHARS = 16_384;
 /** Maximum rerun depth accepted by the retry action. */
@@ -44,6 +49,8 @@ export type RunsSearch = {
 	repo: string;
 	q: string;
 	sort: RunSort;
+	/** One-based page; always bounded by `RUNS_PAGE_MAX`. */
+	page: number;
 };
 
 export const RUNS_SEARCH_DEFAULTS: RunsSearch = {
@@ -51,6 +58,7 @@ export const RUNS_SEARCH_DEFAULTS: RunsSearch = {
 	repo: "",
 	q: "",
 	sort: "created",
+	page: 1,
 };
 
 function isStatusFilter(value: unknown): value is RunStatusFilter {
@@ -65,6 +73,18 @@ function isSort(value: unknown): value is RunSort {
 		typeof value === "string" &&
 		(RUN_SORTS as readonly string[]).includes(value)
 	);
+}
+
+/** One-based page from an untrusted URL value, clamped to `1..RUNS_PAGE_MAX`. */
+export function parseRunsPage(value: unknown): number {
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && value.trim() !== ""
+				? Number(value)
+				: Number.NaN;
+	if (!Number.isInteger(parsed)) return 1;
+	return Math.min(Math.max(parsed, 1), RUNS_PAGE_MAX);
 }
 
 /**
@@ -86,7 +106,28 @@ export function parseRunsSearch(
 		typeof raw.q === "string"
 			? raw.q.trim().slice(0, RUNS_QUERY_MAX_LENGTH)
 			: RUNS_SEARCH_DEFAULTS.q;
-	return { status, repo, q, sort };
+	return { status, repo, q, sort, page: parseRunsPage(raw.page) };
+}
+
+/**
+ * Applies one filter patch. Changing status, repository, search text or sort
+ * always returns to page one so the visible page cannot outlive its filter;
+ * a page-only patch is clamped instead.
+ */
+export function applyRunsSearchPatch(
+	current: RunsSearch,
+	patch: Partial<RunsSearch>,
+): RunsSearch {
+	const next = { ...current, ...patch };
+	const filtersChanged =
+		next.status !== current.status ||
+		next.repo !== current.repo ||
+		next.q !== current.q ||
+		next.sort !== current.sort;
+	return {
+		...next,
+		page: filtersChanged ? 1 : parseRunsPage(next.page),
+	};
 }
 
 /** Server input for the list read; strict so unknown keys are rejected. */
@@ -96,6 +137,7 @@ export const runsListInputSchema = z.strictObject({
 	q: z.string().trim().max(RUNS_QUERY_MAX_LENGTH).default(""),
 	sort: z.enum(RUN_SORTS).default("created"),
 	limit: z.number().int().min(1).max(RUNS_PAGE_LIMIT_MAX).default(25),
+	offset: z.number().int().min(0).max(RUNS_OFFSET_MAX).default(0),
 });
 
 export type RunsListInput = z.input<typeof runsListInputSchema>;
@@ -111,6 +153,7 @@ export function runsSearchToFilter(search: RunsSearch): RunsListInput {
 		q: search.q,
 		sort: search.sort,
 		limit: RUNS_PAGE_LIMIT_DEFAULT,
+		offset: (parseRunsPage(search.page) - 1) * RUNS_PAGE_LIMIT_DEFAULT,
 	};
 }
 
@@ -142,6 +185,8 @@ export type RunListRow = {
 	branch: string;
 	status: TaskStatus;
 	retryDepth: number;
+	/** Provenance of the signal that opened the task; null means manual. */
+	incidentSource: string | null;
 	createdAt: string;
 	updatedAt: string;
 	repository: RunRepositoryRef;
@@ -158,6 +203,10 @@ export type RunsSummary = {
 
 export type RunsListPage = {
 	rows: RunListRow[];
+	/** Matching rows for the current filters; drives the page count. */
+	total: number;
+	/** One-based, already clamped to the last page that exists. */
+	page: number;
 	summary: RunsSummary;
 	repositories: RunRepositoryOption[];
 };
@@ -167,6 +216,29 @@ export type RunWorkflowRun = {
 	status: WorkflowRunStatusView;
 	startedAt: string;
 	finishedAt: string | null;
+};
+
+/**
+ * One durable `task_attempts` row, reduced to the fields the execution map
+ * needs. `status` comes from the stored outcome; an open row is `running` and
+ * an unreadable outcome on a closed row is `unknown`, never invented.
+ */
+export type RunAttemptStatus =
+	| "running"
+	| "failed"
+	| "cancelled"
+	| "retry"
+	| "review_ready"
+	| "awaiting_approval"
+	| "unknown";
+
+export type RunAttempt = {
+	attemptIndex: number;
+	status: RunAttemptStatus;
+	startedAt: string;
+	finishedAt: string | null;
+	/** Typed machine code from the outcome, bounded; a free-text reason is not exposed. */
+	errorCode: string | null;
 };
 
 export type RunEventActor = "user" | "agent" | "worker" | "system" | "policy";
@@ -274,6 +346,8 @@ export type RunTaskIdentity = {
 	retryDepth: number;
 	incidentSource: string | null;
 	incidentFingerprint: string | null;
+	/** Task autonomy level (migration 0016), e.g. `A2`; null only on old rows. */
+	autonomyLevel: string | null;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -281,6 +355,7 @@ export type RunTaskIdentity = {
 export type RunDetailView = {
 	task: RunTaskIdentity;
 	workflowRuns: RunWorkflowRun[];
+	attempts: RunAttempt[];
 	traceId: string | null;
 	events: RunEventView[];
 	toolInvocations: RunToolInvocation[];

@@ -10,6 +10,7 @@ import { useSession } from "@/components/auth/SessionProvider";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
+import { Pagination } from "@/components/common/pagination";
 import { RelativeTime } from "@/components/common/relative-time";
 import { ConsoleNote } from "@/components/console/note";
 import { ArrowRightIcon, RetryIcon, ShieldIcon } from "@/components/icons";
@@ -21,6 +22,7 @@ import {
 } from "@/features/approvals/components/approval-sections";
 import { ApprovalsSkeleton } from "@/features/approvals/components/approvals-skeleton";
 import type { ApprovalItem } from "@/features/approvals/contracts";
+import { pageApprovals } from "@/features/approvals/paging";
 import { approvalKeys, approvalsOptions } from "@/features/approvals/queries";
 import { activeRole } from "@/features/auth/guard";
 import { overviewKeys } from "@/features/overview/queries";
@@ -44,6 +46,8 @@ function ApprovalsPage() {
 	const session = useSession();
 	const queryClient = useQueryClient();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [pendingPage, setPendingPage] = useState(1);
+	const [decidedPage, setDecidedPage] = useState(1);
 	const canDecide =
 		activeRole(session) !== "viewer" && session.mode !== "anonymous";
 
@@ -81,6 +85,8 @@ function ApprovalsPage() {
 	const result = query.data;
 	const snapshot = result.ok ? result.value : null;
 	const items = snapshot ? [...snapshot.pending, ...snapshot.decided] : [];
+	const pendingPageSlice = pageApprovals(snapshot?.pending ?? [], pendingPage);
+	const decidedPageSlice = pageApprovals(snapshot?.decided ?? [], decidedPage);
 	const selected = items.find((item) => item.id === selectedId) ?? null;
 	const nextPending = snapshot?.pending[0] ?? null;
 	const mutationError =
@@ -161,12 +167,29 @@ function ApprovalsPage() {
 					) : null}
 
 					<PendingApprovalsSection
-						items={snapshot.pending}
+						items={pendingPageSlice.pageItems}
+						totalCount={snapshot.pending.length}
 						onReview={openApproval}
+						pagination={
+							<Pagination
+								page={pendingPageSlice.page}
+								pageCount={pendingPageSlice.pageCount}
+								onPageChange={setPendingPage}
+								label="Pending approvals pages"
+							/>
+						}
 					/>
 					<DecidedApprovalsSection
-						items={snapshot.decided}
+						items={decidedPageSlice.pageItems}
 						onReview={openApproval}
+						pagination={
+							<Pagination
+								page={decidedPageSlice.page}
+								pageCount={decidedPageSlice.pageCount}
+								onPageChange={setDecidedPage}
+								label="Decided approvals pages"
+							/>
+						}
 					/>
 				</div>
 			)}

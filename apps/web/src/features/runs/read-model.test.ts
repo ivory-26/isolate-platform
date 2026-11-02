@@ -31,6 +31,7 @@ function listRow(overrides: Record<string, unknown> = {}) {
 		branch: "task/w20-runs",
 		status: "failed",
 		retry_depth: 1,
+		incident_source: "github",
 		created_at: WHEN,
 		updated_at: WHEN,
 		repository_id: REPO_ID,
@@ -58,6 +59,7 @@ function taskRow(overrides: Record<string, unknown> = {}) {
 		retry_depth: 1,
 		incident_source: "pagerduty",
 		incident_fingerprint: "fp-123",
+		autonomy_level: "A2",
 		created_at: WHEN,
 		updated_at: WHEN,
 		repository_id: REPO_ID,
@@ -91,6 +93,9 @@ function detailSql(
 ) {
 	return scriptedSql((statement) => {
 		if (statement.includes("LEFT JOIN LATERAL")) return listFixture();
+		if (statement.includes("count(*)::int AS total")) {
+			return [{ total: 2 }];
+		}
 		if (statement.includes("SELECT t.status, count(*)")) {
 			return [
 				{ status: "failed", count: 2 },
@@ -152,6 +157,26 @@ function detailSql(
 					claimed_at: WHEN,
 					completed_at: WHEN,
 					expires_at: WHEN,
+				},
+			];
+		}
+		if (statement.includes("FROM task_attempts")) {
+			return [
+				{
+					attempt_index: 1,
+					started_at: WHEN,
+					finished_at: WHEN,
+					outcome: {
+						status: "failed",
+						reason: "validation failed",
+						error: "VALIDATION_FAILED",
+					},
+				},
+				{
+					attempt_index: 2,
+					started_at: new Date("2026-11-20T10:05:00.000Z"),
+					finished_at: null,
+					outcome: null,
 				},
 			];
 		}
@@ -220,6 +245,7 @@ describe("readRunsList", () => {
 			branch: "task/w20-runs",
 			status: "failed",
 			retryDepth: 1,
+			incidentSource: "github",
 			repository: {
 				id: REPO_ID,
 				fullName: "acme/app",
@@ -231,6 +257,8 @@ describe("readRunsList", () => {
 			},
 		});
 		expect(page.rows[1]?.latestRun).toBeNull();
+		expect(page.total).toBe(2);
+		expect(page.page).toBe(1);
 		expect(page.summary).toEqual({
 			total: 6,
 			active: 1,
@@ -239,6 +267,11 @@ describe("readRunsList", () => {
 			reviewReady: 3,
 		});
 		expect(page.repositories).toEqual([{ id: REPO_ID, fullName: "acme/app" }]);
+
+		const countCall = calls.find((call) =>
+			call.statement.includes("count(*)::int AS total"),
+		);
+		expect(countCall?.params).toEqual([ORG, "failed", REPO_ID, "task/w20"]);
 
 		const listCall = calls.find((call) =>
 			call.statement.includes("LEFT JOIN LATERAL"),
@@ -250,10 +283,12 @@ describe("readRunsList", () => {
 			"task/w20",
 			"created",
 			25,
+			0,
 		]);
 		expect(listCall?.statement).toContain(
 			"CASE WHEN $5 = 'created' THEN t.created_at END DESC",
 		);
+		expect(listCall?.statement).toContain("LIMIT $6 OFFSET $7");
 		expect(listCall?.params[0]).toBe(ORG);
 
 		const summaryCall = calls.find((call) =>
@@ -297,6 +332,50 @@ describe("readRunsList", () => {
 			again.calls.find((call) => call.statement.includes("LEFT JOIN LATERAL"))
 				?.statement,
 		).toContain("CASE WHEN $5 = 'status' THEN t.status END ASC");
+	});
+
+	test("clamps an out-of-range offset to the last existing page", async () => {
+		const { sql, calls } = detailSql();
+		const page = await readRunsList(
+			sql,
+			{ organizationId: ORG },
+			{
+				status: "failed",
+				repositoryId: null,
+				q: "",
+				sort: "created",
+				limit: 25,
+				offset: 500,
+			},
+		);
+		// The scripted filtered count is 2, so only page one exists.
+		expect(page.total).toBe(2);
+		expect(page.page).toBe(1);
+		const listCall = calls.find((call) =>
+			call.statement.includes("LEFT JOIN LATERAL"),
+		);
+		expect(listCall?.params.at(-1)).toBe(0);
+	});
+
+	test("uses summary.total for an unfiltered page", async () => {
+		const { sql, calls } = detailSql();
+		const page = await readRunsList(
+			sql,
+			{ organizationId: ORG },
+			{
+				status: "all",
+				repositoryId: null,
+				q: "",
+				sort: "created",
+				limit: 25,
+				offset: 0,
+			},
+		);
+		expect(page.total).toBe(6);
+		expect(page.page).toBe(1);
+		expect(
+			calls.some((call) => call.statement.includes("count(*)::int AS total")),
+		).toBe(false);
 	});
 
 	test("rejects invalid input before any SQL", async () => {
@@ -364,6 +443,7 @@ describe("readRunDetail", () => {
 			retryDepth: 1,
 			incidentSource: "pagerduty",
 			incidentFingerprint: "fp-123",
+			autonomyLevel: "A2",
 			repository: {
 				id: REPO_ID,
 				fullName: "acme/app",
@@ -372,6 +452,20 @@ describe("readRunDetail", () => {
 		});
 		expect(detail.traceId).toBe("a".repeat(32));
 		expect(detail.workflowRuns).toHaveLength(1);
+		expect(detail.attempts).toHaveLength(2);
+		expect(detail.attempts[0]).toEqual({
+			attemptIndex: 1,
+			status: "failed",
+			startedAt: WHEN.toISOString(),
+			finishedAt: WHEN.toISOString(),
+			errorCode: "VALIDATION_FAILED",
+		});
+		expect(detail.attempts[1]).toMatchObject({
+			attemptIndex: 2,
+			status: "running",
+			finishedAt: null,
+			errorCode: null,
+		});
 		expect(detail.events).toHaveLength(1);
 		// The trace read model drops credential-shaped keys before mapping.
 		expect(detail.events[0]?.data).toEqual({ turn: 1 });
@@ -426,6 +520,13 @@ describe("readRunDetail", () => {
 			call.statement.includes("FROM workflow_runs"),
 		);
 		expect(runCall?.params).toEqual([ORG, TASK_ID, 20]);
+		const attemptCall = calls.find((call) =>
+			call.statement.includes("FROM task_attempts"),
+		);
+		expect(attemptCall?.params).toEqual([ORG, TASK_ID, 10]);
+		expect(attemptCall?.statement).toContain(
+			"JOIN tasks t ON t.id = a.task_id AND t.organization_id = $1",
+		);
 		const approvalCall = calls.find((call) =>
 			call.statement.includes("FROM approvals a"),
 		);

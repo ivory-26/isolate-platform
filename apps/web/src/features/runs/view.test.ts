@@ -3,6 +3,7 @@ import type { RunApproval } from "./contracts";
 import {
 	approvalActionLabel,
 	approveConsequence,
+	autonomyLevelLabel,
 	canRetryTask,
 	effectiveApprovalStatus,
 	eventLabel,
@@ -15,6 +16,7 @@ import {
 	isSupportedApprovalAction,
 	rejectConsequence,
 	safeExternalUrl,
+	sourceBadge,
 	stableKeys,
 	sumCompletionTokens,
 	sumCostUsd,
@@ -219,5 +221,46 @@ describe("formatting and totals", () => {
 		expect(sumCompletionTokens(usage)).toBe(12);
 		expect(sumCostUsd(usage)).toBe("0.001500");
 		expect(sumCostUsd([{ costUsd: null }])).toBeNull();
+	});
+});
+
+describe("sourceBadge", () => {
+	test("a null source is a manual submission", () => {
+		expect(sourceBadge(null)).toEqual({ label: "Manual", tone: "neutral" });
+		expect(sourceBadge(undefined)).toEqual({
+			label: "Manual",
+			tone: "neutral",
+		});
+		expect(sourceBadge("   ")).toEqual({ label: "Manual", tone: "neutral" });
+	});
+
+	test("known providers map to readable labels and tones", () => {
+		expect(sourceBadge("github")).toEqual({ label: "GitHub", tone: "brand" });
+		expect(sourceBadge("SENTRY")).toEqual({ label: "Sentry", tone: "danger" });
+		expect(sourceBadge("pagerduty")).toEqual({
+			label: "PagerDuty",
+			tone: "warning",
+		});
+	});
+
+	test("unknown sources are title-cased and capped, never echoed raw", () => {
+		expect(sourceBadge("custom_source")).toEqual({
+			label: "Custom Source",
+			tone: "neutral",
+		});
+		expect(sourceBadge("x".repeat(80)).label.length).toBe(32);
+	});
+});
+
+describe("autonomyLevelLabel", () => {
+	test("known levels get the spec label", () => {
+		expect(autonomyLevelLabel("A1")).toBe("A1 — Investigate");
+		expect(autonomyLevelLabel("a2")).toBe("A2 — Prepare fix");
+	});
+
+	test("missing levels are null and unknown levels stay verbatim", () => {
+		expect(autonomyLevelLabel(null)).toBeNull();
+		expect(autonomyLevelLabel("  ")).toBeNull();
+		expect(autonomyLevelLabel("A9")).toBe("A9");
 	});
 });

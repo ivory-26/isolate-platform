@@ -5,6 +5,7 @@ import { ErrorState } from "@/components/common/error-state";
 import { Metric, MetricStrip } from "@/components/common/metric";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
+import { getPageCount, Pagination } from "@/components/common/pagination";
 import { RelativeTime } from "@/components/common/relative-time";
 import { StatusBadge } from "@/components/common/status-badge";
 import { RetryIcon, RunsIcon, SubmitIcon } from "@/components/icons";
@@ -20,9 +21,12 @@ import {
 import { requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
 import { RunsFilterBar } from "@/features/runs/components/runs-filter-bar";
+import { RunSourceBadge } from "@/features/runs/components/source-badge";
 import {
+	applyRunsSearchPatch,
 	parseRunsSearch,
 	RUN_MAX_RETRY_DEPTH,
+	RUNS_PAGE_LIMIT_DEFAULT,
 	RUNS_SEARCH_DEFAULTS,
 	type RunsSearch,
 } from "@/features/runs/contracts";
@@ -105,13 +109,17 @@ function RunsPage() {
 
 	const updateSearch = (patch: Partial<RunsSearch>) => {
 		void navigate({
-			search: (previous) => ({ ...previous, ...patch }),
+			search: (previous) =>
+				applyRunsSearchPatch(parseRunsSearch(previous), patch),
 			resetScroll: false,
 		});
 	};
 	const resetSearch = () => {
 		void navigate({ search: RUNS_SEARCH_DEFAULTS, resetScroll: false });
 	};
+	const pageCount = data
+		? getPageCount(data.total, RUNS_PAGE_LIMIT_DEFAULT)
+		: 1;
 
 	return (
 		<PageContainer>
@@ -221,10 +229,11 @@ function RunsPage() {
 					/>
 				)
 			) : (
-				<div className="overflow-x-auto border-y border-line-subtle">
+				<div className="border-y border-line-subtle">
 					<Table>
 						<caption className="sr-only">
-							Tasks in the active organization, newest first
+							Tasks in the active organization, newest first. {data.total} tasks
+							match the current filters; page {data.page} of {pageCount}.
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
@@ -270,8 +279,11 @@ function RunsPage() {
 											<span className="font-mono text-xs text-brand transition-colors group-hover:text-info">
 												{shortId(row.taskId, 12)}
 											</span>
-											<span className="mt-0.5 truncate font-mono text-[11px] text-ink-muted">
-												{row.repository.fullName}
+											<span className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-ink-muted">
+												<RunSourceBadge source={row.incidentSource} />
+												<span className="truncate">
+													{row.repository.fullName}
+												</span>
 											</span>
 										</Link>
 									</TableCell>
@@ -314,6 +326,13 @@ function RunsPage() {
 							))}
 						</TableBody>
 					</Table>
+					<Pagination
+						page={data.page}
+						pageCount={pageCount}
+						onPageChange={(page) => updateSearch({ page })}
+						label="Runs pages"
+						className="px-1 pt-2"
+					/>
 				</div>
 			)}
 		</PageContainer>

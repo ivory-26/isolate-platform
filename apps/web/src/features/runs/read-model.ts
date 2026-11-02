@@ -14,6 +14,7 @@ import {
 	RUN_ARTIFACT_PREVIEW_CHARS,
 	RUN_DETAIL_APPROVAL_LIMIT,
 	RUN_DETAIL_ARTIFACT_LIMIT,
+	RUN_DETAIL_ATTEMPT_LIMIT,
 	RUN_DETAIL_EVENT_LIMIT,
 	RUN_DETAIL_RUN_LIMIT,
 	RUN_REPOSITORY_OPTION_LIMIT,
@@ -21,6 +22,8 @@ import {
 	type RunApproval,
 	type RunApprovalStatus,
 	type RunArtifact,
+	type RunAttempt,
+	type RunAttemptStatus,
 	type RunConnectorCall,
 	type RunDetailView,
 	type RunEventActor,
@@ -81,7 +84,7 @@ const STMT = {
 	task: `SELECT t.id, t.branch, t.status, t.goal, t.acceptance_criteria,
 			t.file_ownership, t.pull_request_number, t.pull_request_url,
 			t.retry_of, t.retry_depth, t.incident_source, t.incident_fingerprint,
-			t.created_at, t.updated_at,
+			t.autonomy_level, t.created_at, t.updated_at,
 			r.id AS repository_id, r.external_full_name, r.default_branch
 		FROM tasks t
 		JOIN repositories r
@@ -92,6 +95,12 @@ const STMT = {
 		FROM workflow_runs w
 		WHERE w.organization_id = $1 AND w.task_id = $2
 		ORDER BY w.started_at ASC, w.id ASC
+		LIMIT $3`,
+	attempts: `SELECT a.attempt_index, a.started_at, a.finished_at, a.outcome
+		FROM task_attempts a
+		JOIN tasks t ON t.id = a.task_id AND t.organization_id = $1
+		WHERE a.task_id = $2
+		ORDER BY a.attempt_index ASC
 		LIMIT $3`,
 	approvals: `SELECT a.id, a.action, a.status, a.payload_sha256, a.requested_by,
 			a.decided_by, a.decided_at, a.expires_at, a.created_at
@@ -109,8 +118,8 @@ const STMT = {
 		LIMIT $3`,
 } as const;
 
-const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.created_at,
-		t.updated_at,
+const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.incident_source,
+		t.created_at, t.updated_at,
 		r.id AS repository_id, r.external_full_name, r.default_branch,
 		w.id AS run_id, w.status AS run_status, w.started_at AS run_started_at,
 		w.finished_at AS run_finished_at
@@ -134,7 +143,19 @@ const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.created_at,
 		CASE WHEN $5 = 'updated' THEN t.updated_at END DESC,
 		CASE WHEN $5 = 'status' THEN t.status END ASC,
 		t.created_at DESC, t.id DESC
-	LIMIT $6`;
+	LIMIT $6 OFFSET $7`;
+
+/**
+ * Exact row count for the active filters. The status summary is
+ * organization-wide, so it cannot bound a filtered page; this count can.
+ */
+const FILTERED_COUNT_SQL = `SELECT count(*)::int AS total
+	FROM tasks t
+	WHERE t.organization_id = $1
+	  AND ($2::text = 'all' OR t.status = $2)
+	  AND ($3::uuid IS NULL OR t.repository_id = $3)
+	  AND ($4::text = ''
+		OR position(lower($4) in lower(t.id::text || ' ' || t.branch)) > 0)`;
 
 function rowError(): Error {
 	return new Error("run row is invalid");
@@ -263,6 +284,7 @@ function mapListRow(row: Record<string, unknown>): RunListRow {
 		branch: text(row.branch),
 		status: taskStatus(row.status),
 		retryDepth: count(row.retry_depth),
+		incidentSource: optionalText(row.incident_source),
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
 		repository: {
@@ -302,8 +324,63 @@ function mapTask(row: Record<string, unknown>): RunTaskIdentity {
 		retryDepth: count(row.retry_depth),
 		incidentSource: optionalText(row.incident_source),
 		incidentFingerprint: optionalText(row.incident_fingerprint),
+		autonomyLevel: optionalText(row.autonomy_level),
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
+	};
+}
+
+const ATTEMPT_OUTCOME_STATUSES: ReadonlySet<string> = new Set([
+	"failed",
+	"cancelled",
+	"retry",
+	"review_ready",
+	"awaiting_approval",
+]);
+
+/** The outcome is opaque JSONB: only a closed status token and a code leave. */
+function attemptOutcome(value: unknown): Record<string, unknown> | null {
+	if (value === null || value === undefined) return null;
+	let parsed: unknown;
+	try {
+		parsed = parseJsonbColumn<unknown>(value);
+	} catch {
+		return null;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return null;
+	}
+	return parsed as Record<string, unknown>;
+}
+
+function attemptStatus(
+	finishedAt: string | null,
+	outcome: Record<string, unknown> | null,
+): RunAttemptStatus {
+	const stored = outcome?.status;
+	if (typeof stored === "string" && ATTEMPT_OUTCOME_STATUSES.has(stored)) {
+		return stored as RunAttemptStatus;
+	}
+	return finishedAt === null ? "running" : "unknown";
+}
+
+function attemptErrorCode(
+	outcome: Record<string, unknown> | null,
+): string | null {
+	const code = outcome?.error;
+	if (typeof code !== "string" || code.length === 0) return null;
+	return code.slice(0, 64);
+}
+
+function mapAttempt(row: Record<string, unknown>): RunAttempt {
+	const outcome = attemptOutcome(row.outcome);
+	const finishedAt = optionalTimestamp(row.finished_at);
+	return {
+		attemptIndex: count(row.attempt_index),
+		status: attemptStatus(finishedAt, outcome),
+		startedAt: timestamp(row.started_at),
+		finishedAt,
+		errorCode: attemptErrorCode(outcome),
 	};
 }
 
@@ -452,6 +529,28 @@ export async function readRunsList(
 		const status = text(row.status);
 		counts[status] = count(row.count);
 	}
+	const summary = summarizeStatusCounts(counts);
+
+	// The status summary covers the whole organization, so a filtered page
+	// needs its own exact count. The unfiltered case reuses `summary.total`.
+	const filtered =
+		filter.status !== "all" || filter.repositoryId !== null || filter.q !== "";
+	let total = summary.total;
+	if (filtered) {
+		const totalRows = (await sql.unsafe(FILTERED_COUNT_SQL, [
+			scope.organizationId,
+			filter.status,
+			filter.repositoryId,
+			filter.q,
+		])) as unknown as Record<string, unknown>[];
+		total = totalRows.length === 0 ? 0 : count(totalRows[0]?.total);
+	}
+
+	// Clamp an out-of-range offset to the last page that exists, and snap it
+	// to a page boundary so LIMIT/OFFSET stay consistent with the page number.
+	const pageCount = Math.max(1, Math.ceil(total / limit));
+	const page = Math.min(Math.floor(filter.offset / limit) + 1, pageCount);
+	const offset = (page - 1) * limit;
 
 	const rows = (await sql.unsafe(LIST_SQL, [
 		scope.organizationId,
@@ -460,6 +559,7 @@ export async function readRunsList(
 		filter.q,
 		filter.sort,
 		limit,
+		offset,
 	])) as unknown as Record<string, unknown>[];
 
 	const repositoryRows = (await sql.unsafe(STMT.repositories, [
@@ -469,7 +569,9 @@ export async function readRunsList(
 
 	return {
 		rows: rows.map(mapListRow),
-		summary: summarizeStatusCounts(counts),
+		total,
+		page,
+		summary,
 		repositories: repositoryRows.map(mapRepositoryOption),
 	};
 }
@@ -508,6 +610,11 @@ export async function readRunDetail(
 		taskId,
 		RUN_DETAIL_RUN_LIMIT,
 	])) as unknown as Record<string, unknown>[];
+	const attemptRows = (await sql.unsafe(STMT.attempts, [
+		scope.organizationId,
+		taskId,
+		RUN_DETAIL_ATTEMPT_LIMIT,
+	])) as unknown as Record<string, unknown>[];
 	const approvalRows = (await sql.unsafe(STMT.approvals, [
 		scope.organizationId,
 		taskId,
@@ -523,6 +630,7 @@ export async function readRunDetail(
 	return {
 		task: mapTask(taskRow),
 		workflowRuns: runRows.map(mapWorkflowRun),
+		attempts: attemptRows.map(mapAttempt),
 		traceId: trace.traceId,
 		events: trace.events.map(mapEvent),
 		toolInvocations: trace.toolInvocations.map(mapTool),

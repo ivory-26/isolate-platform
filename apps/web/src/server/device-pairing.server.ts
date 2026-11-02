@@ -286,8 +286,16 @@ export function generatePairingCode(): string {
 export function buildPairingLocalUrl(
 	code: string,
 	port: number = DEVICE_PAIRING_LOCAL_PORT,
+	connectorId?: string,
 ): string {
-	return `http://${DEVICE_PAIRING_LOCAL_HOST}:${port}/pair?code=${encodeURIComponent(code)}`;
+	const params = new URLSearchParams({ code });
+	if (connectorId !== undefined && connectorId.length > 0) {
+		// The connector id is a closed, non-secret hint used only to render the
+		// vendor-specific fields on the loopback page. The claim response remains
+		// authoritative for what is actually stored.
+		params.set("connector", connectorId);
+	}
+	return `http://${DEVICE_PAIRING_LOCAL_HOST}:${port}/pair?${params.toString()}`;
 }
 
 function requestTextIsClean(input: {
@@ -394,7 +402,7 @@ export function createDevicePairingService(
 				return {
 					pairingId: pairing.id,
 					code,
-					localUrl: buildPairingLocalUrl(code, localPort),
+					localUrl: buildPairingLocalUrl(code, localPort, body.connectorId),
 					expiresAt: expiresAt.toISOString(),
 				};
 			});

@@ -210,7 +210,7 @@ describe("device pairing create", () => {
 		expect(result.value.code).toHaveLength(43);
 		expect(result.value.code).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(result.value.localUrl).toBe(
-			`http://127.0.0.1:${DEVICE_PAIRING_LOCAL_PORT}/pair?code=${result.value.code}`,
+			`http://127.0.0.1:${DEVICE_PAIRING_LOCAL_PORT}/pair?code=${result.value.code}&connector=sentry`,
 		);
 		const expiresAt = Date.parse(result.value.expiresAt);
 		expect(expiresAt - harness.now().getTime()).toBe(DEVICE_PAIRING_TTL_MS);

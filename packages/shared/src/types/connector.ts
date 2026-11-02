@@ -46,6 +46,41 @@ export const CONNECTOR_DEVICE_STATUSES = [
 export const connectorDeviceStatusSchema = z.enum(CONNECTOR_DEVICE_STATUSES);
 export type ConnectorDeviceStatus = (typeof CONNECTOR_DEVICE_STATUSES)[number];
 
+/**
+ * Internal device-call name for a single bounded credential verification read.
+ *
+ * Deliberately outside `CONNECTOR_TOOL_NAMES`: the model cannot request it. The
+ * server enqueues it after pairing (or on an explicit verify), the relay makes
+ * exactly one cheap authenticated read and reports a bounded reason code.
+ */
+export const CONNECTOR_VERIFY_TOOL_NAME = "connector.verify";
+
+export const CONNECTOR_VERIFY_REASON_CODES = [
+	"OK",
+	"AUTH_FAILED",
+	"CONFIG_REQUIRED",
+	"UNREACHABLE",
+	"RATE_LIMITED",
+	"PROVIDER_ERROR",
+] as const;
+export const connectorVerifyReasonCodeSchema = z.enum(
+	CONNECTOR_VERIFY_REASON_CODES,
+);
+export type ConnectorVerifyReasonCode =
+	(typeof CONNECTOR_VERIFY_REASON_CODES)[number];
+
+/**
+ * Device payload for `connector.verify`. Provider responses are reduced to a
+ * boolean plus one fixed reason code; no body, URL or credential is returned.
+ */
+export const connectorVerifyDeviceResultSchema = z.strictObject({
+	verified: z.boolean(),
+	reasonCode: connectorVerifyReasonCodeSchema,
+});
+export type ConnectorVerifyDeviceResult = z.infer<
+	typeof connectorVerifyDeviceResultSchema
+>;
+
 /** Lowercase token; mirrors the `connector_credentials.connector_id` CHECK. */
 export const CONNECTOR_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 export const MAX_CONNECTOR_ID_CHARS = 32;

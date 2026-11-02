@@ -3,6 +3,8 @@ import {
 	CONNECTOR_AUTH_KINDS,
 	CONNECTOR_CREDENTIAL_STATUSES,
 	CONNECTOR_DEVICE_STATUSES,
+	CONNECTOR_VERIFY_REASON_CODES,
+	CONNECTOR_VERIFY_TOOL_NAME,
 	type ConnectorCredentialSummary,
 	type ConnectorDeviceSummary,
 	connectorAuthKindSchema,
@@ -12,6 +14,8 @@ import {
 	connectorDisplayNameSchema,
 	connectorIdSchema,
 	connectorScopesSchema,
+	connectorVerifyDeviceResultSchema,
+	connectorVerifyReasonCodeSchema,
 	emptyFreeTierProfile,
 	freeTierProfileSchema,
 	MAX_CONNECTOR_CREDENTIAL_REF_CHARS,
@@ -82,6 +86,37 @@ describe("connector contracts", () => {
 		expect(connectorDeviceStatusSchema.safeParse("offline").success).toBe(
 			false,
 		);
+	});
+
+	test("verification is a closed internal tool with fixed reason codes", () => {
+		expect(CONNECTOR_VERIFY_TOOL_NAME).toBe("connector.verify");
+		expect(CONNECTOR_VERIFY_REASON_CODES).toEqual([
+			"OK",
+			"AUTH_FAILED",
+			"CONFIG_REQUIRED",
+			"UNREACHABLE",
+			"RATE_LIMITED",
+			"PROVIDER_ERROR",
+		]);
+		for (const reason of CONNECTOR_VERIFY_REASON_CODES) {
+			expect(connectorVerifyReasonCodeSchema.parse(reason)).toBe(reason);
+		}
+		expect(connectorVerifyReasonCodeSchema.safeParse("EXPIRED").success).toBe(
+			false,
+		);
+		expect(
+			connectorVerifyDeviceResultSchema.parse({
+				verified: true,
+				reasonCode: "OK",
+			}),
+		).toEqual({ verified: true, reasonCode: "OK" });
+		expect(
+			connectorVerifyDeviceResultSchema.safeParse({
+				verified: false,
+				reasonCode: "OK",
+				body: "provider response",
+			}).success,
+		).toBe(false);
 	});
 
 	test("connector ids are lowercase bounded tokens", () => {

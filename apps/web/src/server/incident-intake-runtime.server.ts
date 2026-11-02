@@ -15,6 +15,12 @@ import { asOrganizationId, asUserId } from "@isolate/shared";
 import { z } from "zod";
 import { submitTaskSchema } from "../features/tasks/contracts";
 import {
+	PostgresEventDeliveryLedger,
+	PostgresSubscriptionRegistry,
+	PostgresSubscriptionRepositoryLookup,
+	PostgresTaskAutonomyRecorder,
+} from "./incident-delivery-postgres.server";
+import {
 	createIncidentIntake,
 	createInMemoryIncidentDedupeStore,
 	type IncidentRepositoryRoute,
@@ -254,6 +260,10 @@ let sql: PgSql | undefined;
 let sqlUrl: string | undefined;
 let store: ReturnType<typeof createPostgresStore> | undefined;
 let incidentRepository: PostgresIncidentRepository | undefined;
+let subscriptions: PostgresSubscriptionRegistry | undefined;
+let deliveries: PostgresEventDeliveryLedger | undefined;
+let autonomy: PostgresTaskAutonomyRecorder | undefined;
+let repositoryLookup: PostgresSubscriptionRepositoryLookup | undefined;
 let intake: ReturnType<typeof createIncidentIntake> | undefined;
 /**
  * Process-local dedupe for the single-process deployment. A multi-instance
@@ -265,22 +275,51 @@ type PostgresBundle = {
 	database: PgSql;
 	store: ReturnType<typeof createPostgresStore>;
 	incidentRepository: PostgresIncidentRepository;
+	subscriptions: PostgresSubscriptionRegistry;
+	deliveries: PostgresEventDeliveryLedger;
+	autonomy: PostgresTaskAutonomyRecorder;
+	repositoryLookup: PostgresSubscriptionRepositoryLookup;
 };
 
 function getStore(databaseUrl: string): PostgresBundle {
 	if (
 		store !== undefined &&
 		incidentRepository !== undefined &&
+		subscriptions !== undefined &&
+		deliveries !== undefined &&
+		autonomy !== undefined &&
+		repositoryLookup !== undefined &&
 		sqlUrl === databaseUrl &&
 		sql !== undefined
 	)
-		return { database: sql, store, incidentRepository };
+		return {
+			database: sql,
+			store,
+			incidentRepository,
+			subscriptions,
+			deliveries,
+			autonomy,
+			repositoryLookup,
+		};
 	sql = createDb(databaseUrl);
 	sqlUrl = databaseUrl;
 	store = createPostgresStore(sql);
-	// Signal dedupe and the per-org incident cap share the same connection pool.
+	// Signal dedupe, the per-org cap, subscriptions and the delivery ledger share
+	// the same connection pool.
 	incidentRepository = new PostgresIncidentRepository(sql);
-	return { database: sql, store, incidentRepository };
+	subscriptions = new PostgresSubscriptionRegistry(sql);
+	deliveries = new PostgresEventDeliveryLedger(sql);
+	autonomy = new PostgresTaskAutonomyRecorder(sql);
+	repositoryLookup = new PostgresSubscriptionRepositoryLookup(sql);
+	return {
+		database: sql,
+		store,
+		incidentRepository,
+		subscriptions,
+		deliveries,
+		autonomy,
+		repositoryLookup,
+	};
 }
 
 export function incidentRepositoryRoute(
@@ -293,6 +332,49 @@ export function incidentRepositoryRoute(
 	return {
 		organizationId: settings.binding.organizationId,
 		repositoryId: settings.repositoryId,
+		branch: settings.branch,
+		workflowDefinitionId: settings.workflowDefinitionId,
+		workflowVersion: settings.workflowVersion,
+		fileOwnership: settings.fileOwnership,
+		...(settings.maxAgentTurns === undefined
+			? {}
+			: { budget: { maxAgentTurns: settings.maxAgentTurns } }),
+	};
+}
+
+/**
+ * Route resolution for the managed pipeline. A subscription may name a
+ * repository other than the legacy env binding; that id is checked against
+ * `repositories` under the caller's organization, so a foreign or unknown id
+ * resolves to `null` (404) instead of crossing tenants. The worktree branch and
+ * the pinned workflow still come from server-side configuration.
+ */
+async function resolveSubscriptionRoute(
+	settings: IncidentIntakeSettings,
+	lookup: PostgresSubscriptionRepositoryLookup,
+	input: {
+		organizationId: string;
+		service: string;
+		repositoryId?: string;
+		baseBranch?: string;
+	},
+): Promise<IncidentRepositoryRoute | null> {
+	const requested = input.repositoryId?.toLowerCase();
+	if (requested === undefined || requested === settings.repositoryId) {
+		return incidentRepositoryRoute(settings, {
+			organizationId: input.organizationId,
+			service: input.service,
+		});
+	}
+	if (input.organizationId !== settings.binding.organizationId) return null;
+	const defaultBranch = await lookup.defaultBranch({
+		organizationId: settings.binding.organizationId,
+		repositoryId: requested,
+	});
+	if (defaultBranch === null) return null;
+	return {
+		organizationId: settings.binding.organizationId,
+		repositoryId: requested,
 		branch: settings.branch,
 		workflowDefinitionId: settings.workflowDefinitionId,
 		workflowVersion: settings.workflowVersion,
@@ -342,6 +424,10 @@ export function getIncidentIntake(
 		database,
 		store: taskStore,
 		incidentRepository: signals,
+		subscriptions: subscriptionRegistry,
+		deliveries: deliveryLedger,
+		autonomy: autonomyRecorder,
+		repositoryLookup: subscriptionRepositories,
 	} = getStore(databaseUrl);
 	const service = createTaskService({
 		// The verified route binding is the caller identity for this path.
@@ -360,8 +446,12 @@ export function getIncidentIntake(
 		grafanaTimestampHeader: settings.grafanaTimestampHeader,
 		binding: settings.binding,
 		resolveRepository: async (input) =>
-			incidentRepositoryRoute(settings, input),
+			resolveSubscriptionRoute(settings, subscriptionRepositories, input),
 		incidentRepository: signals,
+		// Wave 23: subscription policy, delivery receipts and task autonomy.
+		subscriptions: subscriptionRegistry,
+		deliveries: deliveryLedger,
+		recordTaskAutonomy: (input) => autonomyRecorder.record(input),
 		dedupe,
 		// One durable bucket per detected provider mode (600/min).
 		rateLimits: new PostgresRateLimitRepository(database),

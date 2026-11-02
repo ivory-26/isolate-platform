@@ -2,24 +2,24 @@ import type { ComponentType } from "react";
 import {
 	type AppIconProps,
 	ApprovalsIcon,
-	DevicesIcon,
+	ConnectorsIcon,
+	InboxIcon,
 	OverviewIcon,
 	RepositoriesIcon,
 	RunsIcon,
 	SettingsIcon,
 	UsageIcon,
-	WorkflowsIcon,
 } from "@/components/icons";
 
 export type NavPath =
 	| "/overview"
+	| "/inbox"
 	| "/runs"
 	| "/approvals"
-	| "/workflows"
+	| "/integrations"
 	| "/repositories"
 	| "/usage"
-	| "/settings"
-	| "/devices";
+	| "/settings";
 
 export type NavItem = {
 	label: string;
@@ -28,11 +28,17 @@ export type NavItem = {
 	badge?: "approvals" | "runs";
 };
 
+/**
+ * Primary navigation. Workflows and Devices stay reachable by URL but are not
+ * first-level destinations: workflows are secondary, and devices are now the
+ * Relays tab under Integrations.
+ */
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 	{
 		label: "Operate",
 		items: [
-			{ label: "Overview", to: "/overview", icon: OverviewIcon },
+			{ label: "Home", to: "/overview", icon: OverviewIcon },
+			{ label: "Inbox", to: "/inbox", icon: InboxIcon },
 			{ label: "Runs", to: "/runs", icon: RunsIcon, badge: "runs" },
 			{
 				label: "Approvals",
@@ -40,7 +46,12 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 				icon: ApprovalsIcon,
 				badge: "approvals",
 			},
-			{ label: "Workflows", to: "/workflows", icon: WorkflowsIcon },
+		],
+	},
+	{
+		label: "Connect",
+		items: [
+			{ label: "Integrations", to: "/integrations", icon: ConnectorsIcon },
 			{ label: "Repositories", to: "/repositories", icon: RepositoriesIcon },
 		],
 	},
@@ -50,10 +61,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 	},
 	{
 		label: "Manage",
-		items: [
-			{ label: "Settings", to: "/settings", icon: SettingsIcon },
-			{ label: "Devices", to: "/devices", icon: DevicesIcon },
-		],
+		items: [{ label: "Settings", to: "/settings", icon: SettingsIcon }],
 	},
 ];
 

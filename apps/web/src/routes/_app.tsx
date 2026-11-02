@@ -1,13 +1,35 @@
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { PageContainer } from "@/components/common/page-container";
 import { AppShell } from "@/components/shell/app-shell";
 import { requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
+import { shouldStartOnboarding } from "@/features/onboarding/contracts";
+import { setupStateOptions } from "@/features/onboarding/queries";
 
 export const Route = createFileRoute("/_app")({
-	loader: async ({ context }) => {
+	loader: async ({ context, location }) => {
 		const state = await context.queryClient.ensureQueryData(authStateOptions());
-		return requireSession(state);
+		const session = requireSession(state);
+		const path = location.pathname;
+		// Setup itself, settings and organization management must always be
+		// reachable; a redirect loop would make them impossible to use.
+		if (
+			path === "/onboarding" ||
+			path.startsWith("/settings") ||
+			path.startsWith("/organizations")
+		) {
+			return session;
+		}
+		const setup = await context.queryClient.ensureQueryData(
+			setupStateOptions(),
+		);
+		// Only an empty workspace is sent through onboarding. An existing
+		// repository, relay, connection or task means the caller already has a
+		// workspace and must never be forced back into setup.
+		if (setup.ok && shouldStartOnboarding(setup.value)) {
+			throw redirect({ to: "/onboarding" });
+		}
+		return session;
 	},
 	component: AppLayout,
 	pendingComponent: () => (

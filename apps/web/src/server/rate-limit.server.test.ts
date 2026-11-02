@@ -40,6 +40,7 @@ describe("rate limit policies", () => {
 			"device:revoke": 30,
 			"device:rotate": 10,
 			"connector:connect": 30,
+			"connector:verify": 30,
 			"connector:list": 120,
 			"connector:revoke": 30,
 		});

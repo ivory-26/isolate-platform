@@ -110,11 +110,11 @@ export const CONNECTOR_VERIFY_AWAIT_POLL_MS = 250;
 export const CONNECTOR_VERIFY_RATE_LIMITED_RETRY_AFTER_SECONDS = 30;
 
 /**
- * Verification reuses the connector-management bucket (`connector:connect`,
- * 30/min). A dedicated action would widen the shared rate-limit policy for no
- * extra safety: this is the same owner/admin connector budget.
+ * Verification gets its own per-user bucket (30/min). It is the same order as
+ * the connector-management budget but cannot be starved by a burst of pairing
+ * requests, and a pairing burst cannot be starved by verification retries.
  */
-const VERIFY_RATE_LIMIT_ACTION: UserRateLimitAction = "connector:connect";
+const VERIFY_RATE_LIMIT_ACTION: UserRateLimitAction = "connector:verify";
 
 const credentialIdSchema = z.uuid();
 const verifyInputSchema = z.strictObject({

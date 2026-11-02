@@ -620,7 +620,7 @@ describe("connector credential verification", () => {
 		const harness = await createHarness({ rateLimiter: gate });
 		await harness.service.verify({ credentialId: harness.pendingAId });
 		expect(gate.calls).toEqual([
-			{ userId: USER_ID, action: "connector:connect" },
+			{ userId: USER_ID, action: "connector:verify" },
 		]);
 		expect(harness.calls.enqueued).toHaveLength(1);
 	});

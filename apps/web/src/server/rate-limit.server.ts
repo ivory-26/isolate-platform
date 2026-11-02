@@ -98,6 +98,7 @@ export type UserRateLimitAction =
 	| "device:revoke"
 	| "device:rotate"
 	| "connector:connect"
+	| "connector:verify"
 	| "connector:list"
 	| "connector:revoke";
 
@@ -108,6 +109,7 @@ export const USER_RATE_LIMITS = {
 	"device:revoke": 30,
 	"device:rotate": 10,
 	"connector:connect": 30,
+	"connector:verify": 30,
 	"connector:list": 120,
 	"connector:revoke": 30,
 } as const satisfies Record<UserRateLimitAction, number>;

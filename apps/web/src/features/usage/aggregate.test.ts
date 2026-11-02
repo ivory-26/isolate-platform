@@ -35,8 +35,8 @@ describe("parseUsagePeriod", () => {
 	});
 
 	test("parses the URL search object", () => {
-		expect(parseUsageSearch({ period: "7" })).toEqual({ period: 7 });
-		expect(parseUsageSearch({})).toEqual({ period: 30 });
+		expect(parseUsageSearch({ period: "7" })).toEqual({ period: 7, page: 1 });
+		expect(parseUsageSearch({})).toEqual({ period: 30, page: 1 });
 	});
 });
 

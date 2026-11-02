@@ -20,17 +20,6 @@
 	animation-delay: var(--enter-delay, 0ms);
 }
 
-/*
- * The shader sits directly under the hero copy. A tight, dark glyph shadow
- * keeps the type readable over the bright horizon without painting a fill,
- * panel, or scrim behind it.
- */
-.landing-hero-copy {
-	text-shadow:
-		0 1px 2px rgb(2 7 10 / 0.8),
-		0 2px 10px rgb(2 7 10 / 0.45);
-}
-
 .landing-reveal {
 	opacity: 1;
 	transform: none;

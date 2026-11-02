@@ -8,6 +8,16 @@ export const usagePeriods = [7, 30, 90] as const;
 export type UsagePeriod = (typeof usagePeriods)[number];
 export const DEFAULT_USAGE_PERIOD: UsagePeriod = 30;
 export const USAGE_TIME_ZONE = "UTC" as const;
+/** Daily breakdown rows per page. */
+export const USAGE_PAGE_SIZE = 14;
+export const DEFAULT_USAGE_PAGE = 1;
+/**
+ * The longest period bounds how many pages a URL may ask for, so a hand-edited
+ * `page` can never request an unbounded slice.
+ */
+export const USAGE_MAX_PAGE = Math.ceil(
+	Math.max(...usagePeriods) / USAGE_PAGE_SIZE,
+);
 
 export function parseUsagePeriod(value: unknown): UsagePeriod {
 	const candidate =
@@ -21,11 +31,40 @@ export function parseUsagePeriod(value: unknown): UsagePeriod {
 		: DEFAULT_USAGE_PERIOD;
 }
 
-export type UsageSearch = { period: UsagePeriod };
+/**
+ * Page numbers are whole, positive and bounded by the longest period. Anything
+ * else falls back to the first page; the table clamps again to its real page
+ * count once the days are known.
+ */
+export function parseUsagePage(value: unknown): number {
+	const candidate =
+		typeof value === "number"
+			? value
+			: typeof value === "string"
+				? Number(value)
+				: NaN;
+	if (!Number.isInteger(candidate) || candidate < 1) {
+		return DEFAULT_USAGE_PAGE;
+	}
+	return Math.min(candidate, USAGE_MAX_PAGE);
+}
 
-/** URL search parser; an absent or invalid period falls back to 30 days. */
+export type UsageSearch = { period: UsagePeriod; page: number };
+
+/**
+ * URL search parser; an absent or invalid period falls back to 30 days and an
+ * absent or invalid page falls back to the first page.
+ */
 export function parseUsageSearch(search: Record<string, unknown>): UsageSearch {
-	return { period: parseUsagePeriod(search.period) };
+	return {
+		period: parseUsagePeriod(search.period),
+		page: parseUsagePage(search.page),
+	};
+}
+
+/** Selecting a period starts at the first page of the new window. */
+export function usageSearchForPeriod(period: UsagePeriod): UsageSearch {
+	return { period, page: DEFAULT_USAGE_PAGE };
 }
 
 export const usageRequestSchema = z.strictObject({

@@ -1,6 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { Metric } from "@/components/common/metric";
+import {
+	Pagination,
+	useClientPagination,
+} from "@/components/common/pagination";
+import { DataTable } from "@/components/console/data-table";
 import { MetricBand } from "@/components/console/metric-band";
 import { ConsoleSection } from "@/components/console/section";
 import { Area } from "@/components/dither-kit/area";
@@ -14,22 +19,17 @@ import { XAxis } from "@/components/dither-kit/x-axis";
 import { YAxis } from "@/components/dither-kit/y-axis";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
+import { TableCell, TableRow } from "@/components/ui/table";
 import { formatDate, formatTokens } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { formatUsd } from "./aggregate";
 import {
+	USAGE_PAGE_SIZE,
 	USAGE_TIME_ZONE,
 	type UsagePeriod,
 	type UsageReadModel,
 	usagePeriods,
+	usageSearchForPeriod,
 } from "./contracts";
 
 const TOKEN_CONFIG = {
@@ -60,7 +60,7 @@ export function UsagePeriodSelector({ period }: { period: UsagePeriod }) {
 					>
 						<Link
 							to="/usage"
-							search={{ period: option }}
+							search={usageSearchForPeriod(option)}
 							aria-current={active ? "page" : undefined}
 						>
 							{option} days
@@ -244,80 +244,91 @@ export function UsageCharts({ model }: { model: UsageReadModel }) {
 	);
 }
 
-export function UsageTable({ model }: { model: UsageReadModel }) {
+const USAGE_TABLE_COLUMNS = [
+	{ key: "day", header: "Day (UTC)" },
+	{ key: "prompt", header: "Prompt tokens", align: "right" as const },
+	{ key: "completion", header: "Completion tokens", align: "right" as const },
+	{ key: "total", header: "Total tokens", align: "right" as const },
+	{ key: "sandbox", header: "Sandbox seconds", align: "right" as const },
+	{ key: "cost", header: "Recorded cost", align: "right" as const },
+];
+
+export function UsageTable({
+	model,
+	page,
+	onPageChange,
+}: {
+	model: UsageReadModel;
+	page: number;
+	onPageChange: (page: number) => void;
+}) {
+	// Newest day first; the table paginates the reversed list, not the chart rows.
 	const days = useMemo(() => [...model.days].reverse(), [model.days]);
+	const paged = useClientPagination({
+		items: days,
+		pageSize: USAGE_PAGE_SIZE,
+		page,
+		onPageChange,
+	});
+
 	return (
 		<ConsoleSection
 			id="usage-daily-breakdown"
 			title="Daily breakdown"
 			description={`Measured usage per UTC day for the last ${model.period} days. A dash means no trusted price.`}
 		>
-			<div className="max-h-[460px] overflow-auto border-y border-line-subtle">
-				<Table>
-					<caption className="sr-only">
-						Daily measured usage for the active organization: prompt and
-						completion tokens, sandbox seconds and recorded cost in USD, newest
-						first. Times are UTC.
-					</caption>
-					<TableHeader className="sticky top-0 z-10 bg-canvas">
-						<TableRow className="border-line-subtle hover:bg-transparent">
-							<TableHead scope="col">Day (UTC)</TableHead>
-							<TableHead scope="col" className="text-right">
-								Prompt tokens
-							</TableHead>
-							<TableHead scope="col" className="text-right">
-								Completion tokens
-							</TableHead>
-							<TableHead scope="col" className="text-right">
-								Total tokens
-							</TableHead>
-							<TableHead scope="col" className="text-right">
-								Sandbox seconds
-							</TableHead>
-							<TableHead scope="col" className="text-right">
-								Recorded cost
-							</TableHead>
-						</TableRow>
-					</TableHeader>
-					<TableBody>
-						{days.map((day) => (
-							<TableRow key={day.day} className="h-11 border-line-subtle">
-								<TableCell className="font-mono text-xs text-ink-secondary">
-									{day.day}
-								</TableCell>
-								<TableCell className="text-right font-mono text-xs tabular-nums">
-									{formatTokens(day.promptTokens)}
-								</TableCell>
-								<TableCell className="text-right font-mono text-xs tabular-nums">
-									{formatTokens(day.completionTokens)}
-								</TableCell>
-								<TableCell className="text-right font-mono text-xs tabular-nums text-ink">
-									{formatTokens(day.totalTokens)}
-								</TableCell>
-								<TableCell className="text-right font-mono text-xs tabular-nums">
-									{Math.round(day.sandboxSeconds)}
-								</TableCell>
-								<TableCell className="text-right font-mono text-xs tabular-nums">
-									{formatUsd(day.costUsd)}
-									{day.costCoverage === "partial" ? (
-										<span
-											className="ml-1 text-orange"
-											title="Some rows this day had no trusted price"
-										>
-											*
-										</span>
-									) : null}
-								</TableCell>
-							</TableRow>
-						))}
-					</TableBody>
-				</Table>
-			</div>
-			<p className="text-[11px] text-ink-muted">
-				* Partial cost: at least one row that day had no trusted price. Sandbox
-				seconds come from measured task attempts for tasks created in the
-				window.
-			</p>
+			<DataTable
+				caption="Daily measured usage for the active organization: prompt and completion tokens, sandbox seconds and recorded cost in USD, newest first. Times are UTC."
+				columns={USAGE_TABLE_COLUMNS}
+				isEmpty={paged.pageItems.length === 0}
+				empty="No measured usage rows in this period."
+				pagination={
+					<Pagination
+						page={paged.page}
+						pageCount={paged.pageCount}
+						onPageChange={onPageChange}
+						label="Daily breakdown pages"
+					/>
+				}
+				footer={
+					<p className="text-[11px] text-ink-muted">
+						* Partial cost: at least one row that day had no trusted price.
+						Sandbox seconds come from measured task attempts for tasks created
+						in the window.
+					</p>
+				}
+			>
+				{paged.pageItems.map((day) => (
+					<TableRow key={day.day} className="h-11 border-line-subtle">
+						<TableCell className="font-mono text-xs text-ink-secondary">
+							{day.day}
+						</TableCell>
+						<TableCell className="text-right font-mono text-xs tabular-nums">
+							{formatTokens(day.promptTokens)}
+						</TableCell>
+						<TableCell className="text-right font-mono text-xs tabular-nums">
+							{formatTokens(day.completionTokens)}
+						</TableCell>
+						<TableCell className="text-right font-mono text-xs tabular-nums text-ink">
+							{formatTokens(day.totalTokens)}
+						</TableCell>
+						<TableCell className="text-right font-mono text-xs tabular-nums">
+							{Math.round(day.sandboxSeconds)}
+						</TableCell>
+						<TableCell className="text-right font-mono text-xs tabular-nums">
+							{formatUsd(day.costUsd)}
+							{day.costCoverage === "partial" ? (
+								<span
+									className="ml-1 text-orange"
+									title="Some rows this day had no trusted price"
+								>
+									*
+								</span>
+							) : null}
+						</TableCell>
+					</TableRow>
+				))}
+			</DataTable>
 		</ConsoleSection>
 	);
 }

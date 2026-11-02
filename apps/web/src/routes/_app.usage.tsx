@@ -49,9 +49,18 @@ function UsageError() {
 
 function UsagePage() {
 	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const query = useSuspenseQuery(usageOptions(search.period));
 	const description =
 		"Measured model tokens, sandbox seconds and recorded cost for the active organization. All values come from usage records; no estimates are produced, and a missing price is shown as a dash.";
+
+	// Page changes are client-side; the loader dependency is the period only.
+	const setPage = (page: number) => {
+		void navigate({
+			search: (previous) => ({ ...previous, page }),
+			resetScroll: false,
+		});
+	};
 
 	if (!query.data.ok) {
 		return (
@@ -97,7 +106,7 @@ function UsagePage() {
 				<div className="flex flex-col gap-8">
 					<UsageMetrics model={model} />
 					<UsageCharts model={model} />
-					<UsageTable model={model} />
+					<UsageTable model={model} page={search.page} onPageChange={setPage} />
 				</div>
 			)}
 		</PageContainer>

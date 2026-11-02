@@ -1,8 +1,23 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useId, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+	Pagination,
+	useClientPagination,
+} from "@/components/common/pagination";
 import { RelativeTime } from "@/components/common/relative-time";
-import { PlusIcon, SearchIcon, WarningIcon } from "@/components/icons";
+import { DataTable } from "@/components/console/data-table";
+import { EmptyRow } from "@/components/console/empty-row";
+import { ConsoleNote } from "@/components/console/note";
+import { ConsoleSection } from "@/components/console/section";
+import { StatusMark } from "@/components/console/status-mark";
+import {
+	ChevronDownIcon,
+	PlusIcon,
+	RepositoriesIcon,
+	SearchIcon,
+	WarningIcon,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -23,30 +38,40 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
+import { TableCell, TableRow } from "@/components/ui/table";
 import { formatDurationMs } from "@/lib/format";
 import type {
+	GitHubSetupResult,
+	InstallationRepositoriesReadModel,
 	RegisterRepositoryInput,
 	RepositoriesSearch,
 	RepositoryProvider,
 	RepositorySummary,
 } from "./contracts";
 import { registerRepositorySchema } from "./contracts";
+import {
+	canImport,
+	isImportChoiceDisabled,
+	MAX_IMPORT_SELECTION,
+	pruneImportSelection,
+	toggleImportSelection,
+} from "./import-selection";
 import { repositoryKeys } from "./queries";
-import { registerRepository } from "./repositories.functions";
+import {
+	importRepositories,
+	listInstallationRepositories,
+	registerRepository,
+	startGitHubInstall,
+} from "./repositories.functions";
 
 const PROVIDER_LABEL: Record<RepositoryProvider, string> = {
 	github: "GitHub",
 };
 
 const SKELETON_ROWS = ["one", "two", "three", "four", "five"];
+
+/** One table page for the repository list (the server caps at 200 rows). */
+export const REPOSITORY_PAGE_SIZE = 25;
 
 export function RepositoryFilters({
 	search,
@@ -121,93 +146,380 @@ export function RepositoryFilters({
 	);
 }
 
+const TABLE_COLUMNS = [
+	{ key: "repository", header: "Repository", className: "min-w-[240px]" },
+	{ key: "branch", header: "Default branch", className: "w-[150px]" },
+	{ key: "validation", header: "Validation gate", className: "min-w-[260px]" },
+	{ key: "registered", header: "Registered", className: "w-[150px]" },
+];
+
 export function RepositoriesTable({
 	repositories,
 	truncated,
+	page,
+	onPageChange,
 }: {
 	repositories: RepositorySummary[];
 	truncated: boolean;
+	page: number;
+	onPageChange: (page: number) => void;
 }) {
+	const paged = useClientPagination({
+		items: repositories,
+		pageSize: REPOSITORY_PAGE_SIZE,
+		page,
+		onPageChange,
+	});
+
 	return (
-		<div className="space-y-2">
-			<div className="border-y border-line-subtle">
-				<Table>
-					<caption className="sr-only">
-						Repositories registered for the active organization, including
-						provider, default branch, validation policy and registration time.
-					</caption>
-					<TableHeader>
-						<TableRow className="border-line-subtle hover:bg-transparent">
-							<TableHead scope="col" className="min-w-[240px]">
-								Repository
-							</TableHead>
-							<TableHead scope="col" className="w-[150px]">
-								Default branch
-							</TableHead>
-							<TableHead scope="col" className="min-w-[260px]">
-								Validation gate
-							</TableHead>
-							<TableHead scope="col" className="w-[150px]">
-								Registered
-							</TableHead>
-						</TableRow>
-					</TableHeader>
-					<TableBody>
-						{repositories.map((repository) => (
-							<TableRow key={repository.id} className="h-11 border-line-subtle">
-								<TableCell className="py-1 align-top">
-									<span className="block truncate font-mono text-xs text-ink">
-										{repository.externalFullName}
-									</span>
-									<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-muted">
-										<span>{PROVIDER_LABEL[repository.provider]}</span>
-										<span aria-hidden="true">·</span>
-										<span className="font-mono">
-											{repository.id.slice(0, 8)}…
-										</span>
-									</div>
-								</TableCell>
-								<TableCell className="py-1 align-top">
-									<span className="font-mono text-xs text-ink-secondary">
-										{repository.defaultBranch}
-									</span>
-								</TableCell>
-								<TableCell className="max-w-[320px] py-1 align-top whitespace-normal">
-									{repository.validationCommand ? (
-										<div className="space-y-1">
-											<code
-												className="line-clamp-2 font-mono text-[11px] leading-5 break-all text-ink-secondary"
-												title={repository.validationCommand}
-											>
-												{repository.validationCommand}
-											</code>
-											<p className="text-[11px] text-ink-muted tabular-nums">
-												Timeout{" "}
-												{formatDurationMs(repository.validationTimeoutMs)}
-											</p>
-										</div>
-									) : (
-										<span className="text-xs text-ink-muted">
-											No validation gate configured
-										</span>
-									)}
-								</TableCell>
-								<TableCell className="py-1 align-top text-xs text-ink-secondary">
-									<RelativeTime value={repository.createdAt} />
-								</TableCell>
-							</TableRow>
-						))}
-					</TableBody>
-				</Table>
-			</div>
-			{truncated ? (
-				<p className="text-xs text-ink-muted">
-					Showing the first 200 repositories. Narrow the search to see the rest.
-				</p>
-			) : null}
-		</div>
+		<DataTable
+			caption="Repositories imported for the active organization, including provider, default branch, validation policy and registration time."
+			columns={TABLE_COLUMNS}
+			isEmpty={paged.pageItems.length === 0}
+			empty="No repositories registered yet."
+			pagination={
+				<>
+					<Pagination
+						page={paged.page}
+						pageCount={paged.pageCount}
+						onPageChange={onPageChange}
+						label="Repository pages"
+					/>
+					{truncated ? (
+						<p className="text-[11px] text-ink-muted">
+							Showing the first 200 repositories. Narrow the search to see the
+							rest.
+						</p>
+					) : null}
+				</>
+			}
+		>
+			{paged.pageItems.map((repository) => (
+				<TableRow key={repository.id} className="border-line-subtle">
+					<TableCell className="py-2 align-top">
+						<span className="block truncate font-mono text-xs text-ink">
+							{repository.externalFullName}
+						</span>
+						<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-muted">
+							<span>{PROVIDER_LABEL[repository.provider]}</span>
+							<span aria-hidden="true">·</span>
+							<span className="font-mono">{repository.id.slice(0, 8)}…</span>
+						</div>
+					</TableCell>
+					<TableCell className="py-2 align-top">
+						<span className="font-mono text-xs text-ink-secondary">
+							{repository.defaultBranch}
+						</span>
+					</TableCell>
+					<TableCell className="max-w-[320px] py-2 align-top whitespace-normal">
+						{repository.validationCommand ? (
+							<div className="space-y-1">
+								<code
+									className="line-clamp-2 font-mono text-[11px] leading-5 break-all text-ink-secondary"
+									title={repository.validationCommand}
+								>
+									{repository.validationCommand}
+								</code>
+								<p className="text-[11px] text-ink-muted tabular-nums">
+									Timeout {formatDurationMs(repository.validationTimeoutMs)}
+								</p>
+							</div>
+						) : (
+							<span className="text-xs text-ink-muted">
+								No validation gate configured
+							</span>
+						)}
+					</TableCell>
+					<TableCell className="py-2 align-top text-xs text-ink-secondary">
+						<RelativeTime value={repository.createdAt} />
+					</TableCell>
+				</TableRow>
+			))}
+		</DataTable>
 	);
 }
+
+/* -------------------------------------------------------------------------- */
+/* GitHub App connect + repository picker                                     */
+/* -------------------------------------------------------------------------- */
+
+const installationKeys = ["repositories", "installation"] as const;
+
+function failureHint(result: GitHubSetupResult<unknown>): string | null {
+	if (result.ok) return null;
+	switch (result.error.code) {
+		case "GITHUB_APP_NOT_CONFIGURED":
+			return "This deployment has no Isolate GitHub App configured. An operator must set the App id, slug, private key and state secret before any organization can install it.";
+		case "GITHUB_INSTALLATION_REQUIRED":
+			return "Install the Isolate App on the account that owns your repositories, then return here.";
+		case "FORBIDDEN":
+			return "Only an owner or admin can install the App or import repositories.";
+		case "RATE_LIMITED":
+			return "GitHub is rate limiting Isolate. Wait a moment and refresh the list.";
+		default:
+			return "The installation repository list could not be read. Try again shortly.";
+	}
+}
+
+/**
+ * Primary repository path: install the Isolate GitHub App, then pick from the
+ * installation's own repositories. Manual registration stays available as an
+ * advanced form below; it is never the main path.
+ */
+export function ConnectGitHubPanel({ canManage }: { canManage: boolean }) {
+	const queryClient = useQueryClient();
+	const [expanded, setExpanded] = useState(false);
+	const [selected, setSelected] = useState<string[]>([]);
+	const [notice, setNotice] = useState<string | null>(null);
+
+	const installation = useQuery({
+		queryKey: installationKeys,
+		queryFn: () => listInstallationRepositories(),
+		enabled: expanded && canManage,
+		staleTime: 30_000,
+		retry: false,
+	});
+
+	const install = useMutation({
+		mutationFn: () => startGitHubInstall(),
+		onSuccess: (result) => {
+			if (!result.ok) {
+				setNotice(failureHint(result));
+				return;
+			}
+			// The install URL is GitHub's own origin; the browser leaves Isolate.
+			window.location.assign(result.value.url);
+		},
+		onError: () => setNotice("The GitHub install could not be started."),
+	});
+
+	const importMutation = useMutation({
+		mutationFn: (fullNames: string[]) =>
+			importRepositories({ data: { fullNames } }),
+		onSuccess: async (result) => {
+			if (!result.ok) {
+				setNotice(failureHint(result));
+				return;
+			}
+			const { imported, skipped } = result.value;
+			setNotice(
+				`Imported ${imported.length} ${
+					imported.length === 1 ? "repository" : "repositories"
+				}${skipped.length > 0 ? `; ${skipped.length} skipped (already imported or not visible)` : ""}.`,
+			);
+			setSelected([]);
+			await queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+		},
+		onError: () => setNotice("The import request could not be completed."),
+	});
+
+	const repositories: InstallationRepositoriesReadModel["repositories"] =
+		installation.data?.ok ? installation.data.value.repositories : [];
+	const installationError =
+		installation.data !== undefined && !installation.data.ok
+			? failureHint(installation.data)
+			: installation.isError
+				? "The installation repository list is unavailable."
+				: null;
+
+	const offered = useMemo(
+		() => repositories.map((repository) => repository.fullName),
+		[repositories],
+	);
+	useEffect(() => {
+		setSelected((current) => pruneImportSelection(current, offered));
+	}, [offered]);
+
+	const toggle = (fullName: string) => {
+		setSelected((current) => {
+			const result = toggleImportSelection(current, fullName);
+			if (result.blocked) {
+				toast.error(
+					`Import at most ${MAX_IMPORT_SELECTION} repositories at a time.`,
+				);
+			}
+			return result.selected;
+		});
+		setNotice(null);
+	};
+
+	return (
+		<ConsoleSection
+			id="connect-github"
+			title="Connect GitHub"
+			description="Install the Isolate App, then choose the repositories it may work on. Tasks get a repository and default branch from this list."
+			action={
+				canManage ? (
+					<Button
+						type="button"
+						size="sm"
+						disabled={install.isPending}
+						onClick={() => {
+							setNotice(null);
+							install.mutate();
+						}}
+					>
+						<RepositoriesIcon size={14} />
+						{install.isPending ? "Opening GitHub…" : "Install GitHub App"}
+					</Button>
+				) : null
+			}
+		>
+			{!canManage ? (
+				<ConsoleNote role="note">
+					Your role is read-only. An owner or admin installs the GitHub App and
+					imports repositories.
+				</ConsoleNote>
+			) : null}
+
+			<div className="space-y-3">
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					aria-expanded={expanded}
+					onClick={() => setExpanded((current) => !current)}
+				>
+					<ChevronDownIcon
+						className={
+							expanded
+								? "rotate-180 transition-transform"
+								: "transition-transform"
+						}
+					/>
+					{expanded
+						? "Hide installation repositories"
+						: "Choose from installed repositories"}
+				</Button>
+
+				{notice ? (
+					<ConsoleNote
+						role="status"
+						tone={importMutation.isSuccess ? "neutral" : "warning"}
+					>
+						{notice}
+					</ConsoleNote>
+				) : null}
+
+				{expanded ? (
+					<div className="space-y-3">
+						{installation.isLoading ? (
+							<div className="divide-y divide-line-subtle border-y border-line-subtle">
+								{SKELETON_ROWS.map((row) => (
+									<Skeleton key={row} className="h-11 w-full" />
+								))}
+							</div>
+						) : installationError !== null ? (
+							<ConsoleNote role="alert" tone="warning">
+								{installationError}
+							</ConsoleNote>
+						) : repositories.length === 0 ? (
+							<EmptyRow
+								title="No repositories visible to this installation"
+								description="Install the App on a repository or grant it access to more repositories in GitHub, then refresh."
+								action={
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onClick={() => void installation.refetch()}
+									>
+										Refresh list
+									</Button>
+								}
+							/>
+						) : (
+							<>
+								<div className="flex flex-wrap items-center justify-between gap-2">
+									<p className="text-xs text-ink-muted tabular-nums">
+										{selected.length} of {MAX_IMPORT_SELECTION} selected
+									</p>
+									<Button
+										type="button"
+										variant="ghost"
+										size="xs"
+										onClick={() => void installation.refetch()}
+									>
+										Refresh list
+									</Button>
+								</div>
+								<ul className="max-h-80 divide-y divide-line-subtle overflow-y-auto border-y border-line-subtle">
+									{repositories.map((repository) => {
+										const checked = selected.includes(repository.fullName);
+										const disabled = isImportChoiceDisabled(
+											selected,
+											repository.fullName,
+										);
+										return (
+											<li
+												key={repository.fullName}
+												className="flex items-center justify-between gap-3 px-1 py-2.5"
+											>
+												<label className="flex min-w-0 items-center gap-2.5 text-xs text-ink-secondary">
+													<input
+														type="checkbox"
+														checked={checked}
+														disabled={disabled}
+														onChange={() => toggle(repository.fullName)}
+														className="size-3.5 rounded border-line accent-[var(--color-electric-blue)]"
+													/>
+													<span className="min-w-0">
+														<span className="block truncate font-mono text-[11px] text-ink">
+															{repository.fullName}
+														</span>
+														<span className="text-[10px] text-ink-muted">
+															{repository.defaultBranch}
+															{repository.private ? " · private" : ""}
+														</span>
+													</span>
+												</label>
+												<StatusMark
+													status={repository.private ? "offline" : "active"}
+													label={repository.private ? "Private" : "Public"}
+												/>
+											</li>
+										);
+									})}
+								</ul>
+								<div className="flex flex-wrap items-center gap-2">
+									<Button
+										type="button"
+										size="sm"
+										disabled={
+											!canImport(selected) ||
+											importMutation.isPending ||
+											installation.data?.ok !== true
+										}
+										onClick={() => importMutation.mutate(selected)}
+									>
+										<PlusIcon />
+										{importMutation.isPending
+											? "Importing…"
+											: `Import ${selected.length || ""} selected`.trim()}
+									</Button>
+									{selected.length > 0 ? (
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											onClick={() => setSelected([])}
+										>
+											Clear selection
+										</Button>
+									) : null}
+								</div>
+							</>
+						)}
+					</div>
+				) : null}
+			</div>
+		</ConsoleSection>
+	);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Manual registration (advanced)                                             */
+/* -------------------------------------------------------------------------- */
 
 type FieldErrors = Partial<
 	Record<keyof RegisterRepositoryInput | "form", string>
@@ -222,7 +534,11 @@ function fieldErrorsFrom(issues: { path: PropertyKey[]; message: string }[]) {
 	return errors;
 }
 
-export function RegisterRepositoryDialog() {
+export function RegisterRepositoryDialog({
+	compact = false,
+}: {
+	compact?: boolean;
+}) {
 	const [open, setOpen] = useState(false);
 	const [errors, setErrors] = useState<FieldErrors>({});
 	const queryClient = useQueryClient();
@@ -271,17 +587,23 @@ export function RegisterRepositoryDialog() {
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogTrigger asChild>
-				<Button type="button" size="sm">
+				<Button
+					type="button"
+					size="sm"
+					variant={compact ? "outline" : "default"}
+				>
 					<PlusIcon />
-					Register repository
+					Register by full name
 				</Button>
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>Register repository</DialogTitle>
 					<DialogDescription>
-						Add one repository to this organization. Validation runs argv-only;
-						shell metacharacters are refused.
+						Add one repository by owner/name. This path skips the GitHub App
+						installation check, so use it only for a repository you have already
+						verified. Validation runs argv-only; shell metacharacters are
+						refused.
 					</DialogDescription>
 				</DialogHeader>
 				<form className="space-y-4" onSubmit={handleSubmit} noValidate>
@@ -454,6 +776,26 @@ export function RegisterRepositoryDialog() {
 				</form>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/** Collapsed home for the manual path; the GitHub panel is the primary one. */
+export function AdvancedRegistration({ canManage }: { canManage: boolean }) {
+	if (!canManage) return null;
+	return (
+		<details className="border-t border-line-subtle pt-4">
+			<summary className="cursor-pointer list-none text-xs text-ink-muted hover:text-ink-secondary">
+				Advanced: register by full name
+			</summary>
+			<div className="mt-3 flex flex-wrap items-center gap-3">
+				<p className="max-w-[70ch] text-[11px] leading-5 text-ink-muted">
+					Only needed when the GitHub App cannot be installed, for example on a
+					repository owned by another account. The manual path does not verify
+					installation access.
+				</p>
+				<RegisterRepositoryDialog compact />
+			</div>
+		</details>
 	);
 }
 

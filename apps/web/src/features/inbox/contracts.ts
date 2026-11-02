@@ -23,6 +23,19 @@ export type EventDeliveryStatus = (typeof EVENT_DELIVERY_STATUSES)[number];
 
 export const INBOX_LIMITS = { default: 25, max: 100 } as const;
 
+/** One table page. The page loads a bounded window and pages it here. */
+export const INBOX_PAGE_SIZE = 25;
+
+/** Severity values accepted by the optional client-side severity filter. */
+export const INBOX_SEVERITIES = [
+	"critical",
+	"high",
+	"medium",
+	"low",
+	"info",
+] as const;
+export type InboxSeverity = (typeof INBOX_SEVERITIES)[number];
+
 const CONNECTOR_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 
 export const inboxQuerySchema = z
@@ -73,6 +86,15 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
 	kubernetes: "Kubernetes",
 	generic: "Signed webhook",
 };
+
+/**
+ * The bounded source filter: the connector tokens the intake can verify. The
+ * list is static and ordered for a stable select, never a provider response.
+ */
+export const INBOX_SOURCE_OPTIONS: readonly { value: string; label: string }[] =
+	Object.entries(CONNECTOR_LABELS)
+		.map(([value, label]) => ({ value, label }))
+		.sort((left, right) => left.label.localeCompare(right.label));
 
 const REASON_LABELS: Readonly<Record<string, string>> = {
 	NOT_AN_INCIDENT: "Not an incident",
@@ -146,6 +168,83 @@ export function clampInboxLimit(limit: number | undefined): number {
 	const integer = Math.trunc(limit);
 	if (integer < 1) return 1;
 	return Math.min(integer, INBOX_LIMITS.max);
+}
+
+/* -------------------------------------------------------------------------- */
+/* URL search and paging (wave 23 UI)                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The Inbox keeps its filters in the URL so a view is linkable and back/forward
+ * works. Unknown or malformed values are dropped, never echoed.
+ */
+export type InboxSearch = {
+	status?: EventDeliveryStatus;
+	/** Connector token, e.g. `sentry`. */
+	source?: string;
+	severity?: InboxSeverity;
+	page?: number;
+};
+
+export function isInboxSeverity(value: string): value is InboxSeverity {
+	return (INBOX_SEVERITIES as readonly string[]).includes(value);
+}
+
+/** Pure URL parser; a page below one or a non-number becomes page one. */
+export function parseInboxSearch(search: Record<string, unknown>): InboxSearch {
+	const parsed: InboxSearch = {};
+	if (typeof search.status === "string" && isInboxStatus(search.status)) {
+		parsed.status = search.status;
+	}
+	if (
+		typeof search.source === "string" &&
+		CONNECTOR_PATTERN.test(search.source)
+	) {
+		parsed.source = search.source;
+	}
+	if (typeof search.severity === "string" && isInboxSeverity(search.severity)) {
+		parsed.severity = search.severity;
+	}
+	const page = Number(search.page);
+	if (Number.isFinite(page) && page >= 2) parsed.page = Math.trunc(page);
+	return parsed;
+}
+
+/** Serializes the validated filters back into a Link/`navigate` search object. */
+export function inboxSearchFor(
+	search: InboxSearch,
+	changes: Partial<InboxSearch>,
+): InboxSearch {
+	const next: InboxSearch = { ...search, ...changes };
+	// A filter change always returns to the first page.
+	if (changes.page === undefined) delete next.page;
+	return next;
+}
+
+/**
+ * The bounded server query for a search. Severity is not a server filter in
+ * the merged read model, so it is applied to the loaded window by
+ * {@link filterInboxItems}; status and source are filtered in SQL.
+ */
+export function inboxQueryFor(search: InboxSearch): {
+	status?: EventDeliveryStatus;
+	source?: string;
+	limit: number;
+} {
+	return {
+		limit: INBOX_LIMITS.max,
+		...(search.status === undefined ? {} : { status: search.status }),
+		...(search.source === undefined ? {} : { source: search.source }),
+	};
+}
+
+/** Applies the optional severity filter to the already-bounded delivery list. */
+export function filterInboxItems<T extends { severity: string }>(
+	items: readonly T[],
+	severity: InboxSeverity | undefined,
+): T[] {
+	if (severity === undefined) return [...items];
+	return items.filter((item) => item.severity === severity);
 }
 
 /** The bounded row the server read produces (no payloads, no tokens). */

@@ -64,6 +64,8 @@ function fakeRepository(overrides: Partial<OverviewReadRepository> = {}): {
 					runStartedAt: "2026-11-20T11:30:00.000Z",
 					latestEventType: "workflow.step_started",
 					latestEventAt: "2026-11-20T11:59:00.000Z",
+					incidentSource: "sentry",
+					autonomyLevel: "A2",
 				},
 			];
 		},
@@ -147,6 +149,123 @@ function fakeRepository(overrides: Partial<OverviewReadRepository> = {}): {
 				},
 			];
 		},
+		async countEventsSince(input, sinceIso) {
+			calls.push({
+				method: "countEventsSince",
+				scope: input,
+				args: [sinceIso],
+			});
+			return 4;
+		},
+		async countAutonomousTasksSince(input, sinceIso) {
+			calls.push({
+				method: "countAutonomousTasksSince",
+				scope: input,
+				args: [sinceIso],
+			});
+			return 2;
+		},
+		async countRetryableFailures(input, maxDepth) {
+			calls.push({
+				method: "countRetryableFailures",
+				scope: input,
+				args: [maxDepth],
+			});
+			return 1;
+		},
+		async listRetryableFailures(input, limit, maxDepth) {
+			calls.push({
+				method: "listRetryableFailures",
+				scope: input,
+				args: [limit, maxDepth],
+			});
+			return [
+				{
+					taskId: "77777777-7777-4777-8777-777777777777",
+					repositoryName: "ivory-26/agent-bank",
+					branch: "task/failed",
+					status: "failed",
+					updatedAt: "2026-11-20T11:10:00.000Z",
+					retryDepth: 1,
+				},
+			];
+		},
+		async countRepositories(input) {
+			calls.push({ method: "countRepositories", scope: input, args: [] });
+			return 3;
+		},
+		async listInboxDeliveries(input, limit) {
+			calls.push({
+				method: "listInboxDeliveries",
+				scope: input,
+				args: [limit],
+			});
+			return [
+				{
+					id: "88888888-8888-4888-8888-888888888888",
+					connector: "sentry",
+					source: "sentry",
+					eventKind: "issue.created",
+					severity: "critical",
+					status: "task_created",
+					reasonCode: null,
+					title: "Checkout failures spiked",
+					summary: "Error rate above threshold.",
+					links: [],
+					repository: "ivory-26/agent-bank",
+					taskId: "33333333-3333-4333-8333-333333333333",
+					receivedAt: "2026-11-20T11:45:00.000Z",
+					processedAt: "2026-11-20T11:46:00.000Z",
+				},
+			];
+		},
+		async readIntegrationAggregate(input) {
+			calls.push({
+				method: "readIntegrationAggregate",
+				scope: input,
+				args: [],
+			});
+			return {
+				connections: new Map([
+					[
+						"sentry",
+						{
+							id: "99999999-9999-4999-8999-999999999999",
+							connectorId: "sentry" as const,
+							displayName: "Sentry metadata",
+							authKind: "api_key" as const,
+							status: "active" as const,
+							relayId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+							relayName: "Sahil laptop",
+							relayStatus: "active" as const,
+							scopes: [],
+							enabledTools: [],
+							lastValidatedAt: "2026-11-20T10:00:00.000Z",
+							lastUsedAt: null,
+						},
+					],
+				]),
+				triggerCounts: new Map([["sentry", 2]]),
+				enabledTriggerCounts: new Map([["sentry", 1]]),
+				lastEventAt: new Map([["sentry", "2026-11-20T11:45:00.000Z"]]),
+				usage: new Map(),
+			};
+		},
+		async readSetup(input) {
+			calls.push({ method: "readSetup", scope: input, args: [] });
+			return {
+				githubConnected: true,
+				relayActive: true,
+				connectionActive: true,
+				triggerEnabled: true,
+				firstRun: true,
+				complete: true,
+				hasRepository: true,
+				hasRelay: true,
+				hasConnection: true,
+				activeConnectorId: "sentry" as const,
+			};
+		},
 		...overrides,
 	};
 	return { repository, calls };
@@ -176,6 +295,8 @@ describe("overview read service", () => {
 		expect(snapshot.activeRuns).toHaveLength(1);
 		expect(snapshot.activeRuns[0]?.elapsedMs).toBe(30 * 60_000);
 		expect(snapshot.activeRuns[0]?.stageLabel).toBe("Step started");
+		expect(snapshot.activeRuns[0]?.incidentSource).toBe("sentry");
+		expect(snapshot.activeRuns[0]?.autonomyLevel).toBe("A2");
 		expect(snapshot.activeRuns[0]?.latestUpdateAt).toBe(
 			"2026-11-20T11:59:00.000Z",
 		);
@@ -261,12 +382,16 @@ describe("overview row mapping", () => {
 				runStartedAt: null,
 				latestEventType: null,
 				latestEventAt: null,
+				incidentSource: null,
+				autonomyLevel: null,
 			},
 			NOW,
 		);
 		expect(summary.startedAt).toBe("2026-11-20T10:00:00.000Z");
 		expect(summary.stageLabel).toBe("No events yet");
 		expect(summary.latestUpdateAt).toBe("2026-11-20T10:05:00.000Z");
+		expect(summary.incidentSource).toBeNull();
+		expect(summary.autonomyLevel).toBeNull();
 	});
 
 	test("unknown device status is not reported as active", () => {

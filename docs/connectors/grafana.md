@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Status | **Implemented — relay-bound read tools, signed intake and context** (waves 16–17; pairing selectors and bounded verification wave 24) |
 | Code | `packages/integrations/src/grafana/` (implemented; fake-fetch tested) |
 | Free tier verified | 2026-10-31 |
 | Auth model | Service-account Bearer token; Viewer plus fixed read roles |
@@ -10,7 +10,7 @@
 | Read context | `POST /api/ds/query`; alert-rule, annotation and data-source reads |
 | Writes | None in scope (silences, annotations, alert-rule changes are a later wave) |
 
-Wave 16 implemented this module (optional-HMAC webhook, normalizer, bounded context, three read tools) with fake-fetch tests; its tools are not wired into the tool registry yet, so the agent cannot call them. `INCIDENT_SOURCES` already contains `grafana`.
+Wave 16 implemented this module (optional-HMAC webhook, normalizer, bounded context, three read tools) with fake-fetch tests. Wave 17 bound the typed read tools to the relay device path behind `DEVICE_GATEWAY_ENABLED`; wave 24 adds paired selectors (base URL, org and datasource UIDs) and one bounded `connector.verify` read. Signed Grafana intake is recognized by `detectIncidentIntakeMode`. Tenant-scoped routing and subscription rules are covered by the limits in [`KNOWN-LIMITS.md`](../KNOWN-LIMITS.md).
 
 ## 1. Role in the agent
 

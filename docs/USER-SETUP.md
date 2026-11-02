@@ -148,9 +148,9 @@ The local page and the relay config enforce the same bounds:
   characters (`[A-Za-z0-9][A-Za-z0-9._-]*`).
 - Datasets are 1–128 characters; datasource UIDs are 1–64 characters; a
   PagerDuty `fromEmail` is a valid address of at most 254 characters.
-- Up to 16 secret fields are accepted, each up to 32 KiB and 64 KiB in total.
-  Up to 16 selectors are accepted, each up to 512 characters, and selector values
-  that look like credential material are rejected.
+- The pairing form caps each secret field at 8 KiB; the encrypted store accepts
+  at most 16 fields and 64 KiB in total. It accepts at most 16 selectors, each up
+  to 512 characters. Selector values that look like credential material are rejected.
 
 ### Where to get the credential
 
@@ -238,7 +238,7 @@ deployment settings. They belong to the customer's relay.
 | Pairing page does not open | Relay is not running or the loopback port is blocked | Start the relay; confirm `127.0.0.1:47821` is listening |
 | Pairing code expired | Codes last 10 minutes and are one-time | Start a new pairing from Isolate |
 | Relay stays offline | Outbound HTTPS failed or the token was revoked | Check the relay log; register a new relay if revoked |
-| Verification fails with `POLICY_DENIED` | The vendor credential lacks a required scope/role | Follow the connector page's scope hint; never widen the Isolate token |
+| Verification fails with `AUTH_FAILED` | The vendor rejected the credential or its scope/role | Follow the connector page's scope hint; reconnect with a valid credential; never widen the Isolate token |
 | Verification marks the credential `invalid` | The vendor rejected the one bounded read | Recheck the token and scope, then reconnect. The old credential is not used |
 | Verification times out | The relay or provider did not answer in time; status is unchanged | Confirm the relay is online and retry. A timeout is not proof that the credential is bad |
 | GitHub install says `GITHUB_APP_NOT_CONFIGURED` | The deployment is missing one of the required App settings | Set the names in [`DEPLOYMENT.md`](DEPLOYMENT.md); do not paste values into a client or a prompt |

@@ -198,9 +198,10 @@ Validation rules, applied before the value is stored:
   (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`).
 - A dataset is 1–128 characters; a datasource UID is 1–64 characters; a
   PagerDuty `fromEmail` is a valid address of at most 254 characters.
-- The store accepts at most 16 secret fields, each up to 32 KiB and 64 KiB in
-  total. It accepts at most 16 selectors, each up to 512 characters. Selector
-  values that look like credential material are rejected.
+- The pairing form caps each secret field at 8 KiB; the encrypted store accepts
+  at most 16 fields and 64 KiB in total. It accepts at most 16 selectors, each up
+  to 512 characters. Selector values that look like credential material are
+  rejected.
 
 ### 2.2 Applied schema `0010_connectors.sql`
 
@@ -526,10 +527,11 @@ from the credential's `free_tier_profile`; `period` is a UTC calendar date
 The ledger is per credential, not per organization or endpoint, so reconnecting
 a device or adding an endpoint never grants a fresh budget. The per-minute
 token bucket and per-day window remain design-only; the implemented repository
-counts one UTC day at a time. The worker call site is not wired, so whether a
-call is charged before or after the device responds is still a design choice;
-there is no refund method. A rejection is `BUDGET_EXCEEDED`, mapped to HTTP
-`429` with `Retry-After` for a browser or a bounded tool result for the agent.
+counts one UTC day at a time. The device gateway consumes one unit before a call
+is handed to the relay; verification calls (`connector.verify`) are exempt
+because they must work before a new credential is active. An exhausted budget
+returns `RATE_LIMITED` (HTTP `429` with `Retry-After` for a browser, or a bounded
+tool result for the agent).
 
 ### 5.4 Fail closed, never upgrade
 
@@ -581,7 +583,7 @@ Builds on [`connector-usage.md`](connector-usage.md) §5; no new routing model.
 | `429` rate limited | Honor `Retry-After`; at most one retry, only for a read | Degraded or `RATE_LIMITED` | `tool_budget_exhausted` or `tool_provider_unavailable` |
 | `5xx`, timeout, transport | No retry inside the call; open the circuit | `INTEGRATION_UNAVAILABLE` | `tool_provider_unavailable` |
 | Schema/parse drift | Drop the item; count a metric; never pass raw text | `truncated = true` | `tool_succeeded` with truncation |
-| Free-tier budget spent | The ledger `consume` returns no row; refuse (call site not wired) | `BUDGET_EXCEEDED` | `tool_budget_exhausted` with reset time |
+| Free-tier budget spent | The claim path consumes one unit before handoff; no row means refuse | `RATE_LIMITED` | `tool_budget_exhausted` with reset time |
 | Circuit open | Skip the call for 60 s; one half-open probe | `INTEGRATION_UNAVAILABLE` | `tool_provider_unavailable` |
 | Credential revoked | No call | `INTEGRATION_UNAVAILABLE` | `credential_revoked` |
 | Missing credential | No tool registered | Tool absent | Connector shows "not connected" |

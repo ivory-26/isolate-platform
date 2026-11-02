@@ -143,9 +143,9 @@ Validation is the same on the page and in the relay config:
   characters (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`).
 - Datasets are 1–128 characters; datasource UIDs are 1–64 characters; a PagerDuty
   `fromEmail` is a valid address of at most 254 characters.
-- The store accepts at most 16 secret fields (32 KiB each, 64 KiB total) and at
-  most 16 selectors (512 characters each). Selector values that look like
-  credential material are rejected.
+- The pairing form caps each secret field at 8 KiB; the encrypted store accepts at
+  most 16 fields (64 KiB total) and at most 16 selectors (512 characters each).
+  Selector values that look like credential material are rejected.
 
 After pairing, the credential is `pending_validation`. **Verify connection** runs
 one bounded `connector.verify` read: success sets `active` and records

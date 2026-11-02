@@ -2,6 +2,7 @@
 
 **Document type:** Product + technical specification  
 **Status:** Proposed implementation spec  
+**Implementation status:** See [`project/STATUS.md`](../project/STATUS.md) and [`docs/KNOWN-LIMITS.md`](KNOWN-LIMITS.md); baseline statements below are historical where they differ from the shipped relay path.  
 **Repository:** [ivory-26/isolate-platform](https://github.com/ivory-26/isolate-platform)  
 **Baseline reviewed:** 2 November 2026  
 **Primary objective:** Let customers connect their existing DevSecOps systems once, then have Isolate autonomously investigate relevant events, work on the associated repository in an isolated Modal sandbox, validate a fix, and produce a reviewable outcome.

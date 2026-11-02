@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Status | **Implemented — relay-bound read tools and local live proof** (waves 16–17; pairing selectors and bounded verification wave 24) |
 | Code | `packages/integrations/src/kubernetes/` (implemented; fake-client tested) |
 | Free tier verified | 2026-10-31 (no SaaS free tier; OSS is Apache 2.0) |
 | Auth model | Dedicated ServiceAccount, namespaced Role + RoleBinding, short-lived bound token |
@@ -10,7 +10,7 @@
 | Read context | Events, pod status, bounded pod logs, Deployment/ReplicaSet status |
 | Writes | Deploy/rollback `sensitive`; delete `destructive` (none in scope) |
 
-Wave 16 implemented this module (normalizer, bounded context, four read tools) with fake-client tests; its tools are not wired into the tool registry yet, so the agent cannot call them. The connector reads one namespace with a read-only ServiceAccount; it never receives a kubeconfig in the agent sandbox.
+Wave 16 implemented this module (normalizer, bounded context, four read tools) with fake-client tests. Wave 17 bound the typed read tools to the relay device path behind `DEVICE_GATEWAY_ENABLED`; wave 24 adds paired fields (API URL, namespace, token-file path, optional CA file) and one bounded `connector.verify` read. A local `kind` cluster proof exists; it is not an inbound webhook source. The connector reads one namespace with a read-only ServiceAccount and never receives a kubeconfig in the agent sandbox.
 
 ## 1. Role in the agent
 

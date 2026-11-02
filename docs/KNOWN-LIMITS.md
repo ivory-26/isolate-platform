@@ -60,8 +60,9 @@ for a near-term release, and do not present A4 as available.
   live data. The landing page and `/login` were checked; authenticated pages are
   covered by tests and the production build, not by a live-data visual pass.
   Screenshots and UI claims must not imply otherwise.
-- **Landing capture provenance.** The landing screenshot may predate a UI change;
-  treat the running app as the source of truth.
+- **Landing capture provenance.** The landing capture was refreshed on 2026-11-02
+  from the wave-23 Home composition with synthetic data. It is still a static
+  marketing image, not a live tenant view; the running app is the source of truth.
 
 ## 5. Deployment dependency
 

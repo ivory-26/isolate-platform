@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Adapter implemented — not registered as an agent tool** (wave 16) |
+| Status | **Implemented — relay-bound read tools, signed intake and context** (waves 16–17; pairing selectors and bounded verification wave 24) |
 | Module | `packages/integrations/src/sentry/` (implemented; fake-fetch tested) |
 | Free tier verified | 2026-10-31 — Developer plan, free forever |
 | Auth | Organization auth token, `Authorization: Bearer <token>` [S4] |
@@ -10,11 +10,7 @@
 | Read | Issue, latest event and bounded stack trace, release, deploys [S8–S15] |
 | Writes | None in scope |
 
-Wave 16 implemented this module (webhook, normalizer, context, three read tools) with fake-fetch tests; its tools are not wired into the tool registry yet, so the agent cannot call them. `sentry` is already a value in `INCIDENT_SOURCES`
-(`packages/shared/src/types/incident.ts`), but there is no verifier, normalizer,
-reader or route mode for it. Today `detectIncidentIntakeMode` returns only
-`generic` or `github`, so a Sentry delivery would be parsed as a generic signal
-and rejected by the strict schema.
+Wave 16 implemented this module (webhook, normalizer, context, three read tools) with fake-fetch tests. Wave 17 bound the typed read tools to the relay device path behind `DEVICE_GATEWAY_ENABLED`, so the agent can call them while the token stays on the relay; wave 24 adds paired selectors and one bounded `connector.verify` read. Signed Sentry intake is recognized by `detectIncidentIntakeMode`. Tenant-scoped routing and subscription rules are covered by the limits in [`KNOWN-LIMITS.md`](../KNOWN-LIMITS.md).
 
 ## 1. Role in the agent
 

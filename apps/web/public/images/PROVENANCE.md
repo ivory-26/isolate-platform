@@ -20,11 +20,11 @@ Synthetic identities and records: organization "Demo workspace", repository
 "ivory-26/agent-bank", synthetic task ids, approvals, event deliveries, relays
 and connector metadata. Running rows carry only the supported autonomy labels
 A2 and A3; A0 records an event without creating a task, A1 investigate is
-planned but unsupported, and A4 production mutation is out of scope, so none of
-those labels appears in Running now. No real user, repository secret, token, or
-provider credential appears in these images. The preview route is removed after
-capture; the images are illustrative product views with synthetic data, and the
-landing `alt` text says so.
+unsupported, and A4 production mutation is out of scope, so none of those labels
+appears in Running now. No real user, repository secret, token, or provider
+credential appears in these images. The preview route is removed after capture;
+the images are illustrative product views with synthetic data, and the landing
+`alt` text says so.
 
 The dashboard shell in the screenshot reflects the product UI at capture time;
 small styling refinements after capture do not change the represented features.

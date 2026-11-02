@@ -1,8 +1,44 @@
 # Status
 
-Last updated: 2026-11-01 (wave 21: console refit, landing rebuild, shader auth, mobile pass)
+Last updated: 2026-11-02 (wave 23: event-first redesign, web onboarding, execution map, performance)
 
-## Current: wave 21 — console refit, landing rebuild, shader auth, mobile (2026-11-01)
+## Current: wave 23 — event-first redesign and web onboarding (2026-11-02)
+
+Design sources: remote [`docs/spec.md`](../docs/spec.md) (integrated in `314a40a`), [`project/WAVE23.md`](WAVE23.md), and [`docs/USER-SETUP.md`](../docs/USER-SETUP.md). The spec's baseline table was corrected in WAVE23 §1.1: the device poll transport and Datadog adapter are implemented, while the browser pairing/verification and per-org GitHub installation were the real gaps.
+
+### What changed
+
+- **Schema (`0016_integration_onboarding.sql`, applied and verified on Neon).** `github_installations`, `integration_subscriptions`, `event_deliveries`, `connector_pairings`; `repositories.github_installation_id`; `tasks.autonomy_level`; bounded `title`/`summary`/`links`/`occurrence_count` on `incident_signals`. Pairing codes are sha256 hashes; no provider secret, token or raw payload column exists. The migration's composite FK to `integration_subscriptions(organization_id, id)` required the unique index; it is included and the application succeeded.
+- **Per-organization GitHub (`6afc255`, merge `1727cae`).** Signed 10-minute install state, `/api/github/install`, `/api/github/callback`, `/api/github/repositories`, `/api/repositories/import` (<=25), installation/repository repositories, and a per-task installation token resolver with the legacy env fallback. Repository onboarding is now App-install + picker, with manual full-name registration demoted to Advanced.
+- **Relay pairing and local secrets (`43b6981`, merge `f038c42`).** Browser creates a one-time pairing session (code hash, 10-minute expiry, capability-checked); the relay claims with its device token, serves a loopback-only pairing page, stores the secret in an AES-256-GCM local store keyed from the device token (0600), completes the metadata row, and never sends the secret to the server. Env secrets remain a compatibility fallback.
+- **Event intake and inbox (`c192dea`, merge `7f2d0e1`).** Subscription-aware verify → normalize → lifecycle → 30-minute dedupe → cap → durable task; bounded delivery receipts with dedupe statuses; resolved/ack events update or ignore without opening a task; A0 records only; A2 creates the normal task; A3 keeps the existing approvals; A1 is explicitly `AUTONOMY_LEVEL_UNSUPPORTED`. `GET` inbox read is tenant-scoped and payload-free.
+- **Onboarding and integrations UI (`f66c4e6`, merge `dcdaffd`).** `/onboarding` (GitHub → relay → source → autonomy), `/integrations` catalog/connected/relays, connector detail with capability separation, trigger rules, deliveries, and relay management. Primary nav is now Home, Inbox, Runs, Approvals, Integrations, Repositories, Usage, Settings; Workflows and Devices are secondary routes. `_app` sends only a completely empty workspace to setup.
+- **Event-first Home, Inbox, Delegate, repositories (`cc16dd9`, merge `218c5b8`).** Home = setup banner, Needs you, Running now, Inbox preview, Sources, four metrics. Inbox is a filterable, paginated delivery table. Submit became a two-field Delegate composer with Advanced defaults and no UUIDs. Repositories has the GitHub App install + repo picker; manual registration is collapsed.
+- **Execution map (`9734330`, merge `a18439e`).** Run detail shows the real task → attempt → agent turn → tool/connector/validation/approval/artifact tree, plus retry lineage, incident source and autonomy. **No multi-agent backend exists**: without `agentId` events the map explicitly says "one agent; delegation is not recorded" instead of inventing subagents.
+- **Tables (`4ae56a9`, merge `8c909a5`).** Shared `Pagination` + `DataTable`; usage daily breakdown paginates 14 rows/page with no inner scrollbar; cell gutters increased; runs, approvals, repositories, inbox and usage use URL-backed pages. The landing hero `text-shadow` was deleted and verified removed in the browser.
+- **Performance (`7dc00b3`, merge `7fe1639`).** One auth-state refresh + overview preload instead of invalidate→navigate; deterministic session initial state (no anonymous flash); shader initialises after first paint, pools contexts, pauses offscreen/hidden and never runs two auth shaders; chart rAF parks offscreen/hidden; two font preloads match the emitted woff2 URLs; shell-shaped pending states. Measured on a production build (SwiftShader, cold cache): `/login` desktop FCP/LCP ~456–680 ms (was 512 ms), long tasks ~693 ms (was 1109 ms), 1 WebGL context (was 2); mobile long tasks ~671–770 ms (was 1379 ms).
+- **Relay installer (`f783fb3`).** `GET /api/install/relay` serves an auditable one-line installer; the UI command now uses it instead of the previous non-existent `/install/relay.sh`. It writes a private config/env under `~/.isolate`, runs `bun install`, and starts the daemon.
+
+### Final gates (2026-11-02)
+
+- `bun scripts/typecheck-all.ts` — **9/9 projects**.
+- `bun test --no-env-file` — **3025 pass / 10 skip / 0 fail** (3035 tests, 214 files).
+- `bunx biome check apps packages scripts` — **0 errors**, 10 pre-existing warnings.
+- `apps/web` production build — success; `check:build` PASS (public `/`, anonymous `/runs` and `/organizations` redirect to `/login`, `/login` 200 + no-store); client sweep 34 checks, 105 files.
+- `acceptance:offline` — **7/7 PASS** with zero provider credentials.
+- `security:check` — **PASS** (543 source/migration files, 934 tracked files).
+- Migration `0016` applied through `scripts/apply-migration.ts`; four new tables and all new columns verified through `information_schema`.
+
+### Known gaps / follow-ups
+
+1. **Connector verification and multi-field credentials.** Pairing stores a secret and metadata, but the relay's vendor config/selectors (Grafana base URL, Kubernetes API/namespace, Datadog api+app keys, etc.) and the bounded verification read are not yet captured by the local page. The UI says "verification pending"; do not describe paired connectors as production-ready until that route/tool lands.
+2. **A1 investigate** is recorded as unsupported; A0/A2/A3 are honest. A4 production mutation remains out of scope.
+3. **GitHub App operator setup** still needs `GITHUB_APP_SLUG` and `GITHUB_APP_STATE_SECRET` (>=32 chars) in the deployment secret manager. The customer flow itself is browser-based.
+4. **Event routing** is subscription-aware for the existing GitHub/generic/Sentry/Grafana/PagerDuty paths; Datadog canonical re-fetch and the Kafka bridge remain design-only.
+5. **Visual QA** of authenticated pages could not be executed against live data in this environment; landing/login were checked, and authenticated behavior is covered by tests/build. The landing screenshot still shows the previous dashboard composition.
+6. **No subagent tree** is emitted by the worker; the execution map is the real tree and will group by `agentId` automatically when such events exist.
+
+## Previous: wave 21 — console refit, landing rebuild, shader auth, mobile (2026-11-01)
 
 - **Tenant repair (user-approved).** The second Google account (`karpesahil2007@gmail.com`) was added as owner of the populated workspace `15fc5715…`; the auto-created empty workspace `13e308b6…` was deleted after verifying zero tasks, repositories, workflows, approvals, devices and audit rows. The login flow already creates a personal workspace only when the identity has no membership, so an existing account never gets a second one; a different Google account is a different identity and creates its own workspace by design.
 - **Dashboard core (`4c94bea`).** Shared primitives lost the card treatment: `PageHeader` no longer renders a kicker, `Section`/`MetricStrip` gained plain variants, `StatusBadge` is a dot plus label. Overview and Runs now use hairline bands, a four-number metric strip, dense tables, a quiet action hierarchy, and right-aligned time columns.

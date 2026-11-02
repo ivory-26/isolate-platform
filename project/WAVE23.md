@@ -1,6 +1,6 @@
 # Wave 23 — Event-first redesign and web onboarding
 
-Status: implementation in progress (2026-11-02)
+Status: implemented and merged (2026-11-02); final gates and known gaps are in [`STATUS.md`](STATUS.md)
 Design sources: [`docs/spec.md`](../docs/spec.md), [`docs/connector-onboarding.md`](../docs/connector-onboarding.md), [`project/design.md`](design.md), [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 Migration: `packages/db/migrations/0016_integration_onboarding.sql` (approved, not yet applied)
 

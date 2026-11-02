@@ -4,35 +4,37 @@
 |---|---|
 | Audience | Operators connecting their own free or self-hosted accounts |
 | Scope | Exactly ten connectors: GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom, SigNoz |
-| Status | Living guide. Credential creation is usable now; daemon transport and tool bindings are still landing |
-| Date | 2026-11-01 |
-| Architecture | [`../connector-usage.md`](../connector-usage.md); [`../connector-onboarding.md`](../connector-onboarding.md) (design; adapt, do not edit) |
+| Status | Living guide. Ten adapters; relay-held credentials, vendor pairing fields and bounded verification are implemented. Among the nine relay connectors only Kubernetes has a local live proof; SaaS live runs remain pending |
+| Date | 2026-11-02 |
+| Architecture | [`../connector-usage.md`](../connector-usage.md); [`../connector-onboarding.md`](../connector-onboarding.md) |
 | Free-tier matrix | [`free-tier-catalog.md`](free-tier-catalog.md) |
+| Current limits | [`../KNOWN-LIMITS.md`](../KNOWN-LIMITS.md) |
 
 **The one rule that matters:** provider read keys stay on the operator's device. The server stores a device registration, a sha256 device-token hash and connector metadata. It never stores a provider key, a ciphertext, a wrapped key or a decryption path. Do not paste a provider key into server `.env`, the database, a prompt, an issue or a log.
 
-Inbound webhook signing secrets are a separate case: they are verifier secrets, not provider read keys, and the receiver needs them to authenticate a delivery. They belong in the deployment's inbound-verifier secret store, never in the device connector config and never in `connector_credentials`. Each section says which kind of secret it is.
+Inbound webhook signing secrets are a separate case: they are verifier secrets, not provider read keys, and the receiver needs them to authenticate a delivery. They belong in the deployment's inbound-verifier secret store, never in the relay connector config and never in `connector_credentials`. Each section says which kind of secret it is.
 
 ## 1. Status
 
 | Connector | Adapter module | Intake binding | Tool binding | Live-proven? | Key type needed | Free tier | Guide |
 |---|---|---|---|---|---|---|---|
-| GitHub | Yes (`packages/integrations/src/github/`) | Yes, GitHub mode | No (writes are functions, not tools) | Yes: context and two writes, 2026-10-31 | GitHub App id, installation id, PKCS#8 key (platform-owned) | GitHub Free; 5,000 installation-token requests/hour | [github.md](github.md) |
-| Sentry | Yes (`sentry/`) | Yes, signed mode | No (device transport pending) | No | Organization auth token plus internal-integration Client Secret | Developer: 5,000 errors/month, 1 user, 30-day retention | [sentry.md](sentry.md) |
-| Grafana | Yes (`grafana/`) | Yes, HMAC mode (unsigned opt-in) | No (device transport pending) | No | Service-account token, Viewer plus fixed read roles | Cloud Free: 10k series, 50 GB logs/traces, 3 users, 14 days; OSS self-host | [grafana.md](grafana.md) |
-| PagerDuty | Yes (`pagerduty/`) | Yes, v3 signed mode | No (device transport pending) | No | Read-only account API key plus v3 webhook secret | Free: 5 users, 1 schedule, 1 escalation policy | [pagerduty.md](pagerduty.md) |
-| Kubernetes | Yes (`kubernetes/`) | No (no native webhook; signed bridge) | No (device transport pending) | No | Namespaced ServiceAccount bound token plus CA | OSS; infrastructure cost only | [kubernetes.md](kubernetes.md) |
-| Datadog | Yes (`datadog/`) | No (unsigned; signed bridge) | No (device transport pending) | No | API key plus scoped application key | Free: 5 hosts, 1-day metric retention; free logs not stated (UNVERIFIED) | [datadog.md](datadog.md) |
-| New Relic | Yes (`newrelic/`) | No (unsigned; signed bridge) | No (device transport pending) | No | User API key plus account id | Free: 100 GB/month, 1 full user, at least 8-day retention | [newrelic.md](newrelic.md) |
-| Honeycomb | Yes (`honeycomb/`) | No (unsigned; signed bridge) | No (device transport pending) | No | Environment configuration key plus dataset | Free: 20M events, 100M points, 2 triggers, no SLOs | [honeycomb.md](honeycomb.md) |
-| Axiom | Yes (`axiom/`) | No (unsigned; signed bridge) | No (device transport pending) | No | Advanced API token plus dataset | Personal: 500 GB/month load, 25 GB storage, 30 days, 3 datasets, 1 user | [axiom.md](axiom.md) |
-| SigNoz | Yes (`signoz/`) | No (Basic auth; signed bridge) | No (device transport pending) | No | API key from a Viewer service account | Community Edition self-host only; Cloud is trial-only | [signoz.md](signoz.md) |
+| GitHub | Yes (`packages/integrations/src/github/`) | Yes, GitHub mode | No (writes are functions, not tools) | Yes: context and two writes, 2026-10-31 | GitHub App id, slug, state secret, PKCS#8 key (platform-owned); installations are per workspace | GitHub Free; 5,000 installation-token requests/hour | [github.md](github.md) |
+| Sentry | Yes (`sentry/`) | Yes, signed mode | Yes (relay device) | No | Organization auth token plus internal-integration Client Secret | Developer: 5,000 errors/month, 1 user, 30-day retention | [sentry.md](sentry.md) |
+| Grafana | Yes (`grafana/`) | Yes, HMAC mode (unsigned opt-in) | Yes (relay device) | No | Service-account token, Viewer plus fixed read roles | Cloud Free: 10k series, 50 GB logs/traces, 3 users, 14 days; OSS self-host | [grafana.md](grafana.md) |
+| PagerDuty | Yes (`pagerduty/`) | Yes, v3 signed mode | Yes (relay device) | No | Read-only account API key plus v3 webhook secret | Free: 5 users, 1 schedule, 1 escalation policy | [pagerduty.md](pagerduty.md) |
+| Kubernetes | Yes (`kubernetes/`) | No (no native webhook; signed bridge) | Yes (relay device) | Local only (`kind`, 2026-11-01) | Namespaced ServiceAccount bound token plus CA | OSS; infrastructure cost only | [kubernetes.md](kubernetes.md) |
+| Datadog | Yes (`datadog/`) | No (unsigned; signed bridge) | Yes (relay device) | No | API key plus scoped application key | Free: 5 hosts, 1-day metric retention; free logs not stated (UNVERIFIED) | [datadog.md](datadog.md) |
+| New Relic | Yes (`newrelic/`) | No (unsigned; signed bridge) | Yes (relay device) | No | User API key plus account id | Free: 100 GB/month, 1 full user, at least 8-day retention | [newrelic.md](newrelic.md) |
+| Honeycomb | Yes (`honeycomb/`) | No (unsigned; signed bridge) | Yes (relay device) | No | Environment configuration key plus dataset | Free: 20M events, 100M points, 2 triggers, no SLOs | [honeycomb.md](honeycomb.md) |
+| Axiom | Yes (`axiom/`) | No (unsigned; signed bridge) | Yes (relay device) | No | Advanced API token plus dataset | Personal: 500 GB/month load, 25 GB storage, 30 days, 3 datasets, 1 user | [axiom.md](axiom.md) |
+| SigNoz | Yes (`signoz/`) | No (Basic auth; signed bridge) | Yes (relay device) | No | API key from a Viewer service account | Community Edition self-host only; Cloud is trial-only | [signoz.md](signoz.md) |
 
 Notes:
 
 - **All ten adapter modules are merged and fake-tested.** Five were merged in wave 17 (Datadog, New Relic, Honeycomb, Axiom, SigNoz).
 - Sentry, Grafana and PagerDuty now have signed intake modes. Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes have no native verifier and require the signed generic bridge.
-- Worker tool binding is merged: the 31 connector tools are registered only when `DEVICE_GATEWAY_ENABLED=true` and a daemon is polling; otherwise they stay denied. The daemon client itself is still landing.
+- Worker tool binding is merged: the 31 connector tools are registered only when `DEVICE_GATEWAY_ENABLED=true` and a relay is polling; otherwise they stay denied. The relay daemon is implemented and polls the device routes.
+- Pairing captures the connector's secret fields and selectors on the relay. **Verify connection** performs exactly one bounded `connector.verify` read; success sets `active` and `last_validated_at`, an auth rejection sets `invalid`, and a timeout leaves the status unchanged. This is not a full scope test of every tool.
 - No SaaS vendor except GitHub has been exercised live. Every SaaS adapter is fake-tested.
 - **Kubernetes has a local live proof:** `kind` cluster `isolate-demo`, namespaced read-only ServiceAccount, failing demo pod; `bun run acceptance:k8s-local` returned 2 bounded items (warning events + pod) and `truncated: true`. No kubeconfig or token enters the sandbox.
 - **End-to-end device proof:** a seeded device + Kubernetes credential, the web gateway and `apps/device-daemon` ran together; `k8s.list_events` call `538a0a2a-…` was claimed, executed on the device and completed with a 903-byte result. The usage ledger recorded one request.
@@ -44,10 +46,10 @@ Notes:
 The chosen transport is a user-run device daemon, not a server-side credential store. `apps/device-daemon` is that daemon: it polls the platform, executes typed connector calls with the merged adapters and posts bounded results.
 
 - One small outbound-only daemon. It opens no inbound port and makes HTTPS requests only to the platform and to the provider.
-- JSON config at `ISOLATE_DEVICE_CONFIG` or `~/.isolate/connectors.json`. The file holds non-secret selectors: server origin, the **name** of the token env var, poll interval, vendor base URLs, org/account/dataset ids, datasource UIDs and namespaces.
-- Provider secrets are read from the daemon's own environment, named per field by `vendors.<vendor>.secretEnv`. The config never contains a secret value, and no secret is ever sent to the platform. A keychain adapter is a later seam: `resolveSecret()` in `src/config.ts` is the single read point that would consult the OS keychain instead of `process.env`.
-- The device token is a 43-character base64url value in the env var named by `deviceTokenEnv` (for example `ISOLATE_DEVICE_TOKEN`). Create it with `generateConnectorDeviceToken()` and register only its sha256 hash; see §2.2.
-- For Kubernetes only, `secretEnv.serviceAccountTokenFile` and optional `secretEnv.caFile` name env vars containing **file paths** (for example `KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE`, `KUBERNETES_CA_FILE`). The files are read at call time under `~/.isolate/`, readable only by the daemon user. Kubeconfig is not supported and never enters the agent sandbox.
+- JSON config at `ISOLATE_DEVICE_CONFIG` or `~/.isolate/connectors.json`. The install command writes the base file: server origin, the **name** of the token env var, poll interval and optional `pairing` settings. The legacy `vendors` block holds non-secret defaults for an env-based install.
+- Provider secrets are read from the relay's encrypted local store first (`~/.isolate/secrets.json`, AES-256-GCM, mode 0600). The daemon's own environment remains a compatibility fallback for a legacy install, named per field by `vendors.<vendor>.secretEnv`. The config never contains a secret value, and no secret is ever sent to the platform. `resolveVendorSecret()` in `src/config.ts` is the single read point.
+- The device token is a 43-character base64url value in the env var named by `deviceTokenEnv` (for example `ISOLATE_DEVICE_TOKEN`). It is generated by the relay registration flow and shown once; only its sha256 hash is stored server-side. See §2.3.
+- For Kubernetes only, `secretEnv.serviceAccountTokenFile` and optional `secretEnv.caFile` name **file paths** (for example `KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE`, `KUBERNETES_CA_FILE`). The pairing page stores the path, not the token, and the relay reads the file at call time under `~/.isolate/`. Kubeconfig is not supported and never enters the agent sandbox.
 
 Shape (values omitted; `timeoutMs` is optional per vendor, 1,000–30,000 ms):
 
@@ -106,66 +108,107 @@ Shape (values omitted; `timeoutMs` is optional per vendor, 1,000–30,000 ms):
 }
 ```
 
-- Every object is strict, the server URL must be an https origin, and a vendor is optional. A vendor with an unset secret env var fails closed as `INTEGRATION_UNAVAILABLE` without a provider call; an unknown tool name is rejected before dispatch.
+- Every object is strict, the server URL must be an https origin, and a vendor is optional. A vendor becomes live through the pairing flow or through the legacy env values. If neither exists, the call fails closed as `INTEGRATION_UNAVAILABLE` without a provider call; an unknown tool name is rejected before dispatch.
 - Env fallbacks, used only when the JSON field is absent: `PAGERDUTY_FROM_EMAIL` for `fromEmail`, `KUBERNETES_API_URL` for `apiUrl`, `KUBERNETES_NAMESPACE` for `namespace`.
-- Boot prints configured vendor names and the poll interval only. Each call logs `tool`, `connector`, `outcome` and `durationMs`; the token, params and result bodies are never logged.
-- Run it locally with `bun apps/device-daemon/src/index.ts` after exporting the token and the provider env vars named above.
+- Boot logs configuration names and the poll interval only; the pairing listener logs the connector id, never a code or a secret. Each call logs `tool`, `connector`, `outcome` and `durationMs`; the token, params and result bodies are never logged.
+- Run it locally with `bun apps/device-daemon/src/index.ts` after the install command or token setup. Complete vendor fields on the loopback pairing page, or use the env fallback for an existing install.
 
-### 2.2 Device token creation and registration
+### 2.2 Pairing fields on the relay
 
-1. The daemon generates 256 random bits and encodes them as 43 base64url characters. This is the device token.
-2. The daemon sends only the sha256 hex digest to the platform during registration. The server row starts as `pending`.
-3. An owner or admin activates the device. The row becomes `active`; revocation flips it to `revoked`.
+The browser pairing page opens at `http://127.0.0.1:47821/pair?code=...` with a
+connector hint. It renders the fields for that connector instead of a single
+generic secret box. Secret fields and selectors are written to the encrypted local
+store; the platform receives credential metadata only. A field not marked optional
+is required. `vendors.<vendor>` JSON and env values remain fallbacks for legacy
+installs.
+
+| Connector | Secret fields (relay-local) | Non-secret selectors (relay-local) |
+|---|---|---|
+| Sentry | `token` | `baseUrl` (optional) |
+| Grafana | `token` | `baseUrl`; `orgId` (optional); `metricsDatasourceUid` (optional); `logsDatasourceUid` (optional) |
+| PagerDuty | `token` | `fromEmail` (optional); `baseUrl` (optional) |
+| Kubernetes | `serviceAccountTokenFile`; `caFile` (optional) | `apiUrl`; `namespace`; `clusterId` (optional) |
+| Datadog | `apiKey`; `appKey` | `baseUrl` (site API origin) |
+| New Relic | `apiKey` | `accountId`; `endpoint` (optional) |
+| Honeycomb | `apiKey` | `dataset`; `apiBaseUrl` (optional) |
+| Axiom | `token` | `baseUrl`; `dataset` |
+| SigNoz | `apiKey` | `baseUrl` |
+
+Validation is the same on the page and in the relay config:
+
+- URLs are absolute `https` URLs with no userinfo, query or fragment, at most 512
+  characters. A base origin has no path.
+- Grafana `orgId` is 1–10 digits; New Relic `accountId` is 1–20 digits.
+- A Kubernetes namespace is a 1–63 character DNS label; `clusterId` is 1–64
+  characters (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`).
+- Datasets are 1–128 characters; datasource UIDs are 1–64 characters; a PagerDuty
+  `fromEmail` is a valid address of at most 254 characters.
+- The store accepts at most 16 secret fields (32 KiB each, 64 KiB total) and at
+  most 16 selectors (512 characters each). Selector values that look like
+  credential material are rejected.
+
+After pairing, the credential is `pending_validation`. **Verify connection** runs
+one bounded `connector.verify` read: success sets `active` and records
+`last_validated_at`; an auth rejection sets `invalid`; a relay timeout leaves the
+status unchanged. Only `active` is Connected/verified.
+
+### 2.3 Device token creation and registration
+
+1. On **Setup → Relay**, register the relay with a display name. Isolate generates a 256-bit token and shows it once as 43 base64url characters.
+2. The server stores only the sha256 hex digest and creates the relay row `active`; `last_seen_at` stays null until the first heartbeat. Revocation flips it to `revoked`.
+3. Run the one-line install command on the relay machine. It writes the token to the relay's private config and starts the daemon.
 4. Every poll presents the token as a bearer credential over TLS. The server hashes the presented value and compares it in constant time against `connector_devices.token_hash`.
-5. `last_seen_at` is updated on a successful poll. A revoked or pending device is rejected without revealing which condition failed.
-6. There is no rotate-in-place operation. Rotation means register a new device, verify it, then revoke the old one.
+5. `last_seen_at` is updated on a successful poll. A revoked or otherwise inactive relay is rejected without revealing which condition failed.
+6. There is no rotate-in-place operation. Rotation means register a new relay, verify it, then revoke the old one.
 
-The token is never logged, echoed, placed in a URL or stored server-side. The registration endpoint and daemon CLI are pending; do not expect a working poll loop today.
+The token is never logged, echoed, placed in a URL or stored server-side. The browser registration flow and install command are implemented; an existing install that predates them can register a new relay and move its config.
 
-### 2.3 What the server stores
+### 2.4 What the server stores
 
 | Table | Stored | Not stored |
 |---|---|---|
 | `connector_devices` | Organization, optional user, display name, `token_hash`, status, `last_seen_at` | The device token, any provider secret |
-| `connector_credentials` | Device id, connector id, display name, `auth_kind`, opaque `credential_ref`, scopes, status, free-tier profile, metadata | Any provider key, ciphertext, nonce, tag, wrapped DEK |
+| `connector_credentials` | Device id, connector id, display name, `auth_kind`, opaque `credential_ref`, scopes, status, free-tier profile, metadata | Any provider key, selectors, ciphertext, nonce, tag, wrapped DEK |
 | `connector_usage_ledger` | Per-credential period, request and error counts | Provider response bodies or secrets |
 
-The database cannot decrypt a provider credential because it never receives one. `credential_ref` names a device keychain item; it is not a secret. See `packages/db/migrations/0010_connectors.sql`.
+The database cannot decrypt a provider credential because it never receives one. `credential_ref` names a relay-local store entry; it is not a secret. Selector values (base URLs, namespaces, account ids) stay in the encrypted local store, not in this table. See `packages/db/migrations/0010_connectors.sql`.
 
-### 2.4 How a call flows
+### 2.5 How a call flows
 
 ```text
 agent turn -> tool call -> policy band -> connector device broker
   -> resolve active device + active credential metadata (no secret)
   -> typed request { connectorId, credentialRef, operation, params <= 16 KiB, timeoutMs }
-  -> device daemon polls over TLS, authenticates with its bearer token
-  -> daemon reads its own keychain item named by credentialRef
+  -> relay daemon polls over TLS, authenticates with its bearer token
+  -> daemon reads its local entry named by credentialRef (secret + selectors)
   -> daemon calls the provider with the fixed operation
   -> bounded JSON result <= 16 KiB, or a fixed error code
   -> worker validates, redacts, truncates, hashes, audits and charges the ledger
 ```
 
-The worker never receives the provider response body directly, and the device never receives the provider secret back from the server. Error text crossing the boundary is a closed set: `INTEGRATION_UNAVAILABLE`, `RATE_LIMITED`, `POLICY_DENIED`, `VALIDATION_FAILED`, `NOT_FOUND`, `INTERNAL`.
+The worker never receives the provider response body directly, and the relay never receives the provider secret back from the server. Error text crossing the boundary is a closed set: `INTEGRATION_UNAVAILABLE`, `RATE_LIMITED`, `POLICY_DENIED`, `VALIDATION_FAILED`, `NOT_FOUND`, `INTERNAL`.
 
-### 2.5 Single-worker and durability caveat
+### 2.6 Durability and concurrency
 
-There is no durable connector call-queue table. Until one exists, a poll transport would need an in-process dispatch inside a **single worker process**. A worker restart loses an undelivered request; a second worker cannot see it. Do not describe the poll path as production-ready, and do not scale the worker horizontally for connector calls until a queue migration lands.
+Connector calls are durable in `connector_calls` (migration `0011`). Claiming is atomic and bounded; a worker restart does not lose a queued call, and an expired call is reaped rather than executed late. An offline relay leaves the call unclaimed until its deadline, then the call fails as `INTEGRATION_UNAVAILABLE`; the task continues with partial evidence. There is no fallback to a server key, a shared demo key or another tenant's relay.
 
-When a device is offline, its request expires and the call fails as `INTEGRATION_UNAVAILABLE`. The task continues with partial evidence. There is no fallback to a server key, a shared demo key or another tenant's device.
+See [`SCALING.md`](SCALING.md) for the multi-replica claim model and backpressure rules.
 
 ## 3. GitHub
 
-GitHub is already configured and is the deliberate exception to the device model. The App identifies the platform's own GitHub App, not a user's vendor account.
+GitHub is the deliberate exception to the device model. The App identifies the platform's own GitHub App, not a user's vendor account.
 
-**What you need:** `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, a PKCS#8 private key at `GITHUB_APP_PRIVATE_KEY_PATH`, and `WEBHOOK_GITHUB_SECRET` for intake.
+**What you need:** `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, a PKCS#8 private key via `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_STATE_SECRET` (at least 32 characters) and `WEBHOOK_GITHUB_SECRET` for intake. `GITHUB_APP_INSTALLATION_ID` is a legacy single-binding fallback, not the per-organization flow.
 
-**Where it lives:** the App key is a server-side file path, never in the repository, prompt or device config. The webhook secret is an inbound verifier secret. No user provider key is involved.
+**Where it lives:** the App key is server-side (inline or a file path), never in the repository, prompt or relay config. The slug and state secret are deployment-level values shared by all tenants; they are never per-tenant. The webhook secret is an inbound verifier secret. No user provider key is involved.
+
+**Install per workspace:** the setup page opens `/api/github/install`, signs a 10-minute state bound to the workspace and user, and GitHub returns to `/api/github/callback`. Missing or invalid App configuration returns the fixed `GITHUB_APP_NOT_CONFIGURED` result; the checklist is in [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
 
 **Comment permission:** `github.comment` requests both `issues:write` and `pull_requests:write`. The first live attempt returned 403 "Resource not accessible by integration" until `pull_requests:write` was added. The live-proven call posted comment `6547408811` on PR #2 on 2026-10-31.
 
-**No changes needed:** keep the App installed on the target repositories, keep the key path server-side, and do not add GitHub to the device connector config. The two write functions are still not registered as agent tools.
+**No changes per customer:** each workspace installs the App and imports its own repositories. Keep the App key server-side and do not add GitHub to the relay connector config. The two write functions are still not registered as agent tools.
 
-**Verify:** existing intake and context paths are already proven. Do not re-run live writes for setup.
+**Live proof:** existing intake and context paths are already proven. Do not re-run live writes for setup.
 
 Sources (accessed 2026-11-01): [GitHub App authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app), [App permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps), [validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
 
@@ -181,13 +224,13 @@ Sources (accessed 2026-11-01): [GitHub App authentication](https://docs.github.c
 
 **Where each secret goes:**
 
-- Provider token: device keychain item named by `[connectors.sentry] credential_ref`. Never server `.env`, never the database.
+- Provider token: entry in the relay's encrypted local store named by `credential_ref`. Never server `.env`, never the database.
 - Client Secret: inbound-verifier configuration on the receiver (`SENTRY_WEBHOOK_SECRET` when a Sentry intake mode ships). It is not a provider key and does not belong in the device config.
-- Today there is no Sentry intake mode. Keep production Sentry webhooks disabled until the route ships; a direct delivery falls through to the generic verifier and is rejected.
+- The signed Sentry intake mode exists, but tenant-scoped routing is not live-proven. Until your deployment is verified, point production deliveries at the signed bridge; a direct delivery must not be trusted as Sentry evidence.
 
-**Device config:** `[connectors.sentry] credential_ref`, `org_slug`, `region`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.sentry] credential_ref`, `org_slug`, `region`.
 
-**Verify (pending tool binding):** one `sentry.fetch_issue_context` against a named issue should make at most four calls, return a bounded issue/event/release/deploy bundle, write one `tool.execute` audit row, and leave no token in logs.
+**Manual live acceptance (optional, bounded):** one `sentry.get_issue` plus one `sentry.latest_event` against a named issue should make at most four calls, return a bounded issue/event bundle, write one `tool.execute` audit row, and leave no token in logs.
 
 **Free tier:** Developer is $0 forever: 5,000 errors/month, 1 user, 30-day retention, plus limited logs, metrics, spans and replays. Do not promise evidence older than 30 days; overage behavior and numeric rate limits are **UNVERIFIED**.
 
@@ -203,13 +246,13 @@ Sources (accessed 2026-11-01): [Sentry pricing](https://sentry.io/pricing/), [in
 
 **Restrict data sources:** `Connections > Data sources > [data source] > Permissions > Add permission > Query` (the `datasources:query` action) for each in-scope UID. Data-source permissions are available in Grafana Cloud/Enterprise; availability in Grafana OSS is **UNVERIFIED**. If unavailable, Viewer can query every data source in the organization, so use a dedicated stack or organization for the connector.
 
-**Create the contact point:** `Alerts & IRM > Alerting > Notification configuration > + Add contact point > Webhook`. Point it at `https://<host>/api/webhooks/grafana` after the route ships, or at your signed bridge today. Under `HMAC signature`, set the Secret and the Header (default `X-Grafana-Alerting-Signature`). Set a Timestamp Header; the signed string is `<timestamp>:<rawBody>`. Without a timestamp header there is no replay protection. Route only production rules at the agreed severity; resolved notifications must not create tasks.
+**Create the contact point:** `Alerts & IRM > Alerting > Notification configuration > + Add contact point > Webhook`. Point it at your signed bridge, or at the tenant-scoped Grafana route once your deployment is verified. Under `HMAC signature`, set the Secret and the Header (default `X-Grafana-Alerting-Signature`). Set a Timestamp Header; the signed string is `<timestamp>:<rawBody>`. Without a timestamp header there is no replay protection. Route only production rules at the agreed severity; resolved notifications must not create tasks.
 
-**Where each secret goes:** token in the device keychain; HMAC secret in the receiver or bridge verifier (`GRAFANA_WEBHOOK_SECRET`), not in the device config.
+**Where each secret goes:** token in the relay's encrypted local store; HMAC secret in the receiver or bridge verifier (`GRAFANA_WEBHOOK_SECRET`), not in the device config.
 
-**Device config:** `[connectors.grafana] credential_ref`, `base_url`, `org_id`, `datasource_uid_metrics`, `datasource_uid_logs`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.grafana] credential_ref`, `base_url`, `org_id`, `datasource_uid_metrics`, `datasource_uid_logs`.
 
-**Verify (pending tool binding):** one `grafana.get_alert_rule` or one bounded `grafana.query_metrics` call should return at most four calls, a bounded series (no more than five series and 20 points), one audit row, and no token or raw log line in the result.
+**Manual live acceptance (optional, bounded):** one `grafana.get_alert_rule` or one bounded `grafana.query_metrics` call should return at most four calls, a bounded series (no more than five series and 20 points), one audit row, and no token or raw log line in the result.
 
 **Free tier:** Cloud Free is $0: 10,000 active series, 50 GB logs, 50 GB traces, 3 users, 14-day retention. OSS self-host has no vendor quota. Do not backfill beyond 14 days; a flapping rule can exhaust 50 GB of logs. Numeric API rate limits are **UNVERIFIED**.
 
@@ -223,15 +266,15 @@ Sources (accessed 2026-11-01): [Grafana pricing](https://grafana.com/pricing/), 
 
 **Create the key:** `Integrations > Developer Tools > API Access Keys > Create New API Key`, then check `Read-only API Key`. The header is `Authorization: Token token=<key>`. If you use a Private App instead, grant `incidents.read`, `services.read` and `escalation_policies.read`; add `schedules.read` only if schedule names are required. Omit `oncalls.read` by default because responder data is personal data. Never add `incidents.write` to this credential.
 
-**Create the webhook:** `Integrations > Generic Webhooks (v3) > New Webhook`. Point it at `https://<host>/api/webhooks/pagerduty` after the route ships, subscribe to the incident events you need (`incident.triggered`, `resolved`, `acknowledged`), and copy the secret from the confirmation modal. It is shown once.
+**Create the webhook:** `Integrations > Generic Webhooks (v3) > New Webhook`. Point it at your signed bridge, or at the tenant-scoped PagerDuty route once your deployment is verified. Subscribe to the incident events you need (`incident.triggered`, `resolved`, `acknowledged`), and copy the secret from the confirmation modal. It is shown once.
 
 **Signature:** `X-PagerDuty-Signature: v1=<hex>` is HMAC-SHA256 over the raw body only. There is no signed timestamp; enforce a ±300 s freshness check on `event.occurred_at`. During rotation the header may contain several comma-separated `v1=` values; accept any active secret.
 
-**Where each secret goes:** API key in the device keychain; webhook signing secret in the receiver verifier (`PAGERDUTY_WEBHOOK_SECRET`), not the device config.
+**Where each secret goes:** API key in the relay's encrypted local store; webhook signing secret in the receiver verifier (`PAGERDUTY_WEBHOOK_SECRET`), not the device config.
 
-**Device config:** `[connectors.pagerduty] credential_ref`, `subdomain`, `base_url`, `service_ids`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.pagerduty] credential_ref`, `subdomain`, `base_url`, `service_ids`.
 
-**Verify (pending tool binding):** one `pagerduty.fetch_incident_context` should return at most four calls and 25 log entries, with responder names and free text redacted, one audit row, and no key in logs.
+**Manual live acceptance (optional, bounded):** one `pagerduty.get_incident` plus `pagerduty.list_log_entries` should return at most four calls and 25 log entries, with responder names and free text redacted, one audit row, and no key in logs.
 
 **Free tier:** $0: 5 users, 1 on-call schedule, 1 escalation policy, 100 SMS/phone notifications per month. The API is included and the limit is 960 requests/minute. Retention is not stated and is **UNVERIFIED**. Do not plan a multi-team rotation on Free.
 
@@ -317,9 +360,9 @@ kubectl auth can-i delete pods -n isolate-demo --as=system:serviceaccount:isolat
 
 The first must be `yes`; the second must be `no`.
 
-**Device config:** `[connectors.kubernetes] credential_ref`, `api_url`, `namespace`, `ca_file`. For local testing, `credential_ref = "file:~/.isolate/k8s-token"` is the device-side entry that resolves to the token file; a keychain entry is preferred when the daemon supports it. The CA file is not a secret.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.kubernetes] credential_ref`, `api_url`, `namespace`, `ca_file`. For local testing, `credential_ref = "file:~/.isolate/k8s-token"` is the device-side entry that resolves to the token file; a keychain entry is preferred when the daemon supports it. The CA file is not a secret.
 
-**Verify (pending tool binding):** one `kubernetes.get_events` for the demo namespace should return at most 50 Warning events and one `kubernetes.pod_logs` call at most 200 lines, with one audit row and no token in the result.
+**Manual live acceptance (optional, bounded):** one `k8s.list_events` for the demo namespace should return at most 50 Warning events and one `k8s.logs_tail` call at most 200 lines, with one audit row and no token in the result.
 
 **Free tier:** Kubernetes is Apache-2.0 with no vendor quota; the cluster costs money. Events expire after about one hour by default. Do not treat an empty event list as "nothing happened".
 
@@ -335,11 +378,11 @@ Sources (accessed 2026-11-01): [RBAC](https://kubernetes.io/docs/reference/acces
 
 **Create the webhook:** `Integrations > Webhooks > New Webhook`. Datadog documents no HMAC, so the delivery is a hint, not authenticated evidence. Point it at your signed bridge, not directly at the platform receiver, and add a custom header carrying a random bridge token. The bridge verifies that header, re-fetches the monitor or incident by id, normalizes it and re-signs with the generic webhook secret. Do not put the shared token in the URL or use URL-embedded Basic auth.
 
-**Where each secret goes:** API key and application key in one device keychain item named by `credential_ref`; bridge token in the bridge's server-side secret store. Never send either key to the server or the model.
+**Where each secret goes:** API key and application key in one entry in the relay's encrypted local store named by `credential_ref`; bridge token in the bridge's server-side secret store. Never send either key to the server or the model.
 
-**Device config:** `[connectors.datadog] credential_ref`, `site`, `incident_id`, `monitor_id`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.datadog] credential_ref`, `site`, `incident_id`, `monitor_id`.
 
-**Verify (pending tool binding):** one `GET /api/v2/incidents/{id}` for a named test incident should return a bounded incident record, at most six calls for the full plan, one audit row, and no key in logs.
+**Manual live acceptance (optional, bounded):** one `GET /api/v2/incidents/{id}` for a named test incident should return a bounded incident record, at most six calls for the full plan, one audit row, and no key in logs.
 
 **Free tier:** $0, up to 5 hosts, 1-day metric retention, core collection and visualization. Custom-metric allowance, free log allowance and per-endpoint rate limits are **UNVERIFIED**. Do not enable the log aggregate unless the account proves logs are on the plan; mark the bundle truncated if logs are absent.
 
@@ -359,11 +402,11 @@ Sources (accessed 2026-11-01): [Datadog pricing](https://www.datadoghq.com/prici
 
 **Create the webhook:** in the current workflow UI, `Settings > Data & AI > Webhooks`, or in the alerting UI `Alerts > Notification Workflows > Add a workflow`. Create a webhook destination with a custom header carrying a random bridge token and a pinned payload template. No HMAC is documented. Point it at your signed bridge; the bridge re-fetches the issue or entity state before creating a task.
 
-**Where each secret goes:** user key in the device keychain; bridge token in the bridge's server-side store. Do not use the license/ingest key for reads.
+**Where each secret goes:** user key in the relay's encrypted local store; bridge token in the bridge's server-side store. Do not use the license/ingest key for reads.
 
-**Device config:** `[connectors.newrelic] credential_ref`, `account_id`, `region`, `entity_guid`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.newrelic] credential_ref`, `account_id`, `region`, `entity_guid`.
 
-**Verify (pending tool binding):** one `entitySearch` for a named entity, or one NRQL count over at most 15 minutes, should return at most four GraphQL operations, a bounded aggregate, one audit row, and no key in logs.
+**Manual live acceptance (optional, bounded):** one `entitySearch` for a named entity, or one NRQL count over at most 15 minutes, should return at most four GraphQL operations, a bounded aggregate, one audit row, and no key in logs.
 
 **Free tier:** $0: 100 GB/month ingest, 1 full platform user, unlimited basic users, default retention of at least 8 days. Paid retention tiers beyond that are **UNVERIFIED**. Do not assume telemetry older than the free window exists.
 
@@ -379,11 +422,11 @@ Sources (accessed 2026-11-01): [New Relic pricing](https://newrelic.com/pricing)
 
 **Create the webhook:** `Team Settings > Integrations > Add Integration > Webhook`, set a Shared Secret, and point it at your signed bridge. Honeycomb sends the secret in `X-Honeycomb-Webhook-Token`; this authenticates the sender but does not sign the body. The bridge must verify the token, re-fetch trigger or SLO state, and re-sign to the generic endpoint. The payload field names and EU API host are **UNVERIFIED**; capture one test delivery and pin the schema.
 
-**Where each secret goes:** configuration key in the device keychain; webhook shared secret in the bridge's server-side store.
+**Where each secret goes:** configuration key in the relay's encrypted local store; webhook shared secret in the bridge's server-side store.
 
-**Device config:** `[connectors.honeycomb] credential_ref`, `api_host`, `dataset`, `trigger_id`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.honeycomb] credential_ref`, `api_host`, `dataset`, `trigger_id`.
 
-**Verify (pending tool binding):** one query-result round trip for the named dataset over at most 15 minutes should return no more than 100 rows and 1,500 characters, at most four calls, one audit row, and no key or raw event map in the result.
+**Manual live acceptance (optional, bounded):** one query-result round trip for the named dataset over at most 15 minutes should return no more than 100 rows and 1,500 characters, at most four calls, one audit row, and no key or raw event map in the result.
 
 **Free tier:** $0: 20M events and 100M metrics data points per month, 2 triggers, no SLOs, 60-day event retention and 13-month metrics retention. Query duration is at most 7 days and 10 requests/minute. Do not fetch raw events or explore arbitrary high-cardinality fields.
 
@@ -399,11 +442,11 @@ Sources (accessed 2026-11-01): [Honeycomb pricing](https://www.honeycomb.io/pric
 
 **Create the webhook:** `Monitors > Manage notifiers > New notifier > Custom webhook`. Point it at your signed bridge, add custom headers carrying a random bridge token, and pin the Go body template so the JSON shape is stable. Axiom documents no HMAC; the header is a shared secret, not a signature. The bridge verifies it, re-fetches monitor state, and re-signs.
 
-**Where each secret goes:** API token in the device keychain; bridge token in the bridge's server-side store.
+**Where each secret goes:** API token in the relay's encrypted local store; bridge token in the bridge's server-side store.
 
-**Device config:** `[connectors.axiom] credential_ref`, `api_url`, `dataset`, `monitor_id`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.axiom] credential_ref`, `api_url`, `dataset`, `monitor_id`.
 
-**Verify (pending tool binding):** one bounded APL aggregate for the named dataset over at most 15 minutes should return at most 100 rows, at most three calls, one audit row, and no token or raw log line in the result.
+**Manual live acceptance (optional, bounded):** one bounded APL aggregate for the named dataset over at most 15 minutes should return at most 100 rows, at most three calls, one audit row, and no token or raw log line in the result.
 
 **Free tier:** Personal is $0: 500 GB/month data loading, 25 GB storage, 30-day retention, 3 datasets, 1 user, and 10 GB-hours query compute. Heavy APL scans exhaust the query budget; bound the window and avoid `project *`.
 
@@ -421,11 +464,11 @@ Sources (accessed 2026-11-01): [Axiom limits](https://axiom.co/docs/reference/li
 
 **Create the webhook:** `Settings > Account Settings > Notification Channels > New Channel > Webhook`. Add Basic auth credentials and point it at your signed bridge. SigNoz documents no HMAC; Basic auth authenticates the sender but does not sign the body. The bridge verifies the credential, re-fetches the alert/rule state, and re-signs.
 
-**Where each secret goes:** API key in the device keychain; webhook Basic password in the bridge's server-side store.
+**Where each secret goes:** API key in the relay's encrypted local store; webhook Basic password in the bridge's server-side store.
 
-**Device config:** `[connectors.signoz] credential_ref`, `api_url`, `service_name`.
+**Legacy config fields (optional; pairing is the product path):** `[connectors.signoz] credential_ref`, `api_url`, `service_name`.
 
-**Verify (pending tool binding):** one `POST /api/v5/query_range` metric query over at most 15 minutes should return no more than 20 points or rows, at most three calls, one audit row, and no log body or API key in the result.
+**Manual live acceptance (optional, bounded):** one `POST /api/v5/query_range` metric query over at most 15 minutes should return no more than 20 points or rows, at most three calls, one audit row, and no log body or API key in the result.
 
 **Free tier:** Community Edition is free and self-hosted with no data caps; infrastructure is the cost. Cloud is trial-only and must not be recommended as a free path.
 
@@ -435,17 +478,17 @@ Sources (accessed 2026-11-01): [SigNoz pricing](https://signoz.io/pricing/), [se
 
 ## 13. Testing handoff
 
-No vendor except GitHub has a live acceptance run. The device-path harness
+No SaaS vendor except GitHub has a live acceptance run (Kubernetes has a local proof). The device-path harness
 `scripts/acceptance-connector-live.ts` (`bun run acceptance:connector-live`) enqueues exactly
 one connector call through `PostgresConnectorCallRepository`, waits for the running device
 daemon to claim it, execute it on the device and post the bounded result, then prints a
 bounded summary and PASS/FAIL. The platform process holds no provider key: the key stays in
-the device keychain and only typed arguments and a bounded result cross the queue. Every row
+the relay's encrypted local store and only typed arguments and a bounded result cross the queue. Every row
 below stays **pending** until its device credential is registered and one run passes.
 
 Run rules:
 
-- Values are read from the process environment for that one process. Never write them to `.env`, a config file, a fixture, a log or shell history with the value visible. Use a keychain lookup in the command substitution.
+- Values are read from the process environment for that one process. Never write them to `.env`, a config file, a fixture, a log or shell history with the value visible. Use a secret-store lookup in the command substitution.
 - One provider read per connector, no loops, no retries after success, no parallel calls.
 - Stop at the first cap. Free-tier calls only; no paid plan is required.
 - Expected evidence: one bounded provider result, one `tool.execute` audit row, and no key in logs or the result. Record the measured item count and bytes, not an estimate.
@@ -481,9 +524,10 @@ bun run acceptance:connector-live
 ```
 
 `DATABASE_URL`, `DEVICE_ORGANIZATION_ID`, `DEVICE_ID` and `DEVICE_CREDENTIAL_ID` come from
-the running device registration; the provider key itself is read only by the device daemon
-from the OS keychain. Never echo a key value to the terminal. On Linux, load it with
-`secret-tool lookup service isolate-<vendor>` inside the daemon's environment, not here.
+the running relay registration; the provider key itself is read only by the relay from its
+encrypted local store. Never echo a key value to the terminal. For an env-based legacy
+install, load it with `secret-tool lookup service isolate-<vendor>` inside the daemon's
+environment, not here.
 
 ## 14. Documented-only catalog
 
@@ -502,9 +546,9 @@ The verified free/paid matrix for every page is in [free-tier-catalog.md](free-t
 ## 15. Key hygiene
 
 - **Never commit a key.** No provider token, device token, webhook secret, CA private key or kubeconfig in the repository, fixtures, screenshots, issues or prompts.
-- **Device-only provider storage.** Use the OS keychain; the TOML file holds selectors and keychain item names, not secrets. The server stores only `token_hash` and metadata.
-- **Rotation.** Create the replacement provider key, update the device keychain item, verify one bounded read, then revoke the old key. For the device token, register a new device, verify it, then revoke the old device; there is no in-place token rotation.
-- **Revocation.** Revoking a device blocks new polls immediately. An in-flight call is not recalled. Revoke the provider key at the vendor as well when a device is lost.
-- **Offline device.** Requests expire and fail as `INTEGRATION_UNAVAILABLE`; the task continues with partial evidence. There is no server-key fallback, no shared demo key and no second tenant's device.
+- **Relay-only provider storage.** Secrets and selectors live in the relay's encrypted local store (`~/.isolate/secrets.json`); the JSON config holds non-secret base settings. The server stores only `token_hash` and metadata. An OS keychain adapter is a later seam.
+- **Rotation.** Create the replacement provider key, update the relay-local entry, verify one bounded read, then revoke the old key. For the device token, register a new relay, verify it, then revoke the old relay; there is no in-place token rotation.
+- **Revocation.** Revoking a relay blocks new polls immediately. An in-flight call is not recalled. Revoke the provider key at the vendor as well when a relay is lost.
+- **Offline relay.** Requests are reaped at their deadline and fail as `INTEGRATION_UNAVAILABLE`; the task continues with partial evidence. There is no server-key fallback, no shared demo key and no second tenant's relay.
 - **Compromise.** Revoke the device and the credential row, revoke the provider key, rotate the webhook verifier secret, and inspect audit rows for the affected connector. Do not attempt to "test" the old key to see whether it still works.
 - **Logs and errors.** Provider response text never crosses the device boundary. Worker logs carry fixed error codes, connector id and bounded metadata only. A secret in a log is a defect, not an accepted risk.

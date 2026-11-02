@@ -2,13 +2,13 @@
 
 | Field | Value |
 |---|---|
-| Status | **Partially implemented; wave 23 adds browser-driven pairing and per-organization GitHub installation** |
+| Status | **Implemented for the relay path; wave 24 adds vendor-specific pairing fields and bounded verification** |
 | Audience | Product, web, worker and connector authors building the user-connect flow |
 | Date | 2026-11-02 |
 | Architecture of record | [`docs/connector-usage.md`](connector-usage.md) — this page builds on it and does not replace it |
 | Security boundaries | [`ARCHITECTURE.md`](../ARCHITECTURE.md) §7–§11 |
 | Vendor facts | Per-connector pages under [`docs/connectors/`](connectors/); free-tier matrix in [`free-tier-catalog.md`](connectors/free-tier-catalog.md) |
-| Implemented today | Generic signed webhook intake; GitHub trigger, read context and two scoped writes; ten device-held connectors; migration `0010` (device registry, credential metadata, ledger), `0011` (durable `connector_calls` queue) and `0012`–`0015` hardening; device register/list/revoke/rotate and claim/result/heartbeat routes; metadata-only connect/list/revoke routes and the Devices/Connectors UI; worker tool-registry binding behind `DEVICE_GATEWAY_ENABLED`. Wave 23 adds per-organization GitHub installation, trigger subscriptions/delivery receipts, and browser/relay pairing with a local secret store. The remaining operator-shaped step is the relay install command, not a `.env` key |
+| Implemented today | Generic signed webhook intake; GitHub trigger, read context and two scoped writes; nine relay connectors with adapters and tool bindings; migration `0010` (device registry, credential metadata, ledger), `0011` (durable `connector_calls` queue) and `0012`–`0016`; device register/list/revoke/rotate and claim/result/heartbeat routes; pairing claim/complete/status routes; metadata-only connect/list/revoke routes; worker tool-registry binding behind `DEVICE_GATEWAY_ENABLED`; per-organization GitHub installation; trigger subscriptions/delivery receipts; vendor-specific pairing fields; and a bounded `connector.verify` read. The remaining operator-shaped step is the relay install command, not a `.env` key. Current limits are in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md) |
 
 ## 0. The product rule this page exists to enforce
 
@@ -26,8 +26,9 @@ Four consequences, all binding:
    user's provider key), inbound webhook HMAC secrets and the database URL;
    none of them is a metered vendor API key.
 2. **A missing user credential is not an error to paper over.** It fails closed
-   as `INTEGRATION_UNAVAILABLE`; there is no environment-variable fallback for
-   a tenant, no shared demo key and no "try ours" path.
+   as `INTEGRATION_UNAVAILABLE`; there is no server-side environment-variable
+   fallback for a tenant, no shared demo key and no "try ours" path. A relay-local
+   env value is a legacy compatibility fallback, not a server-held credential.
 3. **Free is a hard budget, not a suggestion.** Each connector declares a
    verified free-tier profile; the platform stops at about 80% of the provider
    limit and reports the stop. It never silently overages and never upgrades a
@@ -50,17 +51,17 @@ install daemon ─► register device (active, token shown once) ─► catalog 
 | Step | User sees | Server does | Record written |
 |---|---|---|---|
 | 1. Install daemon | Install command and a one-time device name | Serves the daemon download metadata; no vendor call | None |
-| 2. Register device | A pending device with its display name | Accepts `sha256(token)` only; never the token | `connector_devices` (`pending`), `audit_events` |
-| 3. Activate device | "Device active" after owner/admin approval | Flips status to `active`; capability-checked | `connector_devices.status`, `audit_events` |
+| 2. Register relay | A relay with its display name | Accepts `sha256(token)` only; never the token; the row is usable immediately | `connector_devices`, `audit_events` |
+| 3. First heartbeat | "Relay active" | Updates `last_seen_at`; there is no separate approval step in the current registration flow | `connector_devices.last_seen_at` |
 | 4. Catalog | Connectors with a free/paid/self-host badge and verified limits | Serves static catalog metadata; no vendor call | None |
-| 5. Choose | Credential form for the connector's kind, or a device-side OAuth start | Builds the form descriptor; never accepts a provider secret in a request | None |
-| 6. Connect | "Saved on this device" | Writes metadata (`credential_ref`, kind, scopes) as `pending_validation`; the secret goes to the device keychain | `connector_credentials`, `audit_events` |
-| 7. Verify | "Checking your connection…" | Enqueues exactly one cheap typed read; the device executes it; maps the bounded result to a status | `status`, `last_validated_at`, `secret.rotate` audit |
+| 5. Choose | The relay's local page with that connector's secret fields and selectors | Builds the pairing session; never accepts a provider secret in a request | None |
+| 6. Connect | "Saved on this relay" | Writes metadata (`credential_ref`, kind, scopes) as `pending_validation`; the secret and selectors go to the relay's encrypted local store | `connector_credentials`, `audit_events` |
+| 7. Verify | "Verify connection" | Enqueues exactly one bounded `connector.verify` read; the relay executes it and returns a boolean plus a fixed reason code | `status`, `last_validated_at`, `secret.rotate` audit |
 | 8. Enable tools | Tool names with risk bands; read tools preselected | Persists the enabled set in `metadata.enabled_tools` | `config.change` audit |
 | 9. Run task | Task timeline shows tool activity per call | Device broker resolves the device; the worker enqueues typed calls; the device executes them | `tool_invocations`, `audit_events`, `connector_usage_ledger` |
 | 10. Disconnect | "Disconnected; history kept" | Marks the credential `revoked`; optionally revokes the device token hash | `secret.rotate` audit with outcome `revoked` |
 
-### 1.1 UI states to build later (no UI code in this wave)
+### 1.1 UI state vocabulary
 
 | State id | Trigger | What renders | Allowed next action |
 |---|---|---|---|
@@ -88,20 +89,18 @@ install daemon ─► register device (active, token shown once) ─► catalog 
 | `tool_provider_unavailable` | `5xx`, timeout or device offline | "Provider or device unavailable; task continues without it" | Retry task later |
 | `credential_expiring` | OAuth expiry within 24 h (device-side refresh failed) | Owner/admin warning | Rotate |
 | `credential_expired` | Refresh failed or key expired | Tools disabled for that row | Rotate |
-| `disconnecting` / `disconnected` | Revoke submitted / done | Metadata marked `revoked`; the device deletes its keychain item | Reconnect |
+| `disconnecting` / `disconnected` | Revoke submitted / done | Metadata marked `revoked`; delete the local entry on the relay | Reconnect |
 
 Every state is server-derived. Neither the browser nor the server receives a
 provider secret, a ciphertext fragment, a token expiry refresh value or a
 provider error body; only the device holds the secret.
 
-### 1.2 Server actions to build later
+### 1.2 Server actions
 
-All actions are TanStack `createServerFn` handlers in a new
-`apps/web/src/features/connectors/connectors.functions.ts`, in the style of
-`apps/web/src/features/tasks/tasks.functions.ts`. Each resolves the caller
-scope server-side (`resolveCallerScope`), checks a capability before touching
-storage, sets `Cache-Control: private, no-store`, and returns a bounded
-`ServiceResult`.
+The connect and pairing actions are implemented as capability-checked server
+functions and routes. Each resolves the caller scope server-side
+(`resolveCallerScope`), checks a capability before touching storage, sets
+`Cache-Control: private, no-store`, and returns a bounded `ServiceResult`.
 
 | Action | Method | Capability | Input (bounded) | Output |
 |---|---|---|---|---|
@@ -110,27 +109,38 @@ storage, sets `Cache-Control: private, no-store`, and returns a bounded
 | `revokeConnectorDevice` | POST | `member:manage` | `{ deviceId }` | `{ status: "revoked" }` |
 | `listConnectorCatalog` | GET | `connector:read` | none | Catalog entries with free-tier profile |
 | `getConnectorInstance` | GET | `connector:read` | `{ connector }` | Status summary, enabled tools, usage counters; never a secret (the server has none) |
-| `startConnectorConnect` | POST | `connector:manage` | `{ connector, credentialKind, displayName, baseUrl? }` | Form descriptor or a device-side OAuth start descriptor |
+| `startConnectorConnect` | POST | `connector:manage` | `{ connector, credentialKind, displayName }` | Pairing session with the relay's one-time local URL |
 | `submitConnectorCredential` | POST | `connector:manage` | `{ connector, deviceId, displayName, authKind, credentialRef, scopes[] }` | `{ status, displayName }`; there is no secret field |
 | `completeConnectorOAuth` | POST | `connector:manage` | `{ state, credentialRef }` | `{ status }`; the code exchange runs on the device (design) |
-| `verifyConnectorCredential` | POST | `connector:manage` | `{ credentialId }` | `{ status, reasonCode }` |
+| `verifyConnectorCredential` (**implemented**) | POST | `connector:manage` | `{ credentialId }` | `{ credentialId, status, reasonCode, verifiedAt }` on success; a fixed failure code otherwise |
 | `updateConnectorTools` | POST | `connector:manage` | `{ credentialId, tools[] }` | `{ enabledTools }` |
 | `rotateConnectorCredential` | POST | `connector:manage` | `{ credentialId, credentialRef }` | `{ status }` |
 | `revokeConnectorCredential` | POST | `connector:manage` | `{ credentialId }` | `{ status: "revoked" }` |
 | `listConnectorUsage` | GET | `connector:read` | `{ connector }` | Ledger counters and budgets |
 
-`tokenHash` is exactly 64 lowercase hex characters; the server hashes and
-validates, and can never recover the token. The daemon poll endpoint
-(`POST /api/connector-devices/poll`, design) is not a `createServerFn`: it is a
-device-authenticated route that accepts a bearer token, verifies its sha256
-hash in constant time, updates `last_seen_at` and returns bounded queued
-requests. No browser session is involved.
+`verifyConnectorCredential` is implemented. It enqueues exactly one
+`connector.verify` device call and waits a bounded time. On success the credential
+becomes `active`, `last_validated_at` is recorded, and the view carries
+`{ credentialId, status: "active", reasonCode: "OK", verifiedAt }`. An
+authentication rejection sets `invalid` with a fixed reason code. An unreachable
+relay or a timeout leaves the existing status unchanged. `connector.verify` is an
+internal device-call name, not a model-callable tool. Only `active` may be
+described as Connected or verified.
 
-A `connectorId` is a closed union, not free text. A `baseUrl` is only accepted
-for self-hosted kinds, is https-only, has no userinfo, query or fragment, and
-must match the connector's host allowlist (or the operator's pinned host). A
-display name is 1–100 characters and is not a secret. A `credentialRef` is
-1–200 characters naming a device keychain item; it is not a secret either.
+`tokenHash` is exactly 64 lowercase hex characters; the server hashes and
+validates, and can never recover the token. The device poll transport is
+implemented as device-authenticated routes (`POST /api/device/claim`,
+`POST /api/device/calls/{id}/result`, `POST /api/device/heartbeat`), not as
+`createServerFn`. They accept a bearer token, verify its sha256 hash in constant
+time, update `last_seen_at` and return bounded queued requests. No browser session
+is involved.
+
+A `connectorId` is a closed union, not free text. Each connector accepts only its
+documented selectors. URL selectors are https-only, have no userinfo, query or
+fragment, and must match the connector's host allowlist (or the operator's pinned
+host). A display name is 1–100 characters and is not a secret. A `credentialRef`
+is 1–200 characters naming a device-local keychain or store entry; it is not a
+secret either.
 
 ## 2. Credential intake and storage
 
@@ -138,13 +148,13 @@ display name is 1–100 characters and is not a secret. A `credentialRef` is
 
 | Kind | Fields | Verification read | Storage notes |
 |---|---|---|---|
-| `api_key` | key; optional base URL | One list/get on a fixed path | Key in the device keychain; server stores `credential_ref` and base URL metadata |
+| `api_key` | key; optional base URL | One list/get on a fixed path | Key and base URL stay in the relay's local store; server stores `credential_ref` only |
 | `oauth_client_credentials` | client id, secret, token URL, scopes | One token exchange + one read | Client secret stays on the device; token URL must be allowlisted |
 | `oauth_authorization_code` | client id, optional secret, PKCE | Code exchange + one read | Access and refresh tokens device-held; state is single-use server-side |
 | `service_account_json` | JSON blob (≤16 KiB), project id | One read with a minted token | JSON blob device-held; server stores project id metadata only |
 | `bot_token` | token, workspace id | One identity/workspace read | Bot token device-held; no user scopes |
 | `webhook_hmac` | secret (≥32 chars), optional timestamp header | Sign a local test vector; no provider call | Inbound verification secret, platform-held by design; not stored in `connector_credentials` |
-| `self_host_url_token` | base URL, token, optional CA PEM | One read against the pinned host | URL metadata only; token and CA stay on the device; https only, no redirects |
+| `self_host_url_token` | base URL, token, optional CA PEM | One read against the pinned host | URL, token and CA stay on the relay; https only, no redirects |
 | `github_app` | app id, installation id, private key (GHES only) | One installation-token mint + read | Platform App key is server-held (it is the platform's App); no credential row |
 | `sasl_scram` | brokers, username, password, mechanism | One metadata request | Username in metadata; password device-held; no `auth_kind` value yet |
 | `mtls` | base URL, client cert, client key | One read over the client certificate | Cert and key device-held; no `auth_kind` value yet |
@@ -156,6 +166,41 @@ have no stored credential row yet; adding one is a CHECK migration, not a
 documentation change.
 
 Slack is notify-only and is not a context source; it is not part of the first onboarding wave.
+
+#### 2.1.1 Vendor selectors and pairing fields
+
+The loopback page is not a single generic secret box. It renders the fields for
+the connector named in the pairing URL; the claim response remains authoritative
+for the connector id and credential reference. Secret values are stored as named
+fields (Datadog, for example, uses `apiKey` and `appKey`), and selectors are
+stored beside them in the relay's encrypted local store. Neither is sent to the
+Isolate server.
+
+| Connector | Secret fields (all required unless marked) | Selectors |
+|---|---|---|
+| Sentry | `token` | `baseUrl` (optional) |
+| Grafana | `token` | `baseUrl`; `orgId` (optional); `metricsDatasourceUid` (optional); `logsDatasourceUid` (optional) |
+| PagerDuty | `token` | `fromEmail` (optional); `baseUrl` (optional) |
+| Kubernetes | `serviceAccountTokenFile`; `caFile` (optional) | `apiUrl`; `namespace`; `clusterId` (optional) |
+| Datadog | `apiKey`; `appKey` | `baseUrl` (site API origin) |
+| New Relic | `apiKey` | `accountId`; `endpoint` (optional) |
+| Honeycomb | `apiKey` | `dataset`; `apiBaseUrl` (optional) |
+| Axiom | `token` | `baseUrl`; `dataset` |
+| SigNoz | `apiKey` | `baseUrl` |
+
+Validation rules, applied before the value is stored:
+
+- A base URL, API URL or endpoint is an absolute `https` URL with no userinfo,
+  query or fragment, at most 512 characters. A base origin must have no path.
+- Grafana `orgId` is 1–10 digits. New Relic `accountId` is 1–20 digits.
+- A Kubernetes namespace is a 1–63 character DNS label
+  (`[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?`). `clusterId` is 1–64 characters
+  (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`).
+- A dataset is 1–128 characters; a datasource UID is 1–64 characters; a
+  PagerDuty `fromEmail` is a valid address of at most 254 characters.
+- The store accepts at most 16 secret fields, each up to 32 KiB and 64 KiB in
+  total. It accepts at most 16 selectors, each up to 512 characters. Selector
+  values that look like credential material are rejected.
 
 ### 2.2 Applied schema `0010_connectors.sql`
 
@@ -190,7 +235,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
   auth_kind text NOT NULL CHECK (auth_kind IN
     ('api_key','oauth_client_credentials','oauth_authorization_code',
      'service_account_json','bot_token','self_host_url_token')),
-  -- Opaque device-side keychain item name, never a secret.
+  -- Opaque relay-local store entry name, never a secret.
   credential_ref text NOT NULL CHECK (char_length(credential_ref) BETWEEN 1 AND 200),
   scopes text[] NOT NULL DEFAULT '{}',
   status text NOT NULL DEFAULT 'pending_validation'
@@ -251,34 +296,36 @@ There is no KEK, DEK, AES-256-GCM envelope, `CONNECTOR_CREDENTIAL_KEY`,
 `getSecret` or "the server can decrypt" path. The server never receives a
 provider key, so it has nothing to encrypt or decrypt.
 
-- **Device token.** The daemon generates 256 random bits and encodes them as
-  43 base64url characters (`generateConnectorDeviceToken`). It sends only the
-  sha256 hex digest to the server; `connector_devices.token_hash` is the sole
+- **Device token.** The relay registration flow generates 256 random bits and
+  encodes them as 43 base64url characters (`generateConnectorDeviceToken`). It
+  sends only the sha256 hex digest to the server; `connector_devices.token_hash` is the sole
   authentication material. Verification recomputes the digest and compares in
   constant time; malformed input is a non-match, never an error.
 - **`credential_ref`.** A 1–200 character opaque name for the device-side
-  keychain item (for example an OS keychain label). It names the secret and is
-  never the secret. It may appear in a summary or a fixed error; a token may not.
-- **Provider secret.** It lives in the user's OS keychain or protected browser
-  storage and is read only by the daemon at call time. It is never sent to the
-  server, a prompt, a tool argument, a log or an audit row.
+  store entry. It names the secret and is never the secret. It may appear in a
+  summary or a fixed error; a token may not.
+- **Provider secret and selectors.** They live in the relay's encrypted local
+  store (`~/.isolate/secrets.json`, AES-256-GCM, mode 0600) and are read only by
+  the relay at call time. They are never sent to the server, a prompt, a tool
+  argument, a log or an audit row. The legacy env-var path is a compatibility
+  fallback, not the product path.
 - **Stolen database.** A dump yields connector metadata, device names,
   `last_seen_at`, usage counters and sha256 token hashes. It yields no provider
-  key; guessing a 256-bit token from its hash is infeasible.
+  key and no selector; guessing a 256-bit token from its hash is infeasible.
 
-**Device daemon poll flow (implemented; browser pairing is wave 23).**
+**Device daemon poll flow (implemented).**
 
 ```text
-1 register   device token generated locally → only sha256 hex sent
-             └─► connector_devices (pending, token_hash)
-2 activate   owner/admin sets active; revoke sets revoked
-3 connect    browser/device writes the secret to the keychain;
+1 register   relay token generated locally → only sha256 hex sent
+             └─► connector_devices (active, token_hash)
+2 revoke     owner/admin can revoke; schema allows pending for legacy rows
+3 connect    relay writes the secret and selectors to its encrypted store;
              server stores connector_credentials metadata (credential_ref)
 4 call       worker validates a typed request:
              { connectorId, credentialRef, operation, params <= 16 KiB, timeoutMs }
 5 poll       daemon presents its bearer token → server hashes →
              verifyByTokenHash (constant time) → touchSeen → pending request
-6 execute    daemon reads the keychain item by credentialRef, calls the provider,
+6 execute    daemon reads its local entry by credentialRef, calls the provider,
              returns a bounded result <= 16 KiB or a fixed error code
 7 enforce    worker bounds/redacts/caps, runs policy, audits, consumes the ledger
 ```
@@ -291,35 +338,39 @@ re-checked by `deviceProxySuccess`; failures are limited to
 `INTEGRATION_UNAVAILABLE`, `RATE_LIMITED`, `POLICY_DENIED`,
 `VALIDATION_FAILED`, `NOT_FOUND` and `INTERNAL` with fixed text.
 
-**Current limitation.** The durable `connector_calls` queue (`0011`) and the
-claim/result/heartbeat routes are implemented, and the worker binds the broker
-when `DEVICE_GATEWAY_ENABLED=true`; calls fail closed as
-`INTEGRATION_UNAVAILABLE` when no active device can serve them. The remaining
-gap is the browser-driven pairing and local secret store: until wave 23 lands,
-an operator still creates the device token and writes the relay's vendor
-credential by hand. Do not describe the pairing path as available before that
-lane is merged and proven.
+**Current limitation.** The durable `connector_calls` queue (`0011`), the
+claim/result/heartbeat routes, browser pairing and the encrypted local store are
+implemented. The worker binds the broker when `DEVICE_GATEWAY_ENABLED=true`;
+calls fail closed as `INTEGRATION_UNAVAILABLE` when no active relay can serve
+them. Verification is one bounded read: it proves that the relay can authenticate
+and perform that read, not that every enabled tool has every vendor scope. Only
+Kubernetes has a local live proof; the SaaS adapters are fake-tested. See
+[`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ### 2.4 Device registration, rotation, revocation and audit
 
-- **Register** writes one `connector_devices` row as `pending` with only the
-  token hash. A display name is 1–100 characters and unique per organization.
-- **Activate** is a capability-checked status change. `verifyByTokenHash`
-  accepts only an `active` row; `pending` and `revoked` devices cannot poll.
-- **Connect** writes `connector_credentials` as `pending_validation`, performs
-  exactly one cheap read through the device, then flips to `active` or
-  `invalid`. The secret is written on the device and never submitted to the
+- **Register** writes one `connector_devices` row with only the token hash. The
+  current browser registration creates it `active`; the schema still allows
+  `pending` for an older or externally provisioned row. A display name is 1–100
+  characters and unique per organization.
+- `verifyByTokenHash` accepts only an `active` row; `pending` and `revoked`
+  devices cannot poll. There is no separate approval step in the current flow.
+- **Connect** writes `connector_credentials` as `pending_validation` after the
+  relay stores the secret and selectors locally. A separate verify action
+  enqueues exactly one bounded read; success sets `active` and
+  `last_validated_at`, an authentication rejection sets `invalid`, and a relay
+  timeout leaves the status unchanged. The secret is never submitted to the
   server.
-- **Rotate a credential** replaces the keychain item and updates
-  `credential_ref`/`status` on the server (design). There is no ciphertext to
-  overwrite and no secret history table. OAuth refresh runs on the device, not
-  in the browser and not on the server.
+- **Rotate a credential** means repeating the pairing flow with a new key and
+  then revoking the old record. There is no ciphertext on the server to
+  overwrite and no secret history table. OAuth refresh runs on the relay, not in
+  the browser and not on the server.
 - **Rotate a device token** means register a new device and revoke the old one:
   the repository has no rotate-in-place method. Revocation flips status and is
   immediate for new polls; it cannot recall a call already in flight.
 - **Revoke a credential** sets `status = 'revoked'` and keeps the metadata row
-  for provenance. The secret remains in the device keychain until the daemon
-  deletes it (design); the UI must say so, because the server cannot delete it.
+  for provenance. The local secret remains until the relay removes it; the
+  server cannot delete a secret it never held.
 - **Audit** keeps the existing closed vocabulary: `secret.rotate` for connect,
   rotate, revoke and OAuth refresh; `config.change` for device activation and
   tool changes; `tool.execute` for each connector call. `details` carries
@@ -561,29 +612,30 @@ network, `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`.
 |---|---|---|---|
 | 1 | Contracts: catalog metadata, `authKind`, `freeTierProfileSchema`, device token/proxy/broker types, new `ToolName` entries and risk bands, `BUDGET_EXCEEDED` mapping | Strict-schema rejects unknown fields; no secret field in any shared type; token is 43 chars, hash is 64 hex; catalog rows match pages | `tsc`, shared/mastra tests green |
 | 2 | Migration `0010`; `PostgresConnectorDeviceRepository`, `PostgresConnectorCredentialRepository`, usage-ledger repository, in-memory fakes; `device-token.ts`, `device-proxy.ts`, `device-broker.ts` | Constant-time token verify; pending/revoked device rejected; broker picks an active device+credential; proxy request/response caps; atomic ledger refuses overage; concurrent consume | Repository + integration tests green |
-| 2b | Device daemon poll transport and a durable call-queue table (**design; not implemented**) | Fake daemon poll; duplicate request id rejected; queue deadline → `INTEGRATION_UNAVAILABLE`; worker restart keeps queued calls | Only after the queue migration is applied |
+| 2b | Device daemon poll transport and a durable call-queue table (**implemented**: `0011`, claim/result/heartbeat) | Fake daemon poll; duplicate request id rejected; queue deadline → `INTEGRATION_UNAVAILABLE`; worker restart keeps queued calls | Queue migration applied and verified |
 | 3 | First adapter: **Sentry** (signed webhook, fixed context plan, `sentry.issue_context` `read_only`) | Fixture signatures; `401/403/429/5xx` mapping; redaction; caps; no network | Integrations tests green |
 | 4 | Tool registry binding in the worker: per-task registry, policy, caps, `tool_invocations`, audit, ledger | Denied/unlisted tool; missing/offline device; budget exhaustion; result truncation; registry immutability | Worker tests green, `acceptance:offline` green |
-| 5 | Web server actions and states: device registration/activation/revocation, catalog, connect, verify, rotate, revoke, tools, usage | Owner/admin/member/viewer matrix; cross-tenant id; membership re-check in transaction; no secret accepted or returned | Web tests green |
+| 5 | Web server actions and states: device registration/activation/revocation, catalog, connect, verify, rotate, revoke, tools, usage (**implemented for connect, pairing and verify**) | Owner/admin/member/viewer matrix; cross-tenant id; membership re-check in transaction; no secret accepted or returned | Web tests green |
 | 6 | Second adapter: **PagerDuty** (signed webhook, incident read tools). Grafana/Prometheus follow only after the one-metrics-vendor rule is satisfied | Same suite as PR 3 plus `ack` band decision | Integrations tests green |
 | 7 | Hardening: OAuth refresh on device, circuit breaker, device token rotation, replay protection, trial acknowledgement, catalog page | Refresh once; open/half-open; replayed request dropped; trial disabled by default | Full suite green twice |
 
 Sentry precedes PagerDuty because it answers "what failed, where" without a
 paid paging account. PagerDuty is not built in the same wave
-(`connector-usage.md` §8). The GitHub App flow stays deployment-level until its
-installation id is stored per organization; that migration is a separate PR and
-must not change the webhook contract.
+(`connector-usage.md` §8). The GitHub App identity remains deployment-level: one
+App, one private key, one slug and one state secret for the whole deployment.
+Installations are per organization. A missing App setting is a fixed
+`GITHUB_APP_NOT_CONFIGURED` result; see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
-### 8.1 What remains is only device registration and one migration
+### 8.1 Operator configuration and deployment names
 
 No metered provider read key is added to the environment, because no provider
-key reaches the server at all. A tenant credential is a device-held secret plus
-a metadata row.
+key reaches the server at all. A tenant credential is a relay-held secret plus a
+metadata row.
 
 | Name | Where | Purpose |
 |---|---|---|
 | `DATABASE_URL` | web, worker | Existing; the device, credential-metadata and ledger tables live here |
-| *device token* | user device only | Generated on the device; only its sha256 hash is stored; never an env value |
+| *device token* | relay only | Generated by the registration flow; only its sha256 hash is stored; never an env value |
 | `CONNECTOR_ROUTING_MODE` | web | `path` or `legacy-single-binding` |
 | `CONNECTOR_OAUTH_STATE_SECRET` | web | HMAC key for single-use OAuth state, not a provider credential |
 | `CONNECTOR_OAUTH_REDIRECT_URL` | web | Absolute https callback; must match the registered redirect |
@@ -601,16 +653,19 @@ a metadata row.
 | `WEBHOOK_WORKFLOW_DEFINITION_ID`, `WEBHOOK_WORKFLOW_VERSION` | web | Legacy single binding only |
 | `WEBHOOK_FILE_OWNERSHIP`, `WEBHOOK_SERVICE` | web | Legacy single binding only |
 | `WEBHOOK_MAX_AGENT_TURNS` | web | Legacy single binding only |
-| `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID` | worker | Existing platform GitHub App identity (server-held by design) |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | worker | Existing platform App key path (not a user provider key) |
+| `GITHUB_APP_ID` | web, worker | Platform GitHub App identity (server-held by design) |
+| `GITHUB_APP_SLUG` | web | Public App slug used by the install redirect; deployment-level, never per tenant |
+| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH` | web, worker | Platform App private key (inline PEM or server-side path; not a user provider key) |
+| `GITHUB_APP_STATE_SECRET` | web | HMAC key for the 10-minute install state; at least 32 characters, deployment-level |
+| `GITHUB_APP_INSTALLATION_ID` | worker | Legacy single-binding fallback only; per-organization installs are stored in the database |
 | `GITHUB_API_BASE_URL` | worker | Existing; default `https://api.github.com` |
 
 Connector-specific names on each page §7 (`SENTRY_API_KEY`,
-`PAGERDUTY_API_KEY`, `GRAFANA_TOKEN`, `KAFKA_BRIDGE_*`, and so on) are
-**bridge and deployment configuration for a single-tenant operator, never a
-tenant credential fallback**. The onboarding code must read none of them; a
-code search in CI proves zero reads outside the legacy bridge. This is the
-mechanism that keeps the product free: the device's credential is the only one.
+`PAGERDUTY_API_KEY`, `GRAFANA_TOKEN`, `KAFKA_BRIDGE_*`, and so on) are **legacy
+relay-local fallbacks or bridge/deployment configuration, never a server-side
+tenant credential fallback**. A paired credential is the product path; the
+onboarding server reads none of these names. This is the mechanism that keeps the
+product free: the relay's credential is the only one.
 
 Checklist before calling the work done:
 
@@ -618,8 +673,8 @@ Checklist before calling the work done:
       indexes, FKs and CHECKs verified by `\d+`.
 - [ ] No secret, ciphertext or key-version column exists; a device token is
       stored only as a sha256 hash and verified in constant time.
-- [ ] A durable connector call-queue table exists before the poll transport is
-      called production-ready (not implemented).
+- [x] A durable connector call queue exists (`connector_calls`, migration
+      `0011`) and the claim/result/heartbeat transport is implemented.
 - [ ] `audit_events` vocabulary unchanged; `tool_invocations` records a digest,
       never arguments or a token.
 - [ ] Catalog matches [`free-tier-catalog.md`](connectors/free-tier-catalog.md);
@@ -688,19 +743,20 @@ onboarding plan. Where this page is more specific, it is additive:
   unchanged.
 - One earlier divergence is now resolved: §4.3 described rotation as revoking
   the old row and deleting it, and §2.3 assumed ciphertext overwrite. With
-  device-held secrets, rotation updates the device keychain item and the
-  metadata `credential_ref`/status; there is no ciphertext to overwrite and no
-  secret history. `connector-usage.md` §4.3 is read that way.
-- GitHub remains deployment-level in this plan, and its App key is server-held
-  because it is the platform's own App. The target per-organization GitHub
-  installation is a separate, later change and is not claimed here.
+  relay-held secrets, rotation means pairing again with a new key and revoking
+  the old record; there is no server ciphertext to overwrite and no secret
+  history. `connector-usage.md` §4.3 is read that way.
+- GitHub is one deployment App with a server-held key (it is the platform's own
+  App); installations are per organization. The App identity is deployment-level,
+  not a tenant credential.
 
-The implemented part of this page now includes migration `0010`–`0011`, the
+The implemented part of this page now includes migration `0010`–`0016`, the
 tenant-scoped device/credential/ledger/call repositories with fakes, device
-register/list/revoke/rotate and claim/result/heartbeat routes, the metadata-only
-connect/list/revoke routes and Devices/Connectors UI, and per-task connector tool
-binding behind `DEVICE_GATEWAY_ENABLED`. The GitHub and generic-webhook path
-described in [`connectors/README.md`](connectors/README.md) remains the only
-proven end-to-end connector execution. Wave 23 adds browser/relay pairing,
-per-organization GitHub installation and trigger subscriptions; update this
-paragraph only after those lanes are merged and proven.
+register/list/revoke/rotate and claim/result/heartbeat routes, browser/relay
+pairing with an encrypted local store, vendor-specific pairing fields, the
+metadata-only connect/list/revoke routes, Devices/Connectors UI, per-task
+connector tool binding behind `DEVICE_GATEWAY_ENABLED`, per-organization GitHub
+installation, trigger subscriptions and the bounded `connector.verify` read. The
+GitHub and generic-webhook paths remain the only end-to-end live-proven connector
+executions; Kubernetes has a local live proof. SaaS live acceptance and the
+remaining intake gaps are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).

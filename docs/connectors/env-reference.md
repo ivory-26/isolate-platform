@@ -3,13 +3,44 @@
 | Field | Value |
 |---|---|
 | Purpose | Names only for every connector setting; no values |
-| Generated from | `docs/connectors/*.md` dotenv blocks, 2026-10-31 |
-| Product model | Provider keys are held on the user's device; the server stores only a device-token hash and connector metadata (`credential_ref`), never a secret. See [`docs/connector-onboarding.md`](../connector-onboarding.md) |
-| When to use env | Deployment-level webhook verification secrets only; vendor read keys belong on the device |
+| Generated from | `docs/connectors/*.md` dotenv blocks, 2026-10-31; GitHub App section checked against code 2026-11-02 |
+| Product model | Provider keys are held on the user's relay; the server stores only a device-token hash and connector metadata (`credential_ref`), never a secret. See [`docs/connector-onboarding.md`](../connector-onboarding.md) |
+| When to use env | Deployment-level webhook verification secrets and the GitHub App identity only; vendor read keys belong on the relay |
 
-**Platform-level (deployment env):** `DATABASE_URL`, `DEVICE_GATEWAY_ENABLED`, and the inbound webhook secrets (`WEBHOOK_SENTRY_SECRET`, `WEBHOOK_GRAFANA_SECRET`, `WEBHOOK_PAGERDUTY_SECRET`). There is no server-side credential encryption key.
+**Platform-level (deployment env):** `DATABASE_URL`, `DEVICE_GATEWAY_ENABLED`, the GitHub App identity below, and the inbound webhook secrets (`WEBHOOK_SENTRY_SECRET`, `WEBHOOK_GRAFANA_SECRET`, `WEBHOOK_PAGERDUTY_SECRET`). There is no server-side credential encryption key.
 
-Never commit values. A stored per-organization credential takes precedence over an env fallback.
+Never commit values. A relay-held credential takes precedence over an env fallback.
+
+## GitHub App (operator, deployment-level)
+
+Guide: [github.md](github.md)
+
+These are deployment names, not customer credentials and not per-tenant values. Set
+them once in the deployment secret manager. Missing or invalid required settings
+produce the fixed `GITHUB_APP_NOT_CONFIGURED` error (HTTP 503); no partially
+configured flow starts. The operator checklist is in [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
+
+```dotenv
+GITHUB_APP_ID=
+GITHUB_APP_SLUG=
+GITHUB_APP_PRIVATE_KEY=
+GITHUB_APP_PRIVATE_KEY_PATH=
+GITHUB_APP_STATE_SECRET=
+GITHUB_API_BASE_URL=
+# Legacy single-binding fallback only; per-organization installs are stored in the database.
+GITHUB_APP_INSTALLATION_ID=
+```
+
+- `GITHUB_APP_ID` is numeric. `GITHUB_APP_SLUG` matches
+  `^[A-Za-z0-9][A-Za-z0-9-]{0,99}$`.
+- Use exactly one of `GITHUB_APP_PRIVATE_KEY` (inline PKCS#8 PEM) or
+  `GITHUB_APP_PRIVATE_KEY_PATH` (server-side file). Never both as a long-term
+  configuration; never commit either.
+- `GITHUB_APP_STATE_SECRET` is at least 32 characters. It signs the ten-minute
+  install state and is shared by the deployment, never per tenant.
+- `GITHUB_API_BASE_URL` is optional (default `https://api.github.com`).
+- `GITHUB_APP_SLUG` and `GITHUB_APP_STATE_SECRET` must never be generated or
+  stored per workspace.
 
 ## Argo CD connector
 

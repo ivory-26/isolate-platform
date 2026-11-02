@@ -23,8 +23,9 @@ A2 and A3; A0 records an event without creating a task, A1 investigate is
 unsupported, and A4 production mutation is out of scope, so none of those labels
 appears in Running now. No real user, repository secret, token, or provider
 credential appears in these images. The preview route is removed after capture;
-the images are illustrative product views with synthetic data, and the landing
-`alt` text says so.
+the images are illustrative product views with synthetic data. The landing page
+treats them as decorative images (no visible alt text); this provenance file is
+the disclosure of their synthetic source.
 
 The dashboard shell in the screenshot reflects the product UI at capture time;
 small styling refinements after capture do not change the represented features.

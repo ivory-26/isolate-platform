@@ -57,7 +57,7 @@ export const AUTONOMY_LEVELS = ["A0", "A2", "A3"] as const;
 export const autonomyLevelSchema = z.enum(AUTONOMY_LEVELS);
 export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
 
-export const PLANNED_AUTONOMY_LEVELS = ["A1"] as const;
+export const UNSUPPORTED_AUTONOMY_LEVELS = ["A1"] as const;
 export const storedAutonomyLevelSchema = z.enum(["A0", "A1", "A2", "A3"]);
 export type StoredAutonomyLevel = z.infer<typeof storedAutonomyLevelSchema>;
 

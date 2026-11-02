@@ -30,7 +30,6 @@ export function ShotFrame({
 
 export function ProductShot({
 	src,
-	alt,
 	width,
 	height,
 	aspect,
@@ -39,7 +38,6 @@ export function ProductShot({
 	className,
 }: {
 	src: string;
-	alt: string;
 	width: number;
 	height: number;
 	/** Optional fixed display crop, e.g. trimming dead space from a capture. */
@@ -60,7 +58,7 @@ export function ProductShot({
 						src={src}
 						width={width}
 						height={height}
-						alt={alt}
+						alt=""
 						loading={eager ? "eager" : "lazy"}
 						decoding="async"
 						className="absolute inset-0 size-full object-cover object-top"

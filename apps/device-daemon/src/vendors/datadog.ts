@@ -6,7 +6,12 @@ import {
 	queryDatadogMetrics,
 	searchDatadogLogs,
 } from "@isolate/integrations";
-import { type DatadogVendorConfig, type Env, resolveSecret } from "../config";
+import {
+	type DatadogVendorConfig,
+	type Env,
+	resolveVendorSecret,
+	type SecretLookup,
+} from "../config";
 import type { ToolHandler } from "../contracts";
 import {
 	parseContextFingerprint,
@@ -15,15 +20,34 @@ import {
 } from "./context";
 import { failure, withDependencies } from "./shared";
 
-/** Datadog handlers: API key + scoped application key, both device-local. */
+/**
+ * Datadog handlers: API key + scoped application key, both resolved from the
+ * paired secret store first (a paired entry may hold `apiKey`/`appKey`) and the
+ * legacy env vars second.
+ */
 export function createDatadogHandlers(
 	config: DatadogVendorConfig,
 	env: Env,
 	fetchImpl: typeof fetch,
+	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (): DatadogContextDependencies | null => {
-		const apiKey = resolveSecret(config.secretEnv, "apiKey", env);
-		const appKey = resolveSecret(config.secretEnv, "appKey", env);
+	const dependencies = (
+		credentialRef: string,
+	): DatadogContextDependencies | null => {
+		const apiKey = resolveVendorSecret(
+			config.secretEnv,
+			"apiKey",
+			env,
+			credentialRef,
+			secretStore,
+		);
+		const appKey = resolveVendorSecret(
+			config.secretEnv,
+			"appKey",
+			env,
+			credentialRef,
+			secretStore,
+		);
 		if (apiKey === null || appKey === null) return null;
 		return {
 			baseUrl: config.baseUrl,
@@ -39,23 +63,23 @@ export function createDatadogHandlers(
 		};
 	};
 	return {
-		"datadog.query_metrics": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"datadog.query_metrics": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				queryDatadogMetrics(deps, params),
 			),
-		"datadog.search_logs": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"datadog.search_logs": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				searchDatadogLogs(deps, params),
 			),
-		"datadog.get_incident": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"datadog.get_incident": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				getDatadogIncident(deps, params),
 			),
-		"datadog.get_monitor": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"datadog.get_monitor": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				getDatadogMonitor(deps, params),
 			),
-		"datadog.context.fetch": async (params) => {
+		"datadog.context.fetch": async (params, context) => {
 			const parsed = readContextParams(params);
 			if (parsed === null) return failure("VALIDATION_FAILED");
 			const ref = parseContextFingerprint(
@@ -66,7 +90,7 @@ export function createDatadogHandlers(
 			if (ref === null || service === null) {
 				return failure("VALIDATION_FAILED");
 			}
-			return withDependencies(dependencies(), (deps) =>
+			return withDependencies(dependencies(context.credentialRef), (deps) =>
 				fetchDatadogContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					service,

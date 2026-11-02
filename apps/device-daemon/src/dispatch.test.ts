@@ -148,3 +148,91 @@ describe("dispatch", () => {
 		expect(JSON.stringify(outcome)).not.toContain(secret);
 	});
 });
+
+describe("paired secret store resolution", () => {
+	const storeSecret = `store-${crypto.randomUUID()}`;
+	const envSecret = `env-${crypto.randomUUID()}`;
+
+	function captureFetch(): {
+		fetchImpl: typeof fetch;
+		authHeaders: (string | null)[];
+	} {
+		const authHeaders: (string | null)[] = [];
+		const fetchImpl = (async (
+			_input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			const headers = new Headers(init?.headers);
+			authHeaders.push(headers.get("authorization"));
+			return Response.json([]);
+		}) as unknown as typeof fetch;
+		return { fetchImpl, authHeaders };
+	}
+
+	function sentryConfig(env: Record<string, string | undefined>) {
+		return {
+			config: baseConfig({
+				vendors: { sentry: { secretEnv: { token: "SENTRY_API_KEY" } } },
+			}),
+			env,
+		};
+	}
+
+	test("uses the paired entry before the environment", async () => {
+		const capture = captureFetch();
+		const { config, env } = sentryConfig({
+			SENTRY_API_KEY: envSecret,
+		});
+		const dispatch = createDispatcher({
+			config,
+			env,
+			fetchImpl: capture.fetchImpl,
+			secretStore: {
+				getFields: (ref) =>
+					ref === "keychain:isolate/test" ? { token: storeSecret } : null,
+			},
+		});
+		const outcome = await dispatch(
+			call("sentry.list_issues", { orgSlug: "acme" }),
+		);
+		expect(outcome.ok).toBe(true);
+		expect(capture.authHeaders[0]).toBe(`Bearer ${storeSecret}`);
+		expect(capture.authHeaders[0]).not.toContain(envSecret);
+	});
+
+	test("falls back to the environment when no entry exists", async () => {
+		const capture = captureFetch();
+		const { config, env } = sentryConfig({
+			SENTRY_API_KEY: envSecret,
+		});
+		const dispatch = createDispatcher({
+			config,
+			env,
+			fetchImpl: capture.fetchImpl,
+			secretStore: { getFields: () => null },
+		});
+		const outcome = await dispatch(
+			call("sentry.list_issues", { orgSlug: "acme" }),
+		);
+		expect(outcome.ok).toBe(true);
+		expect(capture.authHeaders[0]).toBe(`Bearer ${envSecret}`);
+	});
+
+	test("a store entry for another credentialRef never authorizes a call", async () => {
+		const capture = captureFetch();
+		const { config, env } = sentryConfig({});
+		const dispatch = createDispatcher({
+			config,
+			env,
+			fetchImpl: capture.fetchImpl,
+			secretStore: {
+				getFields: (ref) =>
+					ref === "keychain:isolate/other" ? { token: storeSecret } : null,
+			},
+		});
+		expect(
+			await dispatch(call("sentry.list_issues", { orgSlug: "acme" })),
+		).toEqual({ ok: false, errorCode: "INTEGRATION_UNAVAILABLE" });
+		expect(capture.authHeaders).toHaveLength(0);
+	});
+});

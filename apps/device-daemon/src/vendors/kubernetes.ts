@@ -9,6 +9,7 @@ import {
 	type Env,
 	type KubernetesVendorConfig,
 	resolveSecret,
+	type SecretLookup,
 } from "../config";
 import type { ToolHandler } from "../contracts";
 import {
@@ -32,22 +33,32 @@ export type KubernetesClientFactory = (
 /**
  * Kubernetes handlers. The API URL and namespace are configuration, not tool
  * input: the adapter rejects a call for any other namespace as NOT_FOUND before
- * an API request. The token and CA are read from files named by the daemon's
- * own environment at call time.
+ * an API request. The token-file/CA paths resolve from the paired store first
+ * (they are paths, never key material), then the daemon's environment.
  */
 export function createKubernetesHandlers(
 	config: KubernetesVendorConfig,
 	env: Env,
 	clientFactory: KubernetesClientFactory,
+	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (): KubernetesContextDependencies | null => {
-		const tokenFile = resolveSecret(
-			config.secretEnv,
-			"serviceAccountTokenFile",
-			env,
-		);
+	const dependencies = (
+		credentialRef: string,
+	): KubernetesContextDependencies | null => {
+		// Paths, not key material: exact field names only, never the single-value
+		// fallback (which would let a token path masquerade as the CA path).
+		const stored = secretStore?.getFields(credentialRef) ?? null;
+		const storedTokenFile = stored?.serviceAccountTokenFile?.trim() ?? "";
+		const storedCaFile = stored?.caFile?.trim() ?? "";
+		const tokenFile =
+			storedTokenFile.length > 0
+				? storedTokenFile
+				: resolveSecret(config.secretEnv, "serviceAccountTokenFile", env);
 		if (tokenFile === null) return null;
-		const caFile = resolveSecret(config.secretEnv, "caFile", env);
+		const caFile =
+			storedCaFile.length > 0
+				? storedCaFile
+				: resolveSecret(config.secretEnv, "caFile", env);
 		const apiUrl = config.apiUrl ?? env.KUBERNETES_API_URL?.trim();
 		const namespace = config.namespace ?? env.KUBERNETES_NAMESPACE?.trim();
 		if (
@@ -83,8 +94,8 @@ export function createKubernetesHandlers(
 
 	const handlerFor =
 		(toolName: KubernetesToolName): ToolHandler =>
-		async (params) => {
-			const deps = dependencies();
+		async (params, context) => {
+			const deps = dependencies(context.credentialRef);
 			if (deps === null) return failure("INTEGRATION_UNAVAILABLE");
 			const tool = createKubernetesReadTools(deps).find(
 				(candidate) => candidate.name === toolName,
@@ -98,7 +109,7 @@ export function createKubernetesHandlers(
 		"k8s.get_pod": handlerFor("k8s.get_pod"),
 		"k8s.get_deployment": handlerFor("k8s.get_deployment"),
 		"k8s.logs_tail": handlerFor("k8s.logs_tail"),
-		"k8s.context.fetch": async (params) => {
+		"k8s.context.fetch": async (params, context) => {
 			const parsed = readContextParams(params);
 			if (parsed === null) return failure("VALIDATION_FAILED");
 			const ref = parseContextFingerprint(
@@ -121,7 +132,7 @@ export function createKubernetesHandlers(
 			}
 			const kind = requestedKind ?? fingerprintKind;
 			if (kind === null) return failure("VALIDATION_FAILED");
-			const deps = dependencies();
+			const deps = dependencies(context.credentialRef);
 			if (deps === null) return failure("INTEGRATION_UNAVAILABLE");
 			return runAdapter(() =>
 				fetchKubernetesContext(deps, {

@@ -5,7 +5,12 @@ import {
 	type NewRelicContextDependencies,
 	runNewRelicNrql,
 } from "@isolate/integrations";
-import { type Env, type NewRelicVendorConfig, resolveSecret } from "../config";
+import {
+	type Env,
+	type NewRelicVendorConfig,
+	resolveVendorSecret,
+	type SecretLookup,
+} from "../config";
 import type { ToolHandler } from "../contracts";
 import {
 	parseContextFingerprint,
@@ -14,14 +19,26 @@ import {
 } from "./context";
 import { failure, withDependencies } from "./shared";
 
-/** New Relic handlers: one user API key and the configured account id. */
+/**
+ * New Relic handlers: one user API key from the paired store first, then the
+ * legacy env var; the account id is non-secret configuration.
+ */
 export function createNewRelicHandlers(
 	config: NewRelicVendorConfig,
 	env: Env,
 	fetchImpl: typeof fetch,
+	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (): NewRelicContextDependencies | null => {
-		const apiKey = resolveSecret(config.secretEnv, "apiKey", env);
+	const dependencies = (
+		credentialRef: string,
+	): NewRelicContextDependencies | null => {
+		const apiKey = resolveVendorSecret(
+			config.secretEnv,
+			"apiKey",
+			env,
+			credentialRef,
+			secretStore,
+		);
 		if (apiKey === null) return null;
 		return {
 			apiKey,
@@ -34,17 +51,19 @@ export function createNewRelicHandlers(
 		};
 	};
 	return {
-		"newrelic.run_nrql": (params) =>
-			withDependencies(dependencies(), (deps) => runNewRelicNrql(deps, params)),
-		"newrelic.get_entity": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"newrelic.run_nrql": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
+				runNewRelicNrql(deps, params),
+			),
+		"newrelic.get_entity": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				getNewRelicEntity(deps, params),
 			),
-		"newrelic.list_alert_policies": (params) =>
-			withDependencies(dependencies(), (deps) =>
+		"newrelic.list_alert_policies": (params, context) =>
+			withDependencies(dependencies(context.credentialRef), (deps) =>
 				listNewRelicAlertPolicies(deps, params),
 			),
-		"newrelic.context.fetch": async (params) => {
+		"newrelic.context.fetch": async (params, context) => {
 			const parsed = readContextParams(params);
 			if (parsed === null) return failure("VALIDATION_FAILED");
 			const ref = parseContextFingerprint(
@@ -55,7 +74,7 @@ export function createNewRelicHandlers(
 			if (ref === null || service === null) {
 				return failure("VALIDATION_FAILED");
 			}
-			return withDependencies(dependencies(), (deps) =>
+			return withDependencies(dependencies(context.credentialRef), (deps) =>
 				fetchNewRelicContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					service,

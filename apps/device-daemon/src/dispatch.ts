@@ -1,4 +1,4 @@
-import type { DeviceConfig, Env } from "./config";
+import type { DeviceConfig, Env, SecretLookup } from "./config";
 import {
 	DEVICE_MAX_PARAMS_BYTES,
 	type DeviceCall,
@@ -101,6 +101,8 @@ export type DispatcherOptions = {
 	fetchImpl?: typeof fetch;
 	/** Injected in tests; the default speaks HTTPS to the cluster. */
 	kubernetesClientFactory?: KubernetesClientFactory;
+	/** Paired store first, legacy env-var secrets second. */
+	secretStore?: SecretLookup;
 };
 
 function unavailableStubs(
@@ -121,36 +123,52 @@ export function createHandlerTable(
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const clientFactory =
 		options.kubernetesClientFactory ?? createKubernetesHttpsClient;
+	const secretStore = options.secretStore;
 	const vendors = options.config.vendors;
 
 	return {
 		...(vendors.sentry === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.sentry)
-			: createSentryHandlers(vendors.sentry, env, fetchImpl)),
+			: createSentryHandlers(vendors.sentry, env, fetchImpl, secretStore)),
 		...(vendors.grafana === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.grafana)
-			: createGrafanaHandlers(vendors.grafana, env, fetchImpl)),
+			: createGrafanaHandlers(vendors.grafana, env, fetchImpl, secretStore)),
 		...(vendors.pagerduty === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.pagerduty)
-			: createPagerDutyHandlers(vendors.pagerduty, env, fetchImpl)),
+			: createPagerDutyHandlers(
+					vendors.pagerduty,
+					env,
+					fetchImpl,
+					secretStore,
+				)),
 		...(vendors.kubernetes === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.kubernetes)
-			: createKubernetesHandlers(vendors.kubernetes, env, clientFactory)),
+			: createKubernetesHandlers(
+					vendors.kubernetes,
+					env,
+					clientFactory,
+					secretStore,
+				)),
 		...(vendors.datadog === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.datadog)
-			: createDatadogHandlers(vendors.datadog, env, fetchImpl)),
+			: createDatadogHandlers(vendors.datadog, env, fetchImpl, secretStore)),
 		...(vendors.axiom === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.axiom)
-			: createAxiomHandlers(vendors.axiom, env, fetchImpl)),
+			: createAxiomHandlers(vendors.axiom, env, fetchImpl, secretStore)),
 		...(vendors.signoz === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.signoz)
-			: createSignozHandlers(vendors.signoz, env, fetchImpl)),
+			: createSignozHandlers(vendors.signoz, env, fetchImpl, secretStore)),
 		...(vendors.newrelic === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.newrelic)
-			: createNewRelicHandlers(vendors.newrelic, env, fetchImpl)),
+			: createNewRelicHandlers(vendors.newrelic, env, fetchImpl, secretStore)),
 		...(vendors.honeycomb === undefined
 			? unavailableStubs(DEVICE_TOOL_NAMES_BY_VENDOR.honeycomb)
-			: createHoneycombHandlers(vendors.honeycomb, env, fetchImpl)),
+			: createHoneycombHandlers(
+					vendors.honeycomb,
+					env,
+					fetchImpl,
+					secretStore,
+				)),
 	};
 }
 
@@ -167,6 +185,6 @@ export function createDispatcher(options: DispatcherOptions): DeviceDispatcher {
 		}
 		const handler = handlers[call.toolName];
 		if (handler === undefined) return failure("VALIDATION_FAILED");
-		return handler(call.params);
+		return handler(call.params, { credentialRef: call.credentialRef });
 	};
 }

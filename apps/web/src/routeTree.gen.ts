@@ -34,6 +34,7 @@ import { Route as ApiConnectorsRevokeRouteImport } from './routes/api.connectors
 import { Route as ApiDeviceClaimRouteImport } from './routes/api.device.claim'
 import { Route as ApiDeviceHeartbeatRouteImport } from './routes/api.device.heartbeat'
 import { Route as ApiDeviceListRouteImport } from './routes/api.device.list'
+import { Route as ApiDevicePairingRouteImport } from './routes/api.device.pairing_'
 import { Route as ApiDeviceRegisterRouteImport } from './routes/api.device.register'
 import { Route as ApiDeviceRevokeRouteImport } from './routes/api.device.revoke'
 import { Route as ApiDeviceRotateRouteImport } from './routes/api.device.rotate'
@@ -43,6 +44,10 @@ import { Route as ApiGithubRepositoriesRouteImport } from './routes/api.github.r
 import { Route as ApiRepositoriesImportRouteImport } from './routes/api.repositories.import'
 import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
+import { Route as ApiDevicePairingIdRouteImport } from './routes/api.device.pairing.$id'
+import { Route as ApiDevicePairingCancelRouteImport } from './routes/api.device.pairing.cancel'
+import { Route as ApiDevicePairingClaimRouteImport } from './routes/api.device.pairing.claim'
+import { Route as ApiDevicePairingCompleteRouteImport } from './routes/api.device.pairing.complete'
 import { Route as ApiDeviceCallsIdResultRouteImport } from './routes/api.device.calls.$id.result'
 
 const IndexRoute = IndexRouteImport.update({
@@ -169,6 +174,11 @@ const ApiDeviceListRoute = ApiDeviceListRouteImport.update({
   path: '/api/device/list',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDevicePairingRoute = ApiDevicePairingRouteImport.update({
+  id: '/api/device/pairing_',
+  path: '/api/device/pairing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiDeviceRegisterRoute = ApiDeviceRegisterRouteImport.update({
   id: '/api/device/register',
   path: '/api/device/register',
@@ -214,6 +224,27 @@ const ApiWebhooksSplatRoute = ApiWebhooksSplatRouteImport.update({
   path: '/api/webhooks/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDevicePairingIdRoute = ApiDevicePairingIdRouteImport.update({
+  id: '/api/device/pairing/$id',
+  path: '/api/device/pairing/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDevicePairingCancelRoute = ApiDevicePairingCancelRouteImport.update({
+  id: '/api/device/pairing/cancel',
+  path: '/api/device/pairing/cancel',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDevicePairingClaimRoute = ApiDevicePairingClaimRouteImport.update({
+  id: '/api/device/pairing/claim',
+  path: '/api/device/pairing/claim',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDevicePairingCompleteRoute =
+  ApiDevicePairingCompleteRouteImport.update({
+    id: '/api/device/pairing/complete',
+    path: '/api/device/pairing/complete',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiDeviceCallsIdResultRoute = ApiDeviceCallsIdResultRouteImport.update({
   id: '/api/device/calls/$id/result',
   path: '/api/device/calls/$id/result',
@@ -245,6 +276,7 @@ export interface FileRoutesByFullPath {
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/pairing': typeof ApiDevicePairingRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
@@ -254,6 +286,10 @@ export interface FileRoutesByFullPath {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
+  '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
+  '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
+  '/api/device/pairing/complete': typeof ApiDevicePairingCompleteRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesByTo {
@@ -280,6 +316,7 @@ export interface FileRoutesByTo {
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/pairing': typeof ApiDevicePairingRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
@@ -289,6 +326,10 @@ export interface FileRoutesByTo {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
+  '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
+  '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
+  '/api/device/pairing/complete': typeof ApiDevicePairingCompleteRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRoutesById {
@@ -318,6 +359,7 @@ export interface FileRoutesById {
   '/api/device/claim': typeof ApiDeviceClaimRoute
   '/api/device/heartbeat': typeof ApiDeviceHeartbeatRoute
   '/api/device/list': typeof ApiDeviceListRoute
+  '/api/device/pairing_': typeof ApiDevicePairingRoute
   '/api/device/register': typeof ApiDeviceRegisterRoute
   '/api/device/revoke': typeof ApiDeviceRevokeRoute
   '/api/device/rotate': typeof ApiDeviceRotateRoute
@@ -327,6 +369,10 @@ export interface FileRoutesById {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
+  '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
+  '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
+  '/api/device/pairing/complete': typeof ApiDevicePairingCompleteRoute
   '/api/device/calls/$id/result': typeof ApiDeviceCallsIdResultRoute
 }
 export interface FileRouteTypes {
@@ -356,6 +402,7 @@ export interface FileRouteTypes {
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
+    | '/api/device/pairing'
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
@@ -365,6 +412,10 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/api/device/pairing/$id'
+    | '/api/device/pairing/cancel'
+    | '/api/device/pairing/claim'
+    | '/api/device/pairing/complete'
     | '/api/device/calls/$id/result'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -391,6 +442,7 @@ export interface FileRouteTypes {
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
+    | '/api/device/pairing'
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
@@ -400,6 +452,10 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/api/device/pairing/$id'
+    | '/api/device/pairing/cancel'
+    | '/api/device/pairing/claim'
+    | '/api/device/pairing/complete'
     | '/api/device/calls/$id/result'
   id:
     | '__root__'
@@ -428,6 +484,7 @@ export interface FileRouteTypes {
     | '/api/device/claim'
     | '/api/device/heartbeat'
     | '/api/device/list'
+    | '/api/device/pairing_'
     | '/api/device/register'
     | '/api/device/revoke'
     | '/api/device/rotate'
@@ -437,6 +494,10 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/api/device/pairing/$id'
+    | '/api/device/pairing/cancel'
+    | '/api/device/pairing/claim'
+    | '/api/device/pairing/complete'
     | '/api/device/calls/$id/result'
   fileRoutesById: FileRoutesById
 }
@@ -454,6 +515,7 @@ export interface RootRouteChildren {
   ApiDeviceClaimRoute: typeof ApiDeviceClaimRoute
   ApiDeviceHeartbeatRoute: typeof ApiDeviceHeartbeatRoute
   ApiDeviceListRoute: typeof ApiDeviceListRoute
+  ApiDevicePairingRoute: typeof ApiDevicePairingRoute
   ApiDeviceRegisterRoute: typeof ApiDeviceRegisterRoute
   ApiDeviceRevokeRoute: typeof ApiDeviceRevokeRoute
   ApiDeviceRotateRoute: typeof ApiDeviceRotateRoute
@@ -463,6 +525,10 @@ export interface RootRouteChildren {
   ApiRepositoriesImportRoute: typeof ApiRepositoriesImportRoute
   ApiTracesTaskIdRoute: typeof ApiTracesTaskIdRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
+  ApiDevicePairingIdRoute: typeof ApiDevicePairingIdRoute
+  ApiDevicePairingCancelRoute: typeof ApiDevicePairingCancelRoute
+  ApiDevicePairingClaimRoute: typeof ApiDevicePairingClaimRoute
+  ApiDevicePairingCompleteRoute: typeof ApiDevicePairingCompleteRoute
   ApiDeviceCallsIdResultRoute: typeof ApiDeviceCallsIdResultRoute
 }
 
@@ -643,6 +709,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDeviceListRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/device/pairing_': {
+      id: '/api/device/pairing_'
+      path: '/api/device/pairing'
+      fullPath: '/api/device/pairing'
+      preLoaderRoute: typeof ApiDevicePairingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/device/register': {
       id: '/api/device/register'
       path: '/api/device/register'
@@ -704,6 +777,34 @@ declare module '@tanstack/react-router' {
       path: '/api/webhooks/$'
       fullPath: '/api/webhooks/$'
       preLoaderRoute: typeof ApiWebhooksSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/pairing/$id': {
+      id: '/api/device/pairing/$id'
+      path: '/api/device/pairing/$id'
+      fullPath: '/api/device/pairing/$id'
+      preLoaderRoute: typeof ApiDevicePairingIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/pairing/cancel': {
+      id: '/api/device/pairing/cancel'
+      path: '/api/device/pairing/cancel'
+      fullPath: '/api/device/pairing/cancel'
+      preLoaderRoute: typeof ApiDevicePairingCancelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/pairing/claim': {
+      id: '/api/device/pairing/claim'
+      path: '/api/device/pairing/claim'
+      fullPath: '/api/device/pairing/claim'
+      preLoaderRoute: typeof ApiDevicePairingClaimRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device/pairing/complete': {
+      id: '/api/device/pairing/complete'
+      path: '/api/device/pairing/complete'
+      fullPath: '/api/device/pairing/complete'
+      preLoaderRoute: typeof ApiDevicePairingCompleteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/device/calls/$id/result': {
@@ -780,6 +881,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDeviceClaimRoute: ApiDeviceClaimRoute,
   ApiDeviceHeartbeatRoute: ApiDeviceHeartbeatRoute,
   ApiDeviceListRoute: ApiDeviceListRoute,
+  ApiDevicePairingRoute: ApiDevicePairingRoute,
   ApiDeviceRegisterRoute: ApiDeviceRegisterRoute,
   ApiDeviceRevokeRoute: ApiDeviceRevokeRoute,
   ApiDeviceRotateRoute: ApiDeviceRotateRoute,
@@ -789,6 +891,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRepositoriesImportRoute: ApiRepositoriesImportRoute,
   ApiTracesTaskIdRoute: ApiTracesTaskIdRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,
+  ApiDevicePairingIdRoute: ApiDevicePairingIdRoute,
+  ApiDevicePairingCancelRoute: ApiDevicePairingCancelRoute,
+  ApiDevicePairingClaimRoute: ApiDevicePairingClaimRoute,
+  ApiDevicePairingCompleteRoute: ApiDevicePairingCompleteRoute,
   ApiDeviceCallsIdResultRoute: ApiDeviceCallsIdResultRoute,
 }
 export const routeTree = rootRouteImport

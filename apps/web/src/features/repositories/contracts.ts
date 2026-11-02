@@ -139,3 +139,68 @@ export type RepositoriesReadModel = {
 	/** Server-derived from the membership role; controls the write action. */
 	canManage: boolean;
 };
+
+/**
+ * GitHub App onboarding contracts (wave 23).
+ *
+ * These are client-safe: a result never carries a token, JWT, private key,
+ * signed state or provider body. Failures collapse to a fixed code and a fixed
+ * operator-facing message.
+ */
+export const GITHUB_SETUP_FAILURE_CODES = [
+	"INVALID_INPUT",
+	"AUTH_REQUIRED",
+	"FORBIDDEN",
+	"NOT_FOUND",
+	"RATE_LIMITED",
+	"GITHUB_APP_NOT_CONFIGURED",
+	"GITHUB_INSTALLATION_REQUIRED",
+	"UNAVAILABLE",
+] as const;
+export type GitHubSetupFailureCode =
+	(typeof GITHUB_SETUP_FAILURE_CODES)[number];
+
+export type GitHubSetupError = {
+	code: GitHubSetupFailureCode;
+	message: string;
+};
+
+export type GitHubSetupResult<T> =
+	| { ok: true; value: T }
+	| { ok: false; error: GitHubSetupError };
+
+/** Hard cap for one import request; the server rejects anything larger. */
+export const MAX_REPOSITORY_IMPORT_NAMES = 25;
+
+export const importRepositoriesSchema = z
+	.strictObject({
+		fullNames: z
+			.array(repositoryFullNameSchema)
+			.min(1)
+			.max(MAX_REPOSITORY_IMPORT_NAMES),
+	})
+	.strict();
+export type ImportRepositoriesInput = z.input<typeof importRepositoriesSchema>;
+
+export type StartGitHubInstallResult = {
+	url: string;
+};
+
+export type GitHubInstallationRepositoryView = {
+	fullName: string;
+	defaultBranch: string;
+	private: boolean;
+	installationId: string;
+};
+
+export type InstallationRepositoriesReadModel = {
+	repositories: GitHubInstallationRepositoryView[];
+	/** True when the installation holds more repos than the bounded page. */
+	truncated: boolean;
+};
+
+export type RepositoriesImportResult = {
+	imported: RepositorySummary[];
+	/** Requested full names that were not visible to the installation. */
+	skipped: string[];
+};

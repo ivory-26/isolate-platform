@@ -18,6 +18,8 @@ export type CreateRepositoryInput = {
 	readonly provider?: "github";
 	readonly externalFullName: string;
 	readonly defaultBranch: string;
+	/** Optional 0016 installation; NULL keeps a legacy registration. */
+	readonly githubInstallationId?: string | null;
 };
 
 export type CreateRepositoryFailCode = "CONFLICT";
@@ -120,12 +122,13 @@ export function normalizeValidationPolicy(input: {
 }
 
 const REPOSITORY_COLUMNS =
-	"id, organization_id, provider, external_full_name, default_branch, validation_command, validation_timeout_ms, created_at";
+	"id, organization_id, provider, external_full_name, default_branch, validation_command, validation_timeout_ms, github_installation_id, created_at";
 
 const STMT = {
 	insert: `INSERT INTO repositories (
-		organization_id, provider, external_full_name, default_branch
-	) VALUES ($1, $2, $3, $4)
+		organization_id, provider, external_full_name, default_branch,
+		github_installation_id
+	) VALUES ($1, $2, $3, $4, $5)
 	ON CONFLICT (organization_id, external_full_name) DO NOTHING
 	RETURNING ${REPOSITORY_COLUMNS}`,
 	get: `SELECT ${REPOSITORY_COLUMNS} FROM repositories
@@ -149,6 +152,7 @@ export function validateCreateRepositoryInput(input: CreateRepositoryInput): {
 	provider: "github";
 	externalFullName: string;
 	defaultBranch: string;
+	githubInstallationId: string | null;
 } {
 	requireNonEmpty(input.organizationId, "organizationId");
 	requireNonEmpty(input.externalFullName, "externalFullName");
@@ -172,11 +176,19 @@ export function validateCreateRepositoryInput(input: CreateRepositoryInput): {
 	if (input.defaultBranch.length > 255) {
 		throw new Error("defaultBranch must be at most 255 characters");
 	}
+	const githubInstallationId = input.githubInstallationId ?? null;
+	if (githubInstallationId !== null) {
+		requireNonEmpty(githubInstallationId, "githubInstallationId");
+		if (githubInstallationId.length > 64) {
+			throw new Error("githubInstallationId must be at most 64 characters");
+		}
+	}
 	return {
 		organizationId: input.organizationId,
 		provider,
 		externalFullName: input.externalFullName,
 		defaultBranch: input.defaultBranch,
+		githubInstallationId,
 	};
 }
 
@@ -190,6 +202,7 @@ export class PostgresRepositoryRepository implements RepositoryRepository {
 			validated.provider,
 			validated.externalFullName,
 			validated.defaultBranch,
+			validated.githubInstallationId,
 		])) as unknown as Record<string, unknown>[];
 		if (rows.length === 0) {
 			// ON CONFLICT DO NOTHING fired: the full name is already onboarded
@@ -247,6 +260,11 @@ export function mapRepositoryRow(row: Record<string, unknown>): RepositoryRow {
 		validation_timeout_ms: Number(
 			row.validation_timeout_ms ?? DEFAULT_VALIDATION_TIMEOUT_MS,
 		),
+		github_installation_id:
+			row.github_installation_id === null ||
+			row.github_installation_id === undefined
+				? null
+				: String(row.github_installation_id),
 		created_at: row.created_at as Date,
 	};
 }

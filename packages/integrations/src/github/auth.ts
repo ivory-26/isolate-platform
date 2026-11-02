@@ -56,6 +56,44 @@ export type GitHubTokenProviderOptions = {
 	readonly now?: () => number;
 };
 
+/** App identity without a bound installation (wave 23 per-org installs). */
+export type GitHubAppCredentials = {
+	readonly appId: string;
+	/** RSA private key in PKCS#8 PEM form; server-only. */
+	readonly privateKeyPem: string;
+	readonly apiBaseUrl?: string;
+	readonly fetchImpl?: typeof fetch;
+	readonly now?: () => number;
+};
+
+export type GitHubInstallationTokenByIdRequest = {
+	/** Numeric installation id supplied by the caller (already tenant-bound). */
+	readonly installationId: string;
+	/** Optional bare repository name; when present the token is repo-scoped. */
+	readonly repositoryName?: string;
+	readonly permissions?: Readonly<Record<string, GitHubRepoPermission>>;
+};
+
+export type GitHubAppInstallationDetails = {
+	readonly installationId: string;
+	readonly accountLogin: string;
+	readonly accountType: "User" | "Organization";
+	readonly repositorySelection: "all" | "selected";
+};
+
+export interface GitHubInstallationTokenResolver {
+	getInstallationToken(
+		input: GitHubInstallationTokenByIdRequest,
+	): Promise<GitHubInstallationToken>;
+}
+
+/** App JWT surface: mints tokens/details for a supplied installation id. */
+export interface GitHubAppClient extends GitHubInstallationTokenResolver {
+	getInstallation(input: {
+		readonly installationId: string;
+	}): Promise<GitHubAppInstallationDetails>;
+}
+
 const DEFAULT_API_BASE_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const REQUEST_USER_AGENT = "isolate-platform";
@@ -66,17 +104,29 @@ const JWT_BACKDATE_SECONDS = 60;
 const JWT_LIFETIME_SECONDS = 600;
 const REPOSITORY_FULL_NAME_PATTERN =
 	/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 const PKCS8_PEM_PATTERN =
 	/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/;
 const BASE64_BODY_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const WIRE_PERMISSION_NAMES = [
+	"contents",
+	"pull_requests",
+	"actions",
+	"checks",
+	"issues",
+	"administration",
+] as const;
 
-type NormalizedConfig = {
+type NormalizedAppConfig = {
 	readonly appId: string;
-	readonly installationId: string;
 	readonly apiBaseUrl: string;
 	readonly privateKeyDer: ArrayBuffer;
 	readonly fetchImpl: typeof fetch;
 	readonly now: () => number;
+};
+
+type NormalizedConfig = NormalizedAppConfig & {
+	readonly installationId: string;
 };
 
 type ValidatedRequest = {
@@ -171,17 +221,13 @@ function normalizeApiBaseUrl(value: unknown): string {
 	return parsed.toString().replace(/\/+$/, "");
 }
 
-function normalizeConfig(
-	options: GitHubTokenProviderOptions,
-): NormalizedConfig {
+function normalizeAppConfig(
+	options: GitHubAppCredentials,
+): NormalizedAppConfig {
 	if (options === null || typeof options !== "object") {
-		throw configError("GitHub App token provider options are required");
+		throw configError("GitHub App credential options are required");
 	}
 	const appId = parseNumericIdentifier(options.appId, "appId");
-	const installationId = parseNumericIdentifier(
-		options.installationId,
-		"installationId",
-	);
 	const privateKeyDer = pemToDer(options.privateKeyPem);
 	const apiBaseUrl = normalizeApiBaseUrl(options.apiBaseUrl);
 	const fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -192,14 +238,18 @@ function normalizeConfig(
 	if (typeof now !== "function") {
 		throw configError("GitHub App now must be a clock function");
 	}
-	return {
-		appId,
-		installationId,
-		apiBaseUrl,
-		privateKeyDer,
-		fetchImpl,
-		now,
-	};
+	return { appId, apiBaseUrl, privateKeyDer, fetchImpl, now };
+}
+
+function normalizeConfig(
+	options: GitHubTokenProviderOptions,
+): NormalizedConfig {
+	const app = normalizeAppConfig(options);
+	const installationId = parseNumericIdentifier(
+		options.installationId,
+		"installationId",
+	);
+	return { ...app, installationId };
 }
 
 function isRepoPermission(value: unknown): value is GitHubRepoPermission {
@@ -275,8 +325,7 @@ function base64UrlFromText(text: string): string {
 	return base64UrlFromBytes(new TextEncoder().encode(text));
 }
 
-function statusError(status: number): PlatformError {
-	switch (status) {
+function statusError(status: number): PlatformError {	switch (status) {
 		case 401:
 			// The error union has no AUTH_REQUIRED; a rejected App JWT is a
 			// broker-unavailable condition, never a caller-input failure.
@@ -314,6 +363,19 @@ function statusError(status: number): PlatformError {
 }
 
 /**
+ * Fixed status mapping shared by every App call (token, installation,
+ * repository list). It never includes a provider body.
+ */
+export function githubAppStatusError(status: number): PlatformError {
+	return statusError(status);
+}
+
+export const GITHUB_APP_API_BASE_URL = DEFAULT_API_BASE_URL;
+export const GITHUB_APP_API_VERSION = GITHUB_API_VERSION;
+export const GITHUB_APP_USER_AGENT = REQUEST_USER_AGENT;
+export const GITHUB_APP_REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_MS;
+
+/**
  * Provider responses are untrusted input (§7). Only a non-empty token with a
  * parseable future expiry is accepted; the body itself never escapes.
  */
@@ -345,20 +407,13 @@ function parseTokenResponse(
 }
 
 /**
- * Creates a GitHub App installation-token broker.
- *
- * Config is validated synchronously and fails closed (`MISSING_CONFIG`) before
- * any network call; the private key is parsed once and imported lazily. Tokens
- * are cached per repository and permission set until `expires_at − 300 s`,
- * concurrent requests for the same key share one exchange, and every failure
- * is reported through a fixed, credential-free `PlatformError` message.
+ * Lazily imports the App private key and signs short-lived App JWTs. Shared by
+ * the repo-scoped token broker and the per-installation client so both have one
+ * key-import path and one JWT shape.
  */
-export function createGitHubAppTokenProvider(
-	options: GitHubTokenProviderOptions,
-): GitHubTokenProvider {
-	const config = normalizeConfig(options);
-	const cache = new Map<string, CacheEntry>();
-	const inFlight = new Map<string, Promise<GitHubInstallationToken>>();
+function createAppJwtFactory(
+	config: NormalizedAppConfig,
+): (nowMs: number) => Promise<string> {
 	let signingKeyPromise: Promise<CryptoKey> | null = null;
 
 	const importSigningKey = (): Promise<CryptoKey> => {
@@ -378,7 +433,7 @@ export function createGitHubAppTokenProvider(
 		return signingKeyPromise;
 	};
 
-	const createAppJwt = async (nowMs: number): Promise<string> => {
+	return async (nowMs: number): Promise<string> => {
 		const issuedAtSeconds = Math.floor(nowMs / 1000);
 		const header = base64UrlFromText(
 			JSON.stringify({ alg: "RS256", typ: "JWT" }),
@@ -407,6 +462,24 @@ export function createGitHubAppTokenProvider(
 		}
 		return `${signingInput}.${base64UrlFromBytes(new Uint8Array(signature))}`;
 	};
+}
+
+/**
+ * Creates a GitHub App installation-token broker.
+ *
+ * Config is validated synchronously and fails closed (`MISSING_CONFIG`) before
+ * any network call; the private key is parsed once and imported lazily. Tokens
+ * are cached per repository and permission set until `expires_at − 300 s`,
+ * concurrent requests for the same key share one exchange, and every failure
+ * is reported through a fixed, credential-free `PlatformError` message.
+ */
+export function createGitHubAppTokenProvider(
+	options: GitHubTokenProviderOptions,
+): GitHubTokenProvider {
+	const config = normalizeConfig(options);
+	const cache = new Map<string, CacheEntry>();
+	const inFlight = new Map<string, Promise<GitHubInstallationToken>>();
+	const createAppJwt = createAppJwtFactory(config);
 
 	const mintToken = async (
 		request: ValidatedRequest,
@@ -495,6 +568,213 @@ export function createGitHubAppTokenProvider(
 			inFlight.set(cacheKey, minted);
 			return minted;
 		},
+	};
+}
+
+function normalizeByIdInstallationId(value: unknown): string {
+	return parseNumericIdentifier(value, "installationId");
+}
+
+function normalizePermissions(
+	value: Readonly<Record<string, GitHubRepoPermission>> | undefined,
+): Readonly<Record<string, GitHubRepoPermission>> | undefined {
+	if (value === undefined) return undefined;
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			"installation token permissions must be an object",
+		);
+	}
+	const entries = Object.entries(value);
+	if (entries.length === 0) return undefined;
+	const permissions: Record<string, GitHubRepoPermission> = {};
+	for (const [name, level] of entries) {
+		if (!(WIRE_PERMISSION_NAMES as readonly string[]).includes(name)) {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"installation token permission name is not allowed",
+			);
+		}
+		if (!isRepoPermission(level)) {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"installation token permission must be read or write",
+			);
+		}
+		permissions[name] = level;
+	}
+	return permissions;
+}
+
+function normalizeRepositoryName(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || !REPOSITORY_NAME_PATTERN.test(value)) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			"repositoryName must be a bare GitHub repository name",
+		);
+	}
+	return value;
+}
+
+async function readResponseText(response: Response): Promise<string> {
+	try {
+		return await response.text();
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * App JWT client that mints a token for any supplied installation id. Unlike
+ * `createGitHubAppTokenProvider`, no installation is bound at construction, so
+ * one worker/web instance can serve every tenant. No token or provider body is
+ * cached, logged or included in an error.
+ */
+export function createGitHubAppClient(
+	options: GitHubAppCredentials,
+): GitHubAppClient {
+	const config = normalizeAppConfig(options);
+	const createAppJwt = createAppJwtFactory(config);
+
+	const getInstallationToken = async (
+		input: GitHubInstallationTokenByIdRequest,
+	): Promise<GitHubInstallationToken> => {
+		if (input === null || typeof input !== "object") {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"installation token request is required",
+			);
+		}
+		const installationId = normalizeByIdInstallationId(input.installationId);
+		const repositoryName = normalizeRepositoryName(input.repositoryName);
+		const permissions = normalizePermissions(input.permissions);
+		const jwt = await createAppJwt(config.now());
+		const endpoint = `${config.apiBaseUrl}/app/installations/${encodeURIComponent(installationId)}/access_tokens`;
+		const body: Record<string, unknown> = {};
+		if (repositoryName !== undefined) body.repository = repositoryName;
+		if (permissions !== undefined) body.permissions = permissions;
+		let response: Response;
+		try {
+			response = await config.fetchImpl(endpoint, {
+				method: "POST",
+				headers: {
+					Accept: "application/vnd.github+json",
+					"Content-Type": "application/json",
+					"User-Agent": REQUEST_USER_AGENT,
+					"X-GitHub-Api-Version": GITHUB_API_VERSION,
+					Authorization: `Bearer ${jwt}`,
+				},
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+		} catch {
+			throw new PlatformError(
+				"AGENT_EXECUTION_FAILED",
+				"github app authentication request failed",
+			);
+		}
+		const bodyText = await readResponseText(response);
+		if (!response.ok) throw statusError(response.status);
+		const parsed = parseTokenResponse(bodyText, config.now());
+		if (parsed === null) {
+			throw new PlatformError(
+				"INTEGRATION_UNAVAILABLE",
+				"github returned an unusable installation token response",
+			);
+		}
+		return parsed;
+	};
+
+	const getInstallation = async (input: {
+		readonly installationId: string;
+	}): Promise<GitHubAppInstallationDetails> => {
+		if (input === null || typeof input !== "object") {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"installation lookup request is required",
+			);
+		}
+		const installationId = normalizeByIdInstallationId(input.installationId);
+		const jwt = await createAppJwt(config.now());
+		const endpoint = `${config.apiBaseUrl}/app/installations/${encodeURIComponent(installationId)}`;
+		let response: Response;
+		try {
+			response = await config.fetchImpl(endpoint, {
+				method: "GET",
+				headers: {
+					Accept: "application/vnd.github+json",
+					"User-Agent": REQUEST_USER_AGENT,
+					"X-GitHub-Api-Version": GITHUB_API_VERSION,
+					Authorization: `Bearer ${jwt}`,
+				},
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+		} catch {
+			throw new PlatformError(
+				"AGENT_EXECUTION_FAILED",
+				"github app installation request failed",
+			);
+		}
+		const bodyText = await readResponseText(response);
+		if (!response.ok) throw statusError(response.status);
+		return parseInstallationResponse(bodyText, installationId);
+	};
+
+	return { getInstallationToken, getInstallation };
+}
+
+/** Narrow resolver surface for callers that only mint installation tokens. */
+export function createGitHubInstallationTokenResolver(
+	options: GitHubAppCredentials,
+): GitHubInstallationTokenResolver {
+	const client = createGitHubAppClient(options);
+	return {
+		getInstallationToken: (input) => client.getInstallationToken(input),
+	};
+}
+
+/** Untrusted App response; only the three bounded metadata fields escape. */
+function parseInstallationResponse(
+	bodyText: string,
+	installationId: string,
+): GitHubAppInstallationDetails {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(bodyText);
+	} catch {
+		parsed = null;
+	}
+	if (parsed === null || typeof parsed !== "object") {
+		throw new PlatformError(
+			"INTEGRATION_UNAVAILABLE",
+			"github returned an unusable installation response",
+		);
+	}
+	const candidate = parsed as {
+		account?: { login?: unknown; type?: unknown };
+		repository_selection?: unknown;
+	};
+	const login = candidate.account?.login;
+	const type = candidate.account?.type;
+	const selection = candidate.repository_selection;
+	if (
+		typeof login !== "string" ||
+		login.length === 0 ||
+		login.length > 100 ||
+		(type !== "User" && type !== "Organization") ||
+		(selection !== "all" && selection !== "selected")
+	) {
+		throw new PlatformError(
+			"INTEGRATION_UNAVAILABLE",
+			"github returned an unusable installation response",
+		);
+	}
+	return {
+		installationId,
+		accountLogin: login,
+		accountType: type,
+		repositorySelection: selection,
 	};
 }
 

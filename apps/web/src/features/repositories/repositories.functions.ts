@@ -4,6 +4,7 @@ import {
 	readRepositories,
 	summarizeRepositoryRow,
 } from "../../server/catalog-read.server";
+import { runGitHubSetupAction } from "../../server/github-install.server";
 import { uiRead } from "../../server/ui-runtime.server";
 import {
 	UiInvalidInputError,
@@ -11,6 +12,12 @@ import {
 	type UiResult,
 } from "../ui/contracts";
 import {
+	type GitHubSetupResult,
+	type ImportRepositoriesInput,
+	type InstallationRepositoriesReadModel,
+	type RepositoriesImportResult,
+	type StartGitHubInstallResult,
+	importRepositoriesSchema,
 	listRepositoriesSchema,
 	type RegisterRepositoryInput,
 	type RepositoriesQuery,
@@ -89,3 +96,37 @@ export const registerRepository = createServerFn({ method: "POST" })
 	);
 
 export type { RegisterRepositoryInput };
+
+/**
+ * GitHub App onboarding (wave 23). All three use `member:manage` (owner/admin)
+ * and return the fixed `GitHubSetupResult` union, so the client never sees a
+ * token, key, state or provider body.
+ */
+export const startGitHubInstall = createServerFn({ method: "GET" }).handler(
+	async (): Promise<GitHubSetupResult<StartGitHubInstallResult>> =>
+		runGitHubSetupAction((scope, service) => service.startInstall(scope)),
+);
+
+export const listInstallationRepositories = createServerFn({
+	method: "GET",
+}).handler(
+	async (): Promise<GitHubSetupResult<InstallationRepositoriesReadModel>> =>
+		runGitHubSetupAction((scope, service) => service.listRepositories(scope)),
+);
+
+export const importRepositories = createServerFn({ method: "POST" })
+	.validator((input: unknown) => {
+		const parsed = importRepositoriesSchema.safeParse(input);
+		if (!parsed.success) throw new Error("Invalid repository import request.");
+		return parsed.data;
+	})
+	.handler(
+		async ({
+			data,
+		}): Promise<GitHubSetupResult<RepositoriesImportResult>> =>
+			runGitHubSetupAction((scope, service) =>
+				service.importRepositories(scope, data),
+			),
+	);
+
+export type { ImportRepositoriesInput };

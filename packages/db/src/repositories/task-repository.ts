@@ -58,7 +58,7 @@ export function buildTransitionValuesSql(
 export const TASK_TRANSITION_VALUES_SQL = buildTransitionValuesSql();
 
 const TASK_COLUMNS =
-	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, acceptance_checks, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, incident_source, incident_fingerprint, created_by, created_at, updated_at";
+	"id, organization_id, repository_id, worktree, branch, status, idempotency_key, budget_limits, goal, acceptance_criteria, acceptance_checks, file_ownership, pull_request_number, pull_request_url, retry_of, retry_depth, incident_source, incident_fingerprint, autonomy_level, created_by, created_at, updated_at";
 
 /** Hard retry ceiling mirrored by the 0006 `retry_depth` CHECK (0..3). */
 export const MAX_RETRY_DEPTH = 3;
@@ -120,12 +120,14 @@ const STMT = {
 		id, organization_id, repository_id, worktree, branch, status,
 		idempotency_key, budget_limits, goal, acceptance_criteria,
 		acceptance_checks, file_ownership, created_by, retry_of, retry_depth,
-		incident_source, incident_fingerprint, created_at, updated_at
+		incident_source, incident_fingerprint, autonomy_level, created_at,
+		updated_at
 	)
 	SELECT gen_random_uuid(), t.organization_id, t.repository_id, $4, $4,
 		'queued', $3, t.budget_limits, t.goal, t.acceptance_criteria,
 		t.acceptance_checks, t.file_ownership, t.created_by, t.id,
-		t.retry_depth + 1, t.incident_source, t.incident_fingerprint, now(), now()
+		t.retry_depth + 1, t.incident_source, t.incident_fingerprint,
+		t.autonomy_level, now(), now()
 	FROM tasks t
 	WHERE t.id = $1 AND t.organization_id = $2
 	  AND t.status = 'failed' AND t.retry_depth < ${MAX_RETRY_DEPTH}
@@ -560,6 +562,7 @@ function mapTaskRow(row: Row): TaskRow {
 			null) as TaskRow["incident_source"],
 		incident_fingerprint: (row.incident_fingerprint ??
 			null) as TaskRow["incident_fingerprint"],
+		autonomy_level: (row.autonomy_level ?? "A2") as TaskRow["autonomy_level"],
 		created_by: row.created_by as TaskRow["created_by"],
 		created_at: row.created_at as Date,
 		updated_at: row.updated_at as Date,

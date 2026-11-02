@@ -13,6 +13,7 @@ import {
 	PostgresConnectorCredentialRepository,
 	PostgresConnectorDeviceRepository,
 	PostgresExecutionLifecycle,
+	PostgresGitHubInstallationRepository,
 	PostgresIncidentRepository,
 	PostgresQueueRepository,
 	PostgresRepositoryRepository,
@@ -22,6 +23,7 @@ import {
 	PostgresTaskRepository,
 	PostgresToolInvocationRepository,
 	PostgresUsageRepository,
+	type GitHubInstallationRepository,
 	type RepositoryRepository,
 	type RunEventRepository,
 	type TaskAttemptRepository,
@@ -423,6 +425,163 @@ export function selectGitHubTokenProvider(
 	});
 }
 
+export type GitHubAppCredentialsConfig = {
+	readonly appId: string;
+	readonly privateKeyPem: string;
+	/** Legacy deployment-level fallback; null means "resolve per tenant only". */
+	readonly installationId: string | null;
+	readonly apiBaseUrl?: string;
+};
+
+const INSTALLATION_ID_PATTERN = /^[1-9][0-9]{0,19}$/;
+
+/**
+ * App identity without requiring a deployment-bound installation. The private
+ * key is read at boot (inline or file path, same rules as the legacy selector)
+ * but no token is minted and no provider request is made here.
+ *
+ * A fully absent App config returns `null`; a partial one fails closed with a
+ * `MISSING_CONFIG` message that never includes a key or path value.
+ */
+export function selectGitHubAppCredentials(
+	env: Record<string, string | undefined>,
+): GitHubAppCredentialsConfig | null {
+	const appId = env.GITHUB_APP_ID?.trim();
+	const installationId = env.GITHUB_APP_INSTALLATION_ID?.trim();
+	const inlineKey = env.GITHUB_APP_PRIVATE_KEY?.trim();
+	const keyPath = env.GITHUB_APP_PRIVATE_KEY_PATH?.trim();
+	const inlineComplete = inlineKey?.includes("END PRIVATE KEY") === true;
+
+	const configured = [appId, installationId, inlineKey, keyPath].filter(
+		(value) => value !== undefined && value.length > 0,
+	).length;
+	if (configured === 0) return null;
+	if (!appId) {
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			"GITHUB_APP_ID is required when other GitHub App settings are present",
+		);
+	}
+	if (!inlineComplete && !keyPath) {
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			inlineKey === undefined || inlineKey.length === 0
+				? "GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is required"
+				: "GITHUB_APP_PRIVATE_KEY is incomplete; quote the multiline value or set GITHUB_APP_PRIVATE_KEY_PATH",
+		);
+	}
+	if (
+		installationId !== undefined &&
+		!INSTALLATION_ID_PATTERN.test(installationId)
+	) {
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			"GITHUB_APP_INSTALLATION_ID must be a positive numeric string",
+		);
+	}
+
+	let privateKeyPem: string;
+	if (inlineComplete && inlineKey !== undefined) {
+		privateKeyPem = inlineKey;
+	} else {
+		const resolvedPath = resolve(keyPath as string);
+		try {
+			privateKeyPem = readFileSync(resolvedPath, "utf8");
+		} catch {
+			throw new PlatformError(
+				"MISSING_CONFIG",
+				"GITHUB_APP_PRIVATE_KEY_PATH could not be read",
+			);
+		}
+	}
+	const apiBaseUrl = env.GITHUB_API_BASE_URL?.trim();
+	return {
+		appId,
+		privateKeyPem,
+		installationId: installationId ?? null,
+		...(apiBaseUrl ? { apiBaseUrl } : {}),
+	};
+}
+
+export type GitHubInstallationIdResolverInput = {
+	readonly organizationId: OrganizationId;
+	readonly installations:
+		| Pick<GitHubInstallationRepository, "findActiveByOrganization">
+		| null;
+	readonly fallbackInstallationId?: string | null;
+};
+
+/**
+ * Resolves the installation id for one task's organization.
+ *
+ * Precedence: an active tenant installation wins; otherwise a legacy
+ * deployment fallback (`GITHUB_APP_INSTALLATION_ID`) is used. A repository
+ * error, an invalid organization or a malformed fallback fails closed with
+ * `null` — the worker then runs the task without a GitHub token rather than
+ * borrowing another tenant's installation.
+ */
+export async function resolveGitHubInstallationIdForOrganization(
+	input: GitHubInstallationIdResolverInput,
+): Promise<string | null> {
+	if (
+		typeof input.organizationId !== "string" ||
+		input.organizationId.trim().length === 0
+	) {
+		return null;
+	}
+	const fallback =
+		typeof input.fallbackInstallationId === "string" &&
+		INSTALLATION_ID_PATTERN.test(input.fallbackInstallationId.trim())
+			? input.fallbackInstallationId.trim()
+			: null;
+	if (input.installations === null) return fallback;
+	try {
+		const installation =
+			await input.installations.findActiveByOrganization(
+				input.organizationId,
+			);
+		if (
+			installation !== null &&
+			installation.status === "active" &&
+			INSTALLATION_ID_PATTERN.test(installation.installation_id)
+		) {
+			return installation.installation_id;
+		}
+		return fallback;
+	} catch {
+		// A database failure is not permission to use the deployment fallback:
+		// that could attach one tenant's task to another tenant's installation.
+		return null;
+	}
+}
+
+/** Lazily builds one token provider per resolved installation id. */
+export function createOrganizationGitHubTokenProvider(options: {
+	readonly credentials: GitHubAppCredentialsConfig;
+	readonly resolveInstallationId: (
+		organizationId: OrganizationId,
+	) => Promise<string | null>;
+}): (organizationId: OrganizationId) => Promise<GitHubTokenProvider | null> {
+	const providers = new Map<string, GitHubTokenProvider>();
+	return async (organizationId) => {
+		const installationId = await options.resolveInstallationId(organizationId);
+		if (installationId === null) return null;
+		let provider = providers.get(installationId);
+		if (provider === undefined) {
+			provider = createGitHubAppTokenProvider({
+				appId: options.credentials.appId,
+				installationId,
+				privateKeyPem: options.credentials.privateKeyPem,
+				...(options.credentials.apiBaseUrl
+					? { apiBaseUrl: options.credentials.apiBaseUrl }
+					: {}),
+			});
+			providers.set(installationId, provider);
+		}
+		return provider;
+	};
+}
+
 /**
  * Wave-8 validation policy read: task → repository, both tenant-scoped. A
  * foreign task or a repository without a configured command yields `null`
@@ -519,6 +678,25 @@ export function createPullRequestService(
 	};
 }
 
+/** PR creation with a per-organization installation token. */
+export function createOrganizationPullRequestService(
+	sql: PgSql,
+	providerFor: (
+		organizationId: OrganizationId,
+	) => Promise<GitHubTokenProvider | null>,
+): CreatePullRequestSeam {
+	return async (input) => {
+		const provider = await providerFor(input.organizationId);
+		if (provider === null) {
+			throw new PlatformError(
+				"MISSING_CONFIG",
+				"no GitHub installation is available for this organization",
+			);
+		}
+		return createPullRequestService(sql, provider)(input);
+	};
+}
+
 /**
  * Create-time sandbox environment for a private clone/push. The installation
  * token is consumed by Git through `GIT_CONFIG_*` (`http.extraheader`), so the
@@ -545,6 +723,32 @@ export function createSandboxEnvResolver(provider: GitHubTokenProvider) {
 			GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
 			GIT_TERMINAL_PROMPT: "0",
 		};
+	};
+}
+
+/**
+ * Per-organization sandbox credentials. The installation is resolved from the
+ * task's organization; no provider is available means the task fails closed
+ * before a sandbox clone (never a deployment-wide token).
+ */
+export function createOrganizationSandboxEnvResolver(
+	providerFor: (
+		organizationId: OrganizationId,
+	) => Promise<GitHubTokenProvider | null>,
+) {
+	return async (input: {
+		organizationId: string;
+		taskId: string;
+		repoUrl: string;
+	}): Promise<Record<string, string>> => {
+		const provider = await providerFor(input.organizationId as OrganizationId);
+		if (provider === null) {
+			throw new PlatformError(
+				"MISSING_CONFIG",
+				"no GitHub installation is available for this organization",
+			);
+		}
+		return createSandboxEnvResolver(provider)(input);
 	};
 }
 
@@ -605,6 +809,28 @@ export function createIncidentContextBundleLoader(
 				incidentFingerprint: fingerprint.trim(),
 			},
 		);
+	};
+}
+
+/**
+ * Per-organization incident context. With no installation for the tenant the
+ * loader degrades to "no evidence" instead of borrowing the deployment token.
+ */
+export function createOrganizationIncidentContextBundleLoader(
+	providerFor: (
+		organizationId: OrganizationId,
+	) => Promise<GitHubTokenProvider | null>,
+	tasks: Pick<TaskRepository, "get">,
+) {
+	return async (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		repositoryFullName: string;
+		ref: string;
+	}): Promise<ContextBundle | null> => {
+		const provider = await providerFor(input.organizationId);
+		if (provider === null) return null;
+		return createIncidentContextBundleLoader(provider, tasks)(input);
 	};
 }
 
@@ -774,9 +1000,28 @@ export async function createConfiguredWorkerComposition(
 	);
 	if (createRuntime !== undefined) overrides.createRuntime = createRuntime;
 
-	const githubTokenProvider = selectGitHubTokenProvider(env);
-	if (githubTokenProvider !== null && sandbox.real) {
-		overrides.resolveSandboxEnv = createSandboxEnvResolver(githubTokenProvider);
+	// Wave 23: per-organization installation resolution with a legacy
+	// deployment fallback. Providers are built lazily per installation id, so
+	// boot performs no network call and no token is minted until a task needs
+	// one.
+	const appCredentials = selectGitHubAppCredentials(env);
+	const installationRepository = new PostgresGitHubInstallationRepository(sql);
+	const resolveInstallationId = (organizationId: OrganizationId) =>
+		resolveGitHubInstallationIdForOrganization({
+			organizationId,
+			installations: installationRepository,
+			fallbackInstallationId: appCredentials?.installationId ?? null,
+		});
+	const providerForOrganization =
+		appCredentials === null
+			? null
+			: createOrganizationGitHubTokenProvider({
+					credentials: appCredentials,
+					resolveInstallationId,
+				});
+	if (providerForOrganization !== null && sandbox.real) {
+		overrides.resolveSandboxEnv =
+			createOrganizationSandboxEnvResolver(providerForOrganization);
 		// Push is the approval-gated action. Opt out explicitly with
 		// GITHUB_PUSH_ENABLED=false; without a broker, tasks stop at review_ready.
 		overrides.pushEnabled = env.GITHUB_PUSH_ENABLED?.trim() !== "false";
@@ -790,7 +1035,10 @@ export async function createConfiguredWorkerComposition(
 			recordPullRequest: async (input) => ({
 				ok: (await taskRepository.recordPullRequest(input)) !== null,
 			}),
-			createPullRequest: createPullRequestService(sql, githubTokenProvider),
+			createPullRequest: createOrganizationPullRequestService(
+				sql,
+				providerForOrganization,
+			),
 		};
 	}
 
@@ -814,9 +1062,12 @@ export async function createConfiguredWorkerComposition(
 			})
 		: undefined;
 	const githubContextLoader =
-		githubTokenProvider === null
+		providerForOrganization === null
 			? undefined
-			: createIncidentContextBundleLoader(githubTokenProvider, taskRepository);
+			: createOrganizationIncidentContextBundleLoader(
+					providerForOrganization,
+					taskRepository,
+				);
 	// One router for both readers: `github:` stays server-side, every other
 	// recognized source goes to the device. Binding it only when at least one
 	// reader exists keeps a GitHub-less, gateway-less worker unbound.
@@ -847,7 +1098,7 @@ export async function createConfiguredWorkerComposition(
 		overrides,
 		providerName: sandbox.provider.name,
 		inferenceProvider,
-		githubAuth: githubTokenProvider !== null,
+		githubAuth: providerForOrganization !== null,
 		...(connectorCallReaper === undefined ? {} : { connectorCallReaper }),
 		// Wave 11: read-only rollup over durable rows; the consumer (API) is
 		// wired by the coordinator, not here.

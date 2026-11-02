@@ -451,7 +451,7 @@ function TriggerForm({
 						<option value="A2">A2 Prepare fix</option>
 						<option value="A3">A3 Propose PR</option>
 						<option value="A1" disabled>
-							A1 Investigate (planned)
+							A1 Investigate (unsupported)
 						</option>
 					</select>
 				</div>

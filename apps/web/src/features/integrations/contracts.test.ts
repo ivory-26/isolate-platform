@@ -88,7 +88,7 @@ describe("saveSubscriptionSchema", () => {
 		expect(parsed.success).toBe(false);
 	});
 
-	test("refuses the planned A1 level", () => {
+	test("refuses the unsupported A1 level", () => {
 		expect(
 			saveSubscriptionSchema.safeParse({ ...baseRule, autonomyLevel: "A1" })
 				.success,

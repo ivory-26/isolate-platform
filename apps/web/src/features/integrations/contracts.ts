@@ -52,7 +52,7 @@ export const SEVERITIES = [
 export const severitySchema = z.enum(SEVERITIES);
 export type Severity = z.infer<typeof severitySchema>;
 
-/** A1 is documented as planned and is not offered for new rules. */
+/** A1 is explicitly unsupported and is not offered for new rules. */
 export const AUTONOMY_LEVELS = ["A0", "A2", "A3"] as const;
 export const autonomyLevelSchema = z.enum(AUTONOMY_LEVELS);
 export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
@@ -63,14 +63,14 @@ export type StoredAutonomyLevel = z.infer<typeof storedAutonomyLevelSchema>;
 
 export const AUTONOMY_LABELS: Record<StoredAutonomyLevel, string> = {
 	A0: "A0 Observe",
-	A1: "A1 Investigate (planned)",
+	A1: "A1 Investigate (unsupported)",
 	A2: "A2 Prepare fix",
 	A3: "A3 Propose PR",
 };
 
 export const AUTONOMY_DESCRIPTIONS: Record<StoredAutonomyLevel, string> = {
 	A0: "Record and show the event. No agent task is created.",
-	A1: "Diagnose with read-only evidence and no code change. Planned; not selectable.",
+	A1: "Diagnose with read-only evidence and no code change. Unsupported; not selectable.",
 	A2: "Clone, edit and validate in a Modal sandbox. Nothing is pushed.",
 	A3: "Push a branch and open a pull request through exact-payload approvals.",
 };

@@ -417,12 +417,28 @@ export function createConnectorVerificationService(
 					return view(credential.id, "active", "OK", verifiedAt);
 				}
 
-				// `verified: false` is a real answer. `OK` alongside it is
-				// contradictory, so it is reported as a provider fault instead.
+				// `verified: false` is a real answer, but not every failure proves
+				// the credential is wrong. Only an auth/config rejection changes the
+				// stored status; a provider fault, rate limit or unreachable relay
+				// leaves the prior status and is reported honestly.
 				const reasonCode: ConnectorVerifyReasonCode =
 					deviceResult.data.reasonCode === "OK"
 						? "PROVIDER_ERROR"
 						: deviceResult.data.reasonCode;
+				if (reasonCode === "RATE_LIMITED") {
+					return failure(
+						"RATE_LIMITED",
+						CONNECTOR_VERIFY_RATE_LIMITED_RETRY_AFTER_SECONDS,
+					);
+				}
+				if (reasonCode === "PROVIDER_ERROR" || reasonCode === "UNREACHABLE") {
+					return view(
+						credential.id,
+						currentStatus,
+						reasonCode,
+						previousValidatedAt,
+					);
+				}
 				return markInvalid(scope.organizationId, credential.id, reasonCode);
 			} catch (error) {
 				return failureFromError(error);

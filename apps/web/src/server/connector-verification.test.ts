@@ -331,6 +331,49 @@ describe("connector credential verification", () => {
 		expect(harness.writes).toEqual({ setStatus: 0, touchValidated: 0 });
 	});
 
+	test("a provider rate limit is a bounded failure, not an invalid credential", async () => {
+		const harness = await createHarness({
+			outcome: {
+				ok: true,
+				data: { verified: false, reasonCode: "RATE_LIMITED" },
+			},
+		});
+		const result = await harness.service.verify({
+			credentialId: harness.pendingAId,
+		});
+		expect(failureError(result)).toEqual({
+			code: "RATE_LIMITED",
+			message: CONNECTOR_VERIFICATION_FAILURE_MESSAGES.RATE_LIMITED,
+			retryAfterSeconds: 30,
+		});
+		const stored = await harness.credentials.get(ORG_A, harness.pendingAId);
+		expect(stored?.status).toBe("pending_validation");
+		expect(harness.writes).toEqual({ setStatus: 0, touchValidated: 0 });
+	});
+
+	test("a provider or transport fault keeps the status and never marks invalid", async () => {
+		for (const reasonCode of ["PROVIDER_ERROR", "UNREACHABLE"] as const) {
+			const harness = await createHarness({
+				outcome: {
+					ok: true,
+					data: { verified: false, reasonCode },
+				},
+			});
+			const result = await harness.service.verify({
+				credentialId: harness.pendingAId,
+			});
+			expect(successValue(result)).toEqual({
+				credentialId: harness.pendingAId,
+				status: "pending_validation",
+				reasonCode,
+				verifiedAt: null,
+			});
+			const stored = await harness.credentials.get(ORG_A, harness.pendingAId);
+			expect(stored?.status).toBe("pending_validation");
+			expect(harness.writes).toEqual({ setStatus: 0, touchValidated: 0 });
+		}
+	});
+
 	test("a timeout keeps an active credential and its last validation time", async () => {
 		const harness = await createHarness({ outcome: null });
 		const previous = new Date("2026-10-01T00:00:00.000Z");
@@ -542,8 +585,8 @@ describe("connector credential verification", () => {
 			expect(harness.writes).toEqual({ setStatus: 0, touchValidated: 0 });
 		}
 
-		// `verified: false` is still a real rejection; the contradictory `OK` is
-		// reported as a provider fault instead of a success reason.
+		// `verified: false` is still a real answer; the contradictory `OK` is
+		// reported as a provider fault instead of accepting or rejecting the key.
 		const harness = await createHarness({
 			outcome: {
 				ok: true,
@@ -553,8 +596,9 @@ describe("connector credential verification", () => {
 		const value = successValue(
 			await harness.service.verify({ credentialId: harness.pendingAId }),
 		);
-		expect(value.status).toBe("invalid");
+		expect(value.status).toBe("pending_validation");
 		expect(value.reasonCode).toBe("PROVIDER_ERROR");
+		expect(harness.writes).toEqual({ setStatus: 0, touchValidated: 0 });
 	});
 
 	test("an invalid credential id is rejected before any work", async () => {

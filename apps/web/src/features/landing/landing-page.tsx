@@ -163,7 +163,7 @@ export function LandingPage() {
 					<div className="mx-auto w-full max-w-[1200px]">
 						<ProductShot
 							src="/images/dashboard-overview.png"
-							alt="Isolate Overview dashboard showing active runs, pending approvals, recent activity and a registered device"
+							alt="Isolate Home showing Needs you, Running now, Inbox and Sources with the four Home metrics. Illustrative product view with synthetic data."
 							width={1600}
 							height={1200}
 							eager

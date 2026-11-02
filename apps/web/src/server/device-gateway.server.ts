@@ -22,6 +22,7 @@ import {
 	hashConnectorDeviceToken,
 } from "@isolate/integrations";
 import {
+	CONNECTOR_VERIFY_TOOL_NAME,
 	type ConnectorDeviceSummary,
 	connectorCredentialRefSchema,
 	connectorIdSchema,
@@ -465,6 +466,11 @@ export function createDeviceGateway(
 			const calls = await dependencies.calls.claimNext(auth.device.id, limit);
 			const payloads: ReturnType<typeof claimPayload>[] = [];
 			for (const call of calls) {
+				// `connector.verify` is the one internal tool that must reach a
+				// credential the user has just paired but the server has not yet
+				// promoted: without it a pending credential could never become
+				// active. Every other tool stays active-only.
+				const isVerification = call.toolName === CONNECTOR_VERIFY_TOOL_NAME;
 				if (call.organizationId !== auth.organizationId) {
 					// Defense in depth: a cross-tenant row is never handed to a device.
 					await dependencies.calls.fail({
@@ -479,18 +485,27 @@ export function createDeviceGateway(
 					call.credentialId,
 				);
 				try {
+					const usableStatus =
+						credential !== null &&
+						(isVerification
+							? credential.status === "pending_validation" ||
+								credential.status === "invalid" ||
+								credential.status === "active"
+							: credential.status === "active");
 					if (
 						credential === null ||
 						credential.deviceId !== auth.device.id ||
 						credential.organizationId !== auth.organizationId ||
-						credential.status !== "active"
+						!usableStatus
 					) {
 						throw new PlatformError(
 							"INTEGRATION_UNAVAILABLE",
 							"connector credential is unavailable",
 						);
 					}
-					if (dependencies.usage !== undefined) {
+					// Verification is one bounded read and must work before the
+					// credential is active, so it never spends the free-tier budget.
+					if (!isVerification && dependencies.usage !== undefined) {
 						// The platform guard is server-side: a client-supplied
 						// freeTierProfile must not raise the budget.
 						const freeLimit = resolveDailyLimit(

@@ -30,6 +30,12 @@
       "sourceType": "github",
       "skillPath": "skills/unslop/SKILL.md",
       "computedHash": "3375a859a14b4283b36e192e864b88971672ad390315995f97081a010dfd832c"
+    },
+    "web-perf": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-perf/SKILL.md",
+      "computedHash": "6a64193959c0dff8a6fab17025aac2c56405aef8f2638196a5339448873cb2fa"
     }
   }
 }

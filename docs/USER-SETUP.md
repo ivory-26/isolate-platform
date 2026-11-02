@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | Audience | Customers and customer admins using Isolate |
-| Status | Wave 23 target flow; status is updated as lanes land |
+| Status | Wave 24: browser pairing captures vendor fields and selectors; bounded verification is available |
 | Security model | Provider secrets live on the customer's relay device, never in Isolate's database, browser, logs, model context or sandbox |
-| Related | [`spec.md`](spec.md) §4 and §9–10, [`connector-onboarding.md`](connector-onboarding.md), [`connectors/DEVICE.md`](connectors/DEVICE.md) |
+| Related | [`spec.md`](spec.md) §4 and §9–10, [`connector-onboarding.md`](connector-onboarding.md), [`connectors/DEVICE.md`](connectors/DEVICE.md), [`DEPLOYMENT.md`](DEPLOYMENT.md), [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md) |
 
 ## 0. What you need
 
@@ -107,18 +107,50 @@ private networks. You install it once per environment; every connector reuses it
    you back to Setup → Relay.
 4. Choose **Connect securely**. Isolate opens a one-time page on the relay's
    loopback address (`http://127.0.0.1:47821/pair?...`). The page is served by your
-   relay, not by Isolate.
-5. In that local page, paste the vendor credential (or complete the provider's
-   delegated authorization). The relay stores it locally and confirms the pairing.
-   The Isolate server receives only the connector id, a display name, an opaque
-   credential reference, scopes and non-secret selectors.
-6. Isolate performs **one** bounded verification read. On success the card shows
-   **Connected**, the verification time and the relay name. On failure it shows a
-   fixed reason code and the vendor's scope hint, never the provider's response body.
-   Pairing completion records the connection as `pending_validation` until that
-   read succeeds; the card says **verification pending** rather than claiming a
-   verified connection. The verification route is the remaining step before the
-   card can show **Connected**.
+   relay, not by Isolate, and it renders the fields for that connector.
+5. Enter the connector's secret fields and non-secret selectors on that page. The
+   relay writes them to its encrypted local store and confirms the pairing. The
+   Isolate server receives only the connector id, a display name, an opaque
+   credential reference, the auth kind and scopes. Selector values stay on the relay.
+6. The new credential is `pending_validation`. Choose **Verify connection** on the
+   integration card (or run the server action) to enqueue exactly one bounded
+   `connector.verify` read. A successful read sets the credential `active` and
+   records `last_validated_at`. A rejected credential becomes `invalid` with a
+   fixed reason code. A relay timeout leaves the status unchanged, so a slow relay
+   is never reported as a bad credential.
+7. Only a credential with status `active` is described as **Connected** or
+   **verified**. A failed verification shows a fixed reason code and the vendor's
+   scope hint, never the provider's response body.
+
+### Pairing fields
+
+Secret fields are stored only in the relay's encrypted local store. Selectors are
+also local; they are not sent to the Isolate server or written to the database.
+
+| Connector | Secret fields (local) | Non-secret selectors (local) |
+|---|---|---|
+| Sentry | `token` | `baseUrl` (optional) |
+| Grafana | `token` | `baseUrl`; `orgId` (optional); `metricsDatasourceUid` (optional); `logsDatasourceUid` (optional) |
+| PagerDuty | `token` | `fromEmail` (optional); `baseUrl` (optional) |
+| Kubernetes | service-account token file path; CA file path (optional) | `apiUrl`; `namespace`; `clusterId` (optional) |
+| Datadog | `apiKey`; `appKey` | `baseUrl` (site API origin) |
+| New Relic | `apiKey` | `accountId`; `endpoint` (optional) |
+| Honeycomb | `apiKey` | `dataset`; `apiBaseUrl` (optional) |
+| Axiom | `token` | `baseUrl`; `dataset` |
+| SigNoz | `apiKey` | `baseUrl` |
+
+The local page and the relay config enforce the same bounds:
+
+- Base URLs and endpoints are absolute `https` URLs with no userinfo, query or
+  fragment, up to 512 characters. A base origin has no path.
+- Grafana `orgId` is 1–10 digits; New Relic `accountId` is 1–20 digits.
+- A Kubernetes namespace is a 1–63 character DNS label; `clusterId` is 1–64
+  characters (`[A-Za-z0-9][A-Za-z0-9._-]*`).
+- Datasets are 1–128 characters; datasource UIDs are 1–64 characters; a
+  PagerDuty `fromEmail` is a valid address of at most 254 characters.
+- Up to 16 secret fields are accepted, each up to 32 KiB and 64 KiB in total.
+  Up to 16 selectors are accepted, each up to 512 characters, and selector values
+  that look like credential material are rejected.
 
 ### Where to get the credential
 
@@ -137,9 +169,11 @@ never added to the Isolate deployment environment.
    | Level | What Isolate may do | Default |
    |---|---|---|
    | A0 Observe | Record and show the event; no agent task | Available |
-   | A1 Investigate | Diagnose with read-only evidence, no code change | Planned |
+   | A1 Investigate | Diagnose with read-only evidence, no code change | **Not supported** (`AUTONOMY_LEVEL_UNSUPPORTED`) |
    | A2 Prepare fix | Clone, edit and validate in a Modal sandbox; no push | Default for approved triggers |
    | A3 Propose PR | Push and open a PR through the existing exact-payload approvals | Requires repository policy |
+
+   A4 production mutation is out of scope. No level above A3 is selectable.
 
 4. Set cooldown/grouping, maximum active incidents and per-incident budgets. Isolate
    applies the tighter of your rule and the platform caps.
@@ -164,8 +198,8 @@ never added to the Isolate deployment environment.
 ## 7. Disconnect and rotate
 
 - **Disconnect a source** from its integration card. Isolate marks the metadata row
-  revoked and keeps the event/audit history. The relay deletes the local secret on
-  its next poll; Isolate cannot delete a secret it never held.
+  revoked and keeps the event/audit history. Delete the local entry on the relay;
+  Isolate cannot delete a secret it never held.
 - **Rotate a provider credential** by repeating the pairing flow with a new key and
   then revoking the old record. The old key stays valid at the vendor until you
   revoke it there; Isolate cannot revoke a vendor key it never held.
@@ -187,6 +221,13 @@ Set these once in the deployment secret manager. Customers never see or edit the
 | `WEBHOOK_*` secrets | Inbound signature verification |
 | `CONNECTOR_*` caps | Free-tier and per-task budgets |
 
+`GITHUB_APP_SLUG` and `GITHUB_APP_STATE_SECRET` are deployment-level settings:
+the slug identifies Isolate's own App for every tenant, and the state secret signs
+the ten-minute install round trip. They are never per-tenant values. If any
+required GitHub App setting is missing, the install action returns the fixed
+`GITHUB_APP_NOT_CONFIGURED` error instead of starting a partial flow. The full
+checklist is in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
 Provider keys (`SENTRY_API_KEY`, `DATADOG_API_KEY`, `GRAFANA_TOKEN`, etc.) are not
 deployment settings. They belong to the customer's relay.
 
@@ -198,6 +239,9 @@ deployment settings. They belong to the customer's relay.
 | Pairing code expired | Codes last 10 minutes and are one-time | Start a new pairing from Isolate |
 | Relay stays offline | Outbound HTTPS failed or the token was revoked | Check the relay log; register a new relay if revoked |
 | Verification fails with `POLICY_DENIED` | The vendor credential lacks a required scope/role | Follow the connector page's scope hint; never widen the Isolate token |
+| Verification marks the credential `invalid` | The vendor rejected the one bounded read | Recheck the token and scope, then reconnect. The old credential is not used |
+| Verification times out | The relay or provider did not answer in time; status is unchanged | Confirm the relay is online and retry. A timeout is not proof that the credential is bad |
+| GitHub install says `GITHUB_APP_NOT_CONFIGURED` | The deployment is missing one of the required App settings | Set the names in [`DEPLOYMENT.md`](DEPLOYMENT.md); do not paste values into a client or a prompt |
 | Events arrive but no task is created | The rule is disabled, below the severity threshold, outside the environment allowlist, deduped or over the active-incident cap | Open Inbox and read the delivery's status/reason |
 | Task runs but evidence is missing | The relay was offline or the provider returned partial data | The run records `truncated`/unavailable; retry later, never invent evidence |
 | Approval stays pending | A human decision is required by design | Open Approvals; the payload hash binds the decision |

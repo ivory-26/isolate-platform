@@ -4,10 +4,10 @@
 |---|---|
 | Status | Architecture of record for how the agent uses connectors; implementation status is stated per section |
 | Audience | Connector authors, worker/web maintainers, operators |
-| Date | 2026-11-01 |
+| Date | 2026-11-02 |
 | Vendor research | [`docs/devsecops-connectors.md`](devsecops-connectors.md) (2026-10-30) and the per-vendor pages under [`docs/connectors/`](connectors/) |
 | Security boundaries | [`ARCHITECTURE.md`](../ARCHITECTURE.md) §7–§11 |
-| Implemented today | Generic signed webhook intake; GitHub trigger + read-only context; two GitHub scoped-write **functions** (not agent-callable); migration `0010_connectors.sql` device/credential-metadata/usage-ledger tables with repositories and fakes; device token, device proxy and device broker contracts (transport not wired) |
+| Implemented today | Generic signed webhook intake; GitHub trigger + read-only context; two GitHub scoped-write **functions** (not agent-callable); migrations `0010`–`0016`; relay pairing with an encrypted local store; device token, device proxy and device broker; durable `connector_calls` claim/result/heartbeat transport; nine vendor adapters with relay tool binding; bounded `connector.verify`. Current limits: [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md) |
 
 This page is the contract between the intake path, the worker prompt, the tool
 registry, and the device credential registry. If code and this page disagree, the code is
@@ -40,7 +40,8 @@ Worker ──► loadContextBundle ──► ContextBundle ──► prompt (unt
                           tool_invocations / audit_events / connector_usage_ledger
 ```
 
-The device daemon poll transport is designed, not wired (see §4.4).
+The device daemon poll transport is implemented (see §4.4); the remaining
+limits are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 Rules that hold on every plane:
 
@@ -123,7 +124,7 @@ packages/integrations/src/<connector>/
 GitHub follows the `webhook` / `incidents` / `context` / `writes` split today; no
 connector has `adapter.ts` or `createTools` yet. The shared device transport
 lives in `packages/integrations/src/connectors/device-token.ts`,
-`device-proxy.ts` and `device-broker.ts`; it is not wired to a daemon.
+`device-proxy.ts` and `device-broker.ts`; it is wired to the relay daemon.
 
 Dependency types (`ConnectorContextDeps`, `ConnectorToolDeps`,
 `ConnectorToolContext`) carry the device broker, a scoped `fetch`, a clock, an
@@ -243,15 +244,17 @@ is:
   typed request/result contract plus `NullDeviceProxy` (always
   `INTEGRATION_UNAVAILABLE`); `device-broker.ts` resolves the active device and
   credential.
-- The **transport is not wired**. The worker does not bind the device broker,
-  no HTTP/WebSocket poll endpoint exists, and there is no durable call-queue
-  table. A production call path is therefore pending, not implemented.
+- The **transport is wired**. The worker binds the device broker when
+  `DEVICE_GATEWAY_ENABLED=true`; the relay polls the device routes, claims a
+  durable call from `connector_calls`, executes it and posts a bounded result.
+  Pairing stores the secret and selectors in the relay's encrypted local store.
 
-GitHub is the deliberate exception to the device model: `GITHUB_APP_ID`,
-`GITHUB_APP_INSTALLATION_ID` and the private key are server-held because they
-identify the **platform's own** GitHub App, not a user's vendor account
+GitHub is the deliberate exception to the device model: the App id, slug, state
+secret and private key are server-held because they identify the **platform's
+own** GitHub App, not a user's vendor account
 (`packages/integrations/src/github/auth.ts`). That key mints repository-scoped,
 short-lived installation tokens. It is not a metered provider read key.
+Installations are per organization.
 
 ### 4.2 Schema (migration 0010)
 
@@ -285,7 +288,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
   auth_kind text NOT NULL CHECK (auth_kind IN
     ('api_key','oauth_client_credentials','oauth_authorization_code',
      'service_account_json','bot_token','self_host_url_token')),
-  -- Opaque device-side reference (keychain item name), never a secret.
+  -- Opaque relay-local store reference, never a secret.
   credential_ref text NOT NULL CHECK (char_length(credential_ref) BETWEEN 1 AND 200),
   scopes text[] NOT NULL DEFAULT '{}',
   status text NOT NULL DEFAULT 'pending_validation'
@@ -341,31 +344,34 @@ change, and until then the application predicate is the control.
   device still owns the secret. Missing, revoked, cross-tenant or device-less
   rows fail closed.
 - `credential_ref` is 1–200 characters with no control characters. It names a
-  device keychain item and is not a secret, so it may appear in a summary and a
-  bounded error, never a token.
+  relay-local store entry and is not a secret, so it may appear in a summary and
+  a bounded error, never a token.
 
-### 4.4 Device daemon poll flow (designed, not wired)
+### 4.4 Device daemon poll flow (implemented)
 
 ```text
-1 register      device generates 256-bit token; sends sha256 hex only
-                 └─► connector_devices (status pending, token_hash, last_seen null)
-2 activate      owner/admin sets status active; revoke sets status revoked
-3 enqueue       worker tool call → typed request
+1 register      relay registration generates a 256-bit token; sends sha256 hex only
+                 └─► connector_devices (active, token_hash, last_seen null)
+2 revoke        owner/admin can revoke; the schema still allows pending for legacy rows
+3 pair          relay writes the secret and selectors to its encrypted local store
+4 enqueue       worker tool call → typed request
                  { connectorId, credentialRef, operation, params <= 16 KiB, timeoutMs }
-4 poll          daemon presents bearer token → server hashes it →
+5 poll          daemon presents bearer token → server hashes it →
                  verifyByTokenHash (constant-time) → touchSeen → pending request
-5 execute       device reads keychain item named by credentialRef, calls the
-                 provider with the fixed operation; never sends the secret back
-6 return        bounded JSON result <= 16 KiB (or a fixed error code/message)
-7 enforce       worker bounds/redacts/caps, audits, consumes the free-tier ledger
+6 execute       device reads its local entry by credentialRef (secret + selectors),
+                 calls the provider; never sends the secret back
+7 return        bounded JSON result <= 16 KiB (or a fixed error code/message)
+8 enforce       worker bounds/redacts/caps, audits, consumes the free-tier ledger
 ```
 
 - **Registration.** `generateConnectorDeviceToken()` produces 43 base64url
   characters from 256 random bits. Only `hashConnectorDeviceToken(token)` is
-  stored; the daemon keeps the token in OS keychain or protected storage. The
-  token is never logged, echoed, placed in a URL or persisted server-side.
-- **Activation and revocation.** `connector_devices.status` is `pending` by
-  default. `verifyByTokenHash` returns only an `active` row. `revoke` flips the
+  stored; the relay keeps the token in its private config and derives the local
+  store key from it. The token is never logged, echoed, placed in a URL or
+  persisted server-side.
+- **Activation and revocation.** The schema default is `pending`, but the current
+  browser registration creates an `active` row; there is no separate approval
+  step. `verifyByTokenHash` returns only an `active` row. `revoke` flips the
   status and is immediate for new polls; an in-flight call is not recalled.
   There is no rotate-in-place method yet: rotation today means register a new
   device and revoke the old one.
@@ -387,20 +393,24 @@ change, and until then the application predicate is the control.
   deadline, the task continues with partial evidence, and there is no fallback
   to a server key, a shared demo key or a second tenant's device.
 
-**Current limitation.** There is no durable call-queue table, so the poll
-transport is not production-wired and cannot survive a worker restart. Until a
-queue migration lands, a single worker process is assumed and an in-process
-dispatch would be required. Do not describe the poll path as available.
+**Current limitation.** The durable `connector_calls` queue (`0011`) and the
+claim/result/heartbeat transport are implemented; a worker restart does not lose
+a queued call. The relay must still be online before the call deadline. Request
+signing and per-request nonces remain design-only, and only Kubernetes has a
+local live proof among the relay connectors. See
+[`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ## 5. Multi-connector routing
 
-### 5.1 Today: one deployment-wide binding
+### 5.1 Legacy single-binding mode
 
-`apps/web/src/server/incident-intake-runtime.server.ts` reads one binding from
-environment variables (`WEBHOOK_ORGANIZATION_ID`, `WEBHOOK_REPOSITORY_ID`,
-`WEBHOOK_BRANCH`, `WEBHOOK_WORKFLOW_*`). The splat path after
-`/api/webhooks/` is accepted and ignored. To serve two teams today, run two
-deployments.
+`apps/web/src/server/incident-intake-runtime.server.ts` still supports one
+deployment-wide binding from environment variables (`WEBHOOK_ORGANIZATION_ID`,
+`WEBHOOK_REPOSITORY_ID`, `WEBHOOK_BRANCH`, `WEBHOOK_WORKFLOW_*`). It is the
+compatibility path for an existing single-tenant deployment. New deployments use
+per-organization GitHub installations and trigger subscriptions; see
+[`WAVE23`](../project/WAVE23.md) and [`USER-SETUP.md`](USER-SETUP.md). To serve two
+teams on the legacy path, run two deployments.
 
 ### 5.2 Target: `{connector}/{endpointId}`
 
@@ -548,8 +558,8 @@ The checklist after code, tests and merges are green with providers disabled
       (`connector_devices`, `connector_credentials`,
       `connector_usage_ledger`); no secret or ciphertext column exists; a
       device token is stored only as a sha256 hash.
-- [ ] A durable connector call-queue table exists before the poll transport is
-      called production-ready (not implemented).
+- [x] A durable connector call queue exists (`connector_calls`, migration
+      `0011`); the poll transport is implemented.
 - [ ] `packages/integrations/src/<connector>/` has `adapter.ts`, `webhook.ts`,
       `incidents.ts`, `context.ts`, `redact.ts` (and `writes.ts` if needed);
       the context plan is fixed and redaction delegates to the shared redactor.

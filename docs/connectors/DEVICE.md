@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Audience | Operators and platform engineers wiring the device transport |
-| Status | Runbook for the wave-17 device model; endpoint availability is marked per step |
+| Status | Runbook for the relay device model; endpoint availability is marked per step |
 | Rule | Provider keys stay on the user's device. The server stores only a sha256 device-token hash and connector metadata |
 | Sources of record | [`../connector-onboarding.md`](../connector-onboarding.md), [`../connector-usage.md`](../connector-usage.md), [`SETUP.md`](SETUP.md) |
 
@@ -13,7 +13,7 @@
 owner/admin                browser/server                     user device (daemon)
     │                           │                                   │
     ├─ register device ────────►│ store token_hash, status active   │
-    │                           ├───────────── token shown once ────►│ OS keychain
+    │                           ├───────────── token shown once ────►│ private config
     │                           │                                   │
     ├─ connect vendor ─────────►│ metadata: device_id, connector_id, │
     │  (credential_ref only)    │ auth_kind, credential_ref, scopes  │
@@ -73,7 +73,10 @@ provider key.
 
 ## 4. Connecting a vendor (metadata only)
 
-`POST /api/connectors/connect` accepts:
+The product path is browser pairing: the relay's loopback page collects the
+connector's secret fields and selectors and stores them locally. The direct
+metadata-only route below remains for compatibility and for creating a row without
+a local secret. `POST /api/connectors/connect` accepts:
 
 ```json
 {
@@ -90,16 +93,19 @@ provider key.
 - `credentialRef` is an **opaque device-side name**. It is never a secret: the server rejects
   values that look like GitHub/Slack/AWS tokens or private-key blocks, and values longer than
   200 characters.
-- `metadata` may hold non-secret selectors (base URL, org slug, datasource UID, dataset,
-  namespace, region). Provider keys do not belong here.
-- The row starts `pending_validation`; the first successful device call or a device-side check
-  promotes it to `active`.
+- `metadata` may hold non-secret display metadata. Selectors entered on the pairing page stay
+  in the relay's encrypted local store and are not sent through this route. Provider keys do
+  not belong here.
+- The row starts `pending_validation`. **Verify connection** runs one bounded
+  `connector.verify` read; success sets `active` and records `last_validated_at`. An auth
+  rejection sets `invalid`; a relay timeout leaves the status unchanged.
 
 `docs/connectors/SETUP.md` has the exact key-creation path and scope list for each of the ten.
 
 ## 5. Daemon configuration
 
-The daemon (`apps/device-daemon`) reads `ISOLATE_DEVICE_CONFIG` or `~/.isolate/connectors.json`:
+The daemon (`apps/device-daemon`) reads `ISOLATE_DEVICE_CONFIG` or `~/.isolate/connectors.json`.
+The browser pairing flow is the product path; this file is the base and legacy/env config:
 
 ```json
 {
@@ -109,18 +115,21 @@ The daemon (`apps/device-daemon`) reads `ISOLATE_DEVICE_CONFIG` or `~/.isolate/c
   "vendors": {
     "sentry": { "secretEnv": { "token": "SENTRY_API_KEY" }, "baseUrl": "https://sentry.io" },
     "kubernetes": {
-      "secretEnv": { "tokenFile": "K8S_TOKEN_FILE" },
+      "secretEnv": {
+        "serviceAccountTokenFile": "K8S_TOKEN_FILE",
+        "caFile": "K8S_CA_FILE"
+      },
       "apiUrl": "https://127.0.0.1:6443",
-      "namespace": "isolate-demo",
-      "caFile": "C:/Users/<you>/.isolate/k8s-ca.pem"
+      "namespace": "isolate-demo"
     }
   }
 }
 ```
 
-Provider secrets are read from device-local environment variables (or the OS keychain once the
-keychain adapter lands). The server URL must be https. Non-secret selectors may live in the
-JSON; secrets must not.
+Provider secrets are read from the relay's encrypted local store first; a legacy device-local
+environment variable remains a compatibility fallback. Selectors are stored with the secret in
+the same local entry. The server URL must be https. The JSON config holds only non-secret base
+settings; secrets must not be written there.
 
 Polling behavior: claim, execute, post result, sleep. `401/403` stops with a clear message
 (no retry loop); `429`/`5xx`/network errors back off exponentially with jitter. The daemon logs

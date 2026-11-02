@@ -5,7 +5,7 @@
 | Audience | Operators who install, bind and rotate connectors |
 | Source of record for vendor facts | [`docs/devsecops-connectors.md`](../devsecops-connectors.md) (research, 2026-10-30) |
 | Scope | Inbound triggers, read-only context, bounded writes |
-| Date | 2026-10-31 |
+| Date | 2026-11-02 |
 
 ## 1. What a connector is here
 
@@ -20,15 +20,15 @@ An inbound webhook is a **task source, not an execution path**: it can create a 
 
 ## 2. Status matrix
 
-Implemented today: **GitHub** (App auth, incident context, signed intake, two scoped write functions) and the **generic signed webhook**. Every other connector below is design-only with verified free-tier and API facts. Users are expected to connect their **own** accounts; the platform never ships vendor credentials. See [connector-onboarding.md](../connector-onboarding.md) for the per-organization connect flow and [free-tier-catalog.md](free-tier-catalog.md) for the verified free/paid matrix.
+Implemented today: **GitHub** (App auth, incident context, signed intake, two scoped write functions), the **generic signed webhook**, and **nine relay connectors** (Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom, SigNoz) whose adapters are merged and fake-tested. Only GitHub is live-proven end to end; Kubernetes has a local live proof. Users connect their **own** accounts; the platform never ships vendor credentials. See [connector-onboarding.md](../connector-onboarding.md) for the per-organization connect flow, [SETUP.md](SETUP.md) for pairing fields, and [KNOWN-LIMITS.md](../KNOWN-LIMITS.md) for what is not proven.
 
 | Group | Connectors | Free path | Status |
 |---|---|---|---|
-| Source control / CI | [GitHub](github.md), [GitHub security alerts](github-security.md) | GitHub App; Dependabot free; code/secret scanning free on public repos, paid on private | GitHub implemented; security alerts design-only |
-| Incidents | [Sentry](sentry.md), [PagerDuty](pagerduty.md), [Rollbar](rollbar.md), [Better Stack](betterstack.md), [incident.io](incident-io.md), [Rootly](rootly.md) | Sentry Developer, PagerDuty free (5 users), Rollbar (5k occurrences), Better Stack free; incident.io free excludes API/webhooks; Rootly trial-only | Design-only |
-| Metrics / APM | [Grafana](grafana.md), [Datadog](datadog.md), [New Relic](newrelic.md), [Honeycomb](honeycomb.md), [SigNoz](signoz.md), [Axiom](axiom.md), [Elastic](elastic.md), [Splunk](splunk.md) | Grafana Cloud free, Datadog/New Relic/Honeycomb/Axiom free tiers; SigNoz CE and Elastic self-host free; Splunk Free cannot alert | Design-only |
+| Source control / CI | [GitHub](github.md), [GitHub security alerts](github-security.md) | GitHub App; Dependabot free; code/secret scanning free on public repos, paid on private | GitHub implemented and live-proven; security alerts design-only |
+| Incidents | [Sentry](sentry.md), [PagerDuty](pagerduty.md), [Rollbar](rollbar.md), [Better Stack](betterstack.md), [incident.io](incident-io.md), [Rootly](rootly.md) | Sentry Developer, PagerDuty free (5 users), Rollbar (5k occurrences), Better Stack free; incident.io free excludes API/webhooks; Rootly trial-only | Sentry and PagerDuty relay adapters, fake-tested; their signed intake modes exist. Others design-only |
+| Metrics / APM | [Grafana](grafana.md), [Datadog](datadog.md), [New Relic](newrelic.md), [Honeycomb](honeycomb.md), [SigNoz](signoz.md), [Axiom](axiom.md), [Elastic](elastic.md), [Splunk](splunk.md) | Grafana Cloud free, Datadog/New Relic/Honeycomb/Axiom free tiers; SigNoz CE and Elastic self-host free; Splunk Free cannot alert | Six relay adapters, fake-tested; unsigned intake needs a bridge. Elastic and Splunk design-only |
 | Logs / traces | [Loki and Tempo](loki-tempo.md), [Prometheus](prometheus.md) | OSS self-host free; Grafana Cloud allowances | Design-only |
-| Kubernetes / deploy | [Kubernetes](kubernetes.md), [Argo CD](argocd.md) | OSS self-host free | Design-only |
+| Kubernetes / deploy | [Kubernetes](kubernetes.md), [Argo CD](argocd.md) | OSS self-host free | Kubernetes adapter with local live proof; Argo CD design-only |
 | Cloud monitoring | [CloudWatch](cloudwatch.md), [Azure Monitor](azure-monitor.md), [GCP Monitoring](gcp-monitoring.md) | Limited always-free allowances; alert webhooks are unsigned (bridge required) | Design-only |
 | Uptime | [UptimeRobot](uptimerobot.md), [Uptime Kuma](uptime-kuma.md) | UptimeRobot free (50 monitors); Kuma OSS self-host | Design-only |
 | Security scanners | [Snyk](snyk.md), [Semgrep](semgrep.md), [Socket](socket.md), [GitGuardian](gitguardian.md), [Trivy](trivy.md), [OSV-Scanner](osv-scanner.md), [Dependency-Track](dependency-track.md), [DefectDojo](defectdojo.md), [Wazuh](wazuh.md), [Falco](falco.md), [CrowdSec](crowdsec.md), [ZAP](zap.md), [Scorecard](scorecard.md) | OSS free; SaaS free tiers vary; Snyk REST API is Enterprise-only | Design-only |
@@ -36,7 +36,7 @@ Implemented today: **GitHub** (App auth, incident context, signed intake, two sc
 | Notification | [Slack](slack.md) | Free workspace | Design-only |
 | Transport | [Generic signed webhook](generic-webhook.md) | Platform | **Implemented** |
 
-**Ten connectors are implemented** (user decision: implement ten, document the rest): GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom and SigNoz. Their adapter modules are merged and fake-tested; webhook intake and device-backed tool binding are landing in wave 17. The other vendors in this index have verified documentation and no code; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
+**Ten connectors are implemented** (user decision: implement ten, document the rest): GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom and SigNoz. Their adapter modules are merged and fake-tested; the relay transport and tool binding are implemented. Only GitHub is live-proven end to end; Kubernetes has a local live proof. The other vendors in this index have verified documentation and no code; they must not be read as implemented behavior. The free-tier column is a summary only; each page carries the verified limits, retention and quota caveats.
 
 Both GitHub scoped writes are live-proven on 2026-10-31: `github.rerun_workflow` (run `41085679072`, attempt 2, audit row `b0bd5386…`) and `github.comment` (comment `6547408811` on PR #2, audit row `bed3a504…`, after adding `pull_requests:write`). They are still not registered as agent tools; see [github.md](github.md) §8.3.
 
@@ -105,6 +105,8 @@ Binding rules are in `apps/web/src/server/incident-intake-runtime.server.ts`. Th
 Cross-cutting documents:
 
 - [connector-onboarding.md](../connector-onboarding.md) — how a user connects an account, how credentials are stored/rotated, how the sandbox agent gets tool access, and the free-tier guardrails.
+- [KNOWN-LIMITS.md](../KNOWN-LIMITS.md) — what is not shipped or not proven: A1, A4, Datadog canonical re-fetch, Kafka bridge, subagents and live visual QA.
+- [DEPLOYMENT.md](../DEPLOYMENT.md) — operator checklist for the deployment-level GitHub App settings and the fixed `GITHUB_APP_NOT_CONFIGURED` behavior.
 - [DEVICE.md](DEVICE.md) — end-to-end device runbook: registration, connect metadata, daemon config, call flow, failure behavior and tests.
 - [MCP-AND-A2A.md](MCP-AND-A2A.md) — native adapter vs vendor MCP servers vs A2A; device-side MCP plan and onboarding impact.
 - [SCALING.md](SCALING.md) — multi-replica load balancing, durable rate limits, backpressure, batching and bounded chunked reads.

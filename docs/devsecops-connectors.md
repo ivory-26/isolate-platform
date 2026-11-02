@@ -2,15 +2,24 @@
 
 | Field | Value |
 |---|---|
-| Lane | H12-3 (research + writing) → wave 13/14 (implementation status) |
-| Status | **Design of record; P0/P1 implemented and live-proven; device-held credential foundation implemented (transport not wired); P2+ design-only** |
-| Date | 2026-11-01 |
+| Lane | H12-3 (research + writing) → wave 13/14 (implementation status) → wave 24 (status note) |
+| Status | **Research/design of record. P0/P1 and the relay connector path are implemented; P2+ vendor intake routing remains design-only. Current limits: [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md)** |
+| Date | 2026-11-01 (status note added 2026-11-02) |
 | Scope | Read-only context connectors, signed webhook ingestion, audited GitHub scoped writes (`comment`, `rerun_workflow`) |
-| Out of scope | Vendor connectors (Sentry, PagerDuty, Datadog, Grafana, Slack), deploy/rollback autonomy, credentials in model context |
-| Source convention | Inline `[S#]` citations resolve to §9; web sources were accessed **2026-10-30**; implementation claims were verified against code on **2026-11-01** |
-| Operator guides | Per-connector guides live in [`docs/connectors/`](docs/connectors/README.md) (index: `docs/connectors/README.md`) |
+| Out of scope | Vendor-native webhook routing beyond the signed modes, deploy/rollback autonomy, Slack notification, credentials in model context |
+| Source convention | Inline `[S#]` citations resolve to §9; web sources were accessed **2026-10-30**; the code map was verified on **2026-11-01** and the relay status note added **2026-11-02** |
+| Operator guides | Per-connector guides live in [`docs/connectors/`](connectors/README.md) (index: `docs/connectors/README.md`) |
 
-This document answers one question: **what is the smallest, safest set of DevSecOps integrations that lets the agent turn a real operational signal into a bounded context bundle and a normal task?** It is deliberately biased toward read-only access, provider-native structure, and evidence that can be audited. It is now the design-and-status document of record: the implemented subset is listed in [Implemented today](#implemented-today-code-map), and every phase or connector that is not listed there is design-only.
+This document answers one question: **what is the smallest, safest set of DevSecOps integrations that lets the agent turn a real operational signal into a bounded context bundle and a normal task?** It is deliberately biased toward read-only access, provider-native structure, and evidence that can be audited. The implemented subset is listed in [Implemented today](#implemented-today-code-map).
+
+> **Wave 24 status note.** This page preserves the 2026-10-30 research and its
+> 2026-11-01 code map. The relay now carries nine vendor adapters with
+> vendor-specific pairing fields and one bounded `connector.verify` read. Only
+> GitHub and the generic webhook are live-proven end to end; Kubernetes has a
+> local live proof, and the SaaS adapters are fake-tested. Where this page says a
+> vendor adapter is design-only, read that as **no end-to-end live proof**. Current
+> behavior is in [`connectors/SETUP.md`](connectors/SETUP.md); current limits are
+> in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 Anything that could not be confirmed against official documentation is marked **UNVERIFIED** rather than guessed. Endpoint paths, scope names, header names, and numeric limits below are quoted from the sources in §9. Where code and an earlier version of this document disagreed, the code is quoted and the difference is recorded in §8.
 
@@ -27,7 +36,7 @@ Anything that could not be confirmed against official documentation is marked **
 | **P2 — one incident source** | **Sentry first** if errors are the trigger; otherwise PagerDuty | **Design-only** — GitHub is the live incident source; no vendor account exists | Sentry ties an issue to a stack trace, an event, and a release, which is what a code-fix loop needs [`S36`–`S40`]. PagerDuty is the better lifecycle/on-call system but carries little code location [`S29`]. Swap only if PagerDuty is the system that actually pages humans and Sentry is absent. |
 | **P3 — one metrics backend** | **Grafana** if the org already runs Prometheus/Loki; otherwise **Datadog** | **Design-only** — pending the user's backend choice | Grafana exposes one generic query API over existing data sources [`S56`]; Datadog bundles metrics, logs, and incidents behind scoped application keys [`S45`–`S49`]. Pick where the data already lives; do not run both in the same wave. |
 | **P4 — notification** | Slack `chat.postMessage` with citation links, notify-only | **Design-only** — pending workspace/channel answer | Low implementation risk, but it must come after the bundle exists so the message can cite evidence instead of paraphrasing logs. No read scopes and no inbound Events API. |
-| **P5 — optional breadth** | PagerDuty lifecycle + write actions; second metrics vendor; GitHub security alerts | **Partially implemented** — the GitHub write subset (`github.comment`, `github.rerun_workflow`) exists as scoped writes (offline fake-tested; **no live call yet**). Everything else is design-only | Only after P1–P4 are stable. This is where approval-gated writes (`ack`, `resolve`, `mute`, `silence`, deploy) belong. |
+| **P5 — optional breadth** | PagerDuty lifecycle + write actions; second metrics vendor; GitHub security alerts | **Partially implemented** — the GitHub write subset (`github.comment`, `github.rerun_workflow`) exists as scoped writes and both are live-proven (2026-10-31). Everything else is design-only | Only after P1–P4 are stable. This is where approval-gated writes (`ack`, `resolve`, `mute`, `silence`, deploy) belong. |
 
 Wave-13 decision: the first incident source is **GitHub itself** (failed `workflow_run`, failing `check_suite`), not Sentry or PagerDuty; P2 stays design-only until a vendor is chosen.
 
@@ -36,14 +45,14 @@ Wave-13 decision: the first incident source is **GitHub itself** (failed `workfl
 | Connector | Role in the agent | Auth model | Minimal read access | Inbound webhook verification | Status | Priority |
 |---|---|---|---|---|---|---|
 | **GitHub** | CI failures, checks, rules, ownership; deploy history and runbooks are design-only; incident intake; audited comment/rerun | GitHub App → installation token (1 h) [`S1`] | Requested by the implemented broker: `contents:read`, `actions:read`, `checks:read`, `pull_requests:read`, `administration:read` [`S2`,`S3`] (plus `issues:write` for comment and `actions:write` for rerun; `deployments:read`/`issues:read` are surveyed but not requested) | `X-Hub-Signature-256`, HMAC-SHA256 [`S4`] | **Implemented** (read + intake + `comment`/`rerun` functions) | **P1** |
-| **Sentry** | Error issue, latest event, stack trace, release correlation | Bearer token (org/user/integration) [`S33`] | `event:read`, `project:read`, `org:read` (add `member:read` only if needed) [`S34`] | `Sentry-Hook-Signature`, HMAC-SHA256 [`S35`] | Design-only | **P2** |
-| **PagerDuty** | Incident lifecycle, severity, service, on-call context | Read-only account API key, or scoped OAuth app [`S25`,`S26`] | `incidents.read`, `services.read` [`S26`] | `X-PagerDuty-Signature: v1=…`, HMAC-SHA256 [`S27`] | Design-only | **P2 alt** |
-| **Grafana** | Metrics, logs, alert payloads | Service-account Bearer token [`S53`,`S54`] | `datasources:read` [`S56`] | Configurable HMAC header over `timestamp:body` [`S55`] | Design-only | **P3** |
-| **Datadog** | Metrics, logs, incidents, monitors | API key + scoped application key [`S45`,`S61`] | `metrics_read`, `logs_read_data`, `incident_read`, `monitors_read` [`S46`] | **No HMAC documented**; Basic/OAuth + custom headers [`S50`] | Design-only | **P3 alt** |
+| **Sentry** | Error issue, latest event, stack trace, release correlation | Bearer token (org/user/integration) [`S33`] | `event:read`, `project:read`, `org:read` (add `member:read` only if needed) [`S34`] | `Sentry-Hook-Signature`, HMAC-SHA256 [`S35`] | Adapter implemented; signed intake exists; not live-proven | **P2** |
+| **PagerDuty** | Incident lifecycle, severity, service, on-call context | Read-only account API key, or scoped OAuth app [`S25`,`S26`] | `incidents.read`, `services.read` [`S26`] | `X-PagerDuty-Signature: v1=…`, HMAC-SHA256 [`S27`] | Adapter implemented; signed intake exists; not live-proven | **P2 alt** |
+| **Grafana** | Metrics, logs, alert payloads | Service-account Bearer token [`S53`,`S54`] | `datasources:read` [`S56`] | Configurable HMAC header over `timestamp:body` [`S55`] | Adapter implemented; signed intake exists; not live-proven | **P3** |
+| **Datadog** | Metrics, logs, incidents, monitors | API key + scoped application key [`S45`,`S61`] | `metrics_read`, `logs_read_data`, `incident_read`, `monitors_read` [`S46`] | **No HMAC documented**; Basic/OAuth + custom headers [`S50`] | Adapter implemented; bridge intake design-only | **P3 alt** |
 | **Slack** | Notification sink only | Bot token `xoxb-` [`S57`] | `chat:write` (optionally `chat:write.public`) [`S57`] | Outbound only; if inbound later, `X-Slack-Signature` v0 [`S58`] | Design-only | **P4** |
 | **Generic webhook** | Fallback trigger from any system | Per-deployment HMAC secret | Not applicable (no read API) | `X-Isolate-Signature: sha256=<hex>` over `<timestamp>.<body>` (`X-Isolate-Timestamp`), HMAC-SHA256 | **Implemented** | **P0** |
 
-Only GitHub read/intake, the two scoped write functions, and the generic webhook are implemented. A "Design-only" row has no code, no credential, and no test in this repository.
+Only GitHub read/intake, the two scoped write functions, and the generic webhook are **live-proven end to end**. The nine relay adapters (Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom, SigNoz) have code and tests; their vendor-specific intake is not all live-proven. A row for a vendor with no adapter has no code, no implementation and no test in this repository.
 
 ### 1.3 Non-goals
 
@@ -57,7 +66,11 @@ Only GitHub read/intake, the two scoped write functions, and the generic webhook
 
 ## Implemented today (code map)
 
-Verified against the source on 2026-11-01. Anything not in this table is design-only.
+Verified against the source on 2026-11-02 for the relay subset. This table covers
+the GitHub/webhook path and the relay transport; nine vendor adapters and their
+pairing fields are described in [`connectors/SETUP.md`](connectors/SETUP.md).
+Anything not in this table or in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md) as
+implemented is design-only.
 
 | Capability | Exported function / route | File | Tests |
 |---|---|---|---|
@@ -80,13 +93,16 @@ Verified against the source on 2026-11-01. Anything not in this table is design-
 | Audit vocabulary for scoped writes | `audit_events.action = 'tool.execute'` with `details.tool`, `details.risk`, `details.outcome`, `details.idempotencyKey` | `packages/db/migrations/0001_platform_core.sql`, `packages/integrations/src/github/writes.ts` | `packages/integrations/src/github/writes.test.ts` |
 | Device registry: sha256 token hash only, constant-time verify, activation/revocation, `last_seen_at` | `PostgresConnectorDeviceRepository`, `generateConnectorDeviceToken`, `hashConnectorDeviceToken`, `verifyConnectorDeviceToken` | `packages/db/src/repositories/connector-devices.ts`, `packages/integrations/src/connectors/device-token.ts` | `connector-devices.test.ts`, `device-token.test.ts` |
 | Connector credential metadata (no secret bytes) and durable free-tier ledger | `PostgresConnectorCredentialRepository`, `PostgresConnectorUsageLedgerRepository` | `packages/db/src/repositories/connector-credentials.ts`, `connector-usage-ledger.ts` | `connector-credentials.test.ts`, `connector-usage-ledger.test.ts` |
-| Device broker and bounded device-proxy contract (transport not wired) | `createConnectorDeviceBroker`, `normalizeConnectorDeviceProxyRequest`, `deviceProxySuccess`, `NullDeviceProxy` | `packages/integrations/src/connectors/device-broker.ts`, `device-proxy.ts` | `device-broker.test.ts`, `device-proxy.test.ts` |
+| Device broker and bounded device-proxy contract | `createConnectorDeviceBroker`, `normalizeConnectorDeviceProxyRequest`, `deviceProxySuccess`, `NullDeviceProxy` | `packages/integrations/src/connectors/device-broker.ts`, `device-proxy.ts` | `device-broker.test.ts`, `device-proxy.test.ts` |
+| Relay pairing, encrypted local secret store and one-time loopback page | `createDevicePairingService`, `startPairingServer`, `openSecretStore` | `apps/web/src/server/device-pairing.server.ts`, `apps/device-daemon/src/pairing-server.ts`, `secret-store.ts` | `device-pairing.server.test.ts`, `pairing-server.test.ts`, `secret-store.test.ts` |
+| Durable connector call queue and device routes | `PostgresConnectorCallRepository`; `POST /api/device/claim`, `/api/device/calls/{id}/result`, `/api/device/heartbeat` | `packages/db/src/repositories/connector-calls.ts`, `apps/web/src/routes/api.device.*` | `connector-calls.test.ts`, `device-gateway.test.ts` |
+| Bounded credential verification | `CONNECTOR_VERIFY_TOOL_NAME`, `connectorVerifyDeviceResultSchema`, `verifyConnectorCredential` | `packages/shared/src/types/connector.ts`, `apps/web/src/server/connector-verification.server.ts` | shared contract tests, web server tests |
 
 Known gaps in the implemented subset:
 
-- The device daemon poll transport is designed only: there is no durable
-  connector call-queue table, no poll route and no worker binding, so
-  `NullDeviceProxy` fails every call closed as `INTEGRATION_UNAVAILABLE`.
+- The device daemon transport is implemented (`connector_calls`, claim/result/
+  heartbeat, worker binding). Only Kubernetes has a local live proof; the SaaS
+  adapters are fake-tested until a bounded live acceptance is approved.
 - `github.comment` and `github.rerun_workflow` are connector functions plus policy entries; `createSandboxToolImplementations` registers neither, so the agent cannot call them yet. Callers must dedupe by delivery id (no `Idempotency-Key` exists, §3.1.5).
 - The context reader never fetches job logs, deployments, pull-request bodies or issues; §3.1.4 marks those design-only.
 - Redaction at the context boundary is secret-pattern based (plus the live token); the PII and per-kind structural redactors in §4.6 are design-only.

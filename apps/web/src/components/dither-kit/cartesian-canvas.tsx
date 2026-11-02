@@ -2,6 +2,7 @@
 
 import { type RefObject, useEffect, useMemo, useRef } from "react"
 import { type ChartContextValue, useChart } from "./chart-context"
+import { useFrameLoop } from "./use-frame-loop"
 import {
   backingSize,
   bloomLayerStyle,
@@ -25,14 +26,17 @@ type LoopArgs = {
   stars: RefObject<Star[]>
 }
 
+type CanvasLoop = { tick: (now: number) => boolean }
+
 /**
- * The requestAnimationFrame paint loop — eases each series toward its target
- * surface, paints the dither fill (with the entrance reveal), then layers the
- * crosshair marker and winking stars on top. Lives outside the component so the
- * component stays small and this hot closure isn't re-created on every render.
- * Returns a cleanup that cancels the loop.
+ * The paint step — eases each series toward its target surface, paints the
+ * dither fill (with the entrance reveal), then layers the crosshair marker and
+ * winking stars on top. Lives outside the component so the component stays
+ * small and this hot closure isn't re-created on every render. The shared
+ * {@link useFrameLoop} hook owns scheduling; `tick` returns whether another
+ * frame is needed.
  */
-function startCartesianLoop({
+function createCartesianLoop({
   canvas,
   bloomCanvas,
   cols,
@@ -40,7 +44,7 @@ function startCartesianLoop({
   state,
   targets,
   stars,
-}: LoopArgs): (() => void) | undefined {
+}: LoopArgs): CanvasLoop | undefined {
   const c = canvas.getContext("2d")
   if (!c || cols <= 0 || rows <= 0) return undefined
   canvas.width = cols
@@ -102,7 +106,6 @@ function startCartesianLoop({
     })
   }
 
-  let raf = 0
   let tick = 0
   let last = 0
   let animStart = 0
@@ -115,9 +118,8 @@ function startCartesianLoop({
   let lastSelected: string | null | undefined = Symbol() as never
 
   const draw = (now: number) => {
-    raf = requestAnimationFrame(draw)
     const s = state.current
-    if (!s.ready) return
+    if (!s.ready) return false
     // Keep the bloom layer in sync with the crisp canvas while it's active.
     if (bloomCtx) {
       const on =
@@ -211,7 +213,8 @@ function startCartesianLoop({
         sigChanged
       )
     )
-      return
+      // Nothing to paint: keep the loop only for the winking star field.
+      return !reduce
     if (progChanged) {
       lastProg = prog
       needsFill = true
@@ -280,10 +283,11 @@ function startCartesianLoop({
         c.fillRect(sx, sy + 1, 1, 1)
       }
     }
+    // The star field keeps winking while motion is allowed.
+    return !reduce
   }
 
-  raf = requestAnimationFrame(draw)
-  return () => cancelAnimationFrame(raf)
+  return { tick: draw }
 }
 
 /**
@@ -357,19 +361,34 @@ export function CartesianCanvas() {
     starsRef.current = stars
   })
 
+  // One shared scheduler per canvas: parked offscreen or in a hidden tab,
+  // resumed by `wake()` after any render (hover, selection, data revisions).
+  const loopRef = useRef<CanvasLoop | null>(null)
+  const wake = useFrameLoop(
+    canvasRef,
+    (now) => loopRef.current?.tick(now) ?? false,
+    `${cols}x${rows}`
+  )
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    return startCartesianLoop({
-      canvas,
-      bloomCanvas: bloomRef.current,
-      cols,
-      rows,
-      state: stateRef,
-      targets: targetsRef,
-      stars: starsRef,
-    })
+    loopRef.current =
+      createCartesianLoop({
+        canvas,
+        bloomCanvas: bloomRef.current,
+        cols,
+        rows,
+        state: stateRef,
+        targets: targetsRef,
+        stars: starsRef,
+      }) ?? null
+    return () => {
+      loopRef.current = null
+    }
   }, [cols, rows])
+  useEffect(() => {
+    wake()
+  })
 
   const bloomActive = ctx.bloomOnHover
     ? ctx.isMouseInChart || ctx.hovered

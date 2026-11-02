@@ -7,7 +7,11 @@ import {
 	InMemoryRateLimitRepository,
 } from "@isolate/db";
 import { hashConnectorDeviceToken } from "@isolate/integrations";
-import { asOrganizationId, type OrganizationId } from "@isolate/shared";
+import {
+	asOrganizationId,
+	CONNECTOR_VERIFY_TOOL_NAME,
+	type OrganizationId,
+} from "@isolate/shared";
 import {
 	createDeviceGateway,
 	type DeviceGateway,
@@ -45,6 +49,7 @@ type Harness = {
 	credentialAId: string;
 	credentialBId: string;
 	credentialCId: string;
+	credentialRevokedId: string;
 };
 
 async function createHarness(
@@ -130,6 +135,15 @@ async function createHarness(
 		credentialRef: "keychain:isolate/grafana",
 		status: "pending_validation",
 	});
+	const credentialRevoked = await credentials.create({
+		organizationId: ORG_A,
+		deviceId: deviceA.id,
+		connectorId: "datadog",
+		displayName: "Revoked Datadog",
+		authKind: "api_key",
+		credentialRef: "keychain:isolate/datadog",
+		status: "revoked",
+	});
 	const dependencies: DeviceGatewayDependencies = {
 		devices,
 		credentials,
@@ -155,6 +169,7 @@ async function createHarness(
 		credentialAId: credentialA.id,
 		credentialBId: credentialB.id,
 		credentialCId: credentialC.id,
+		credentialRevokedId: credentialRevoked.id,
 	};
 }
 
@@ -218,16 +233,22 @@ async function readResponse(
 
 async function enqueueCall(
 	harness: Harness,
-	overrides: { deviceId?: string; credentialId?: string } = {},
+	overrides: {
+		deviceId?: string;
+		credentialId?: string;
+		connectorId?: string;
+		toolName?: string;
+		params?: Record<string, unknown>;
+	} = {},
 ): Promise<string> {
 	const call = await harness.calls.enqueue({
 		organizationId: ORG_A,
 		deviceId: overrides.deviceId ?? harness.deviceAId,
 		credentialId: overrides.credentialId ?? harness.credentialAId,
 		taskId: "99999999-9999-4999-8999-999999999999",
-		connectorId: "sentry",
-		toolName: "sentry.issue_context",
-		params: { issueId: "SENTRY-1" },
+		connectorId: overrides.connectorId ?? "sentry",
+		toolName: overrides.toolName ?? "sentry.issue_context",
+		params: overrides.params ?? { issueId: "SENTRY-1" },
 		ttlMs: 60_000,
 	});
 	return call.id;
@@ -369,6 +390,108 @@ describe("device gateway claim", () => {
 		now = new Date("2026-11-01T00:02:00.000Z");
 		const response = await harness.gateway.handleClaim(claimRequest(TOKEN_A));
 		expect(await readResponse(response, [TOKEN_A])).toEqual({ call: null });
+	});
+});
+
+describe("device gateway connector verification", () => {
+	test("hands a pending credential its verification call without spending the ledger", async () => {
+		const consumed: string[] = [];
+		const harness = await createHarness({
+			usage: {
+				async consume(credentialId) {
+					consumed.push(credentialId);
+					return { consumed: true, requestCount: 1 };
+				},
+			},
+		});
+		const callId = await enqueueCall(harness, {
+			deviceId: harness.deviceCId,
+			credentialId: harness.credentialCId,
+			connectorId: "grafana",
+			toolName: CONNECTOR_VERIFY_TOOL_NAME,
+			params: {},
+		});
+
+		const response = await harness.gateway.handleClaim(claimRequest(TOKEN_C));
+		const body = await readResponse(response, [TOKEN_C]);
+		const call = body.call as Record<string, unknown>;
+
+		expect(call.id).toBe(callId);
+		expect(call.toolName).toBe(CONNECTOR_VERIFY_TOOL_NAME);
+		expect(call.connectorId).toBe("grafana");
+		expect(call.params).toEqual({});
+		expect(call.credentialRef).toBe("keychain:isolate/grafana");
+		// Verification is one bounded read, never a billable free-tier call.
+		expect(consumed).toEqual([]);
+		expect(harness.calls.peek(callId)?.status).toBe("claimed");
+	});
+
+	test("still withholds a normal tool from the same pending credential", async () => {
+		let clock = new Date("2026-11-01T00:00:00.000Z").getTime();
+		const harness = await createHarness({ now: () => new Date(clock) });
+		const verifyId = await enqueueCall(harness, {
+			deviceId: harness.deviceCId,
+			credentialId: harness.credentialCId,
+			connectorId: "grafana",
+			toolName: CONNECTOR_VERIFY_TOOL_NAME,
+			params: {},
+		});
+		clock += 1_000;
+		const normalId = await enqueueCall(harness, {
+			deviceId: harness.deviceCId,
+			credentialId: harness.credentialCId,
+			connectorId: "grafana",
+			toolName: "grafana.rule_context",
+			params: { ruleId: "rule-1" },
+		});
+
+		const body = await readResponse(
+			await harness.gateway.handleClaim(
+				claimRequestWith({ token: TOKEN_C, limit: "10" }),
+			),
+			[TOKEN_C],
+		);
+		const calls = body.calls as Array<{ id: string; toolName: string }>;
+		expect(calls.map((call) => call.id)).toEqual([verifyId]);
+		expect(calls[0]?.toolName).toBe(CONNECTOR_VERIFY_TOOL_NAME);
+		expect(harness.calls.peek(normalId)?.status).toBe("failed");
+		expect(harness.calls.peek(normalId)?.errorCode).toBe(
+			"INTEGRATION_UNAVAILABLE",
+		);
+	});
+
+	test("re-verifies an already active credential", async () => {
+		const harness = await createHarness();
+		const callId = await enqueueCall(harness, {
+			toolName: CONNECTOR_VERIFY_TOOL_NAME,
+			params: {},
+		});
+		const body = await readResponse(
+			await harness.gateway.handleClaim(claimRequest(TOKEN_A)),
+			[TOKEN_A],
+		);
+		expect((body.call as { id?: string }).id).toBe(callId);
+		expect(harness.calls.peek(callId)?.status).toBe("claimed");
+	});
+
+	test("never hands out a revoked credential, even for verification", async () => {
+		const harness = await createHarness();
+		const callId = await enqueueCall(harness, {
+			credentialId: harness.credentialRevokedId,
+			connectorId: "datadog",
+			toolName: CONNECTOR_VERIFY_TOOL_NAME,
+			params: {},
+		});
+
+		const body = await readResponse(
+			await harness.gateway.handleClaim(claimRequest(TOKEN_A)),
+			[TOKEN_A],
+		);
+		expect(body).toEqual({ call: null });
+		expect(harness.calls.peek(callId)?.status).toBe("failed");
+		expect(harness.calls.peek(callId)?.errorCode).toBe(
+			"INTEGRATION_UNAVAILABLE",
+		);
 	});
 });
 

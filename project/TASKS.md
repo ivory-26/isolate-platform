@@ -14,7 +14,7 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 
 Contracts committed first on `main`: `7bcef20` (verification tool/reason codes, frozen server seam, connector-aware pairing URL). Coordinator truth pass: per-connector stale status paragraphs, ledger wording, 8 KiB pairing-field cap, and A1 label corrected.
 
-Gates: typecheck 9/9 · **3118 pass / 10 skip / 0 fail ×2** · biome 0 errors (10 pre-existing warnings) · acceptance 7/7 with zero provider credentials · security PASS (550 source/migration files, 948 tracked) · web production build + `check:build` + 34-check client sweep.
+Gates: typecheck 9/9 · **3118 pass / 10 skip / 0 fail ×2** · biome 0 errors (10 pre-existing warnings) · acceptance 7/7 with zero provider credentials · security PASS (550 source/migration files, 949 tracked) · web production build + `check:build` + 34-check client sweep.
 
 Remaining: A1 unsupported, A4 out of scope, Datadog canonical re-fetch and Kafka bridge design-only, SaaS live acceptance pending, authenticated live visual QA unavailable here, GitHub operator env is a deployment action. No provider keys used.
 

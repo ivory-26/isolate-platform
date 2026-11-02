@@ -35,7 +35,7 @@ Only `active` is described as Connected or verified. Verification proves one bou
 - `bun test --no-env-file` — **3118 pass / 10 skip / 0 fail** (3128 tests, 219 files), twice, identical.
 - `bunx biome check apps packages scripts` — **0 errors**, 10 pre-existing warnings.
 - `bun --no-env-file scripts/acceptance-offline.ts` — **7/7 PASS** with zero provider credentials.
-- `bun run security:check` — **PASS** (550 source/migration files, 948 tracked files).
+- `bun run security:check` — **PASS** (550 source/migration files, 949 tracked files).
 - `apps/web` production build — success (client + SSR); `check:build` PASS (landing 200, anonymous `/runs` and `/organizations` redirect to `/login`, `/login` 200); client sweep **34 checks / 105 files**.
 - No provider keys were used and no live vendor call was made in this wave.
 

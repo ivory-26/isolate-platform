@@ -125,7 +125,7 @@ describe("buildRelayInstallCommand", () => {
 				name: "sre-laptop",
 			}),
 		).toBe(
-			`curl -fsSL https://isolate.example.com/install/relay.sh | sh -s -- --server https://isolate.example.com --token ${token} --name sre-laptop`,
+			`curl -fsSL https://isolate.example.com/api/install/relay | sh -s -- --server https://isolate.example.com --token ${token} --name sre-laptop`,
 		);
 	});
 

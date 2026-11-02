@@ -237,7 +237,7 @@ function RunsPage() {
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="h-9 w-[260px] pl-0 text-[10px] font-medium">
+								<TableHead className="h-9 w-[260px] text-[10px] font-medium">
 									Task
 								</TableHead>
 								<TableHead className="text-[10px] font-medium">
@@ -269,7 +269,7 @@ function RunsPage() {
 									key={row.taskId}
 									className="border-line-subtle/70 hover:bg-elevated/50"
 								>
-									<TableCell className="max-w-[320px] py-2.5 pl-0">
+									<TableCell className="max-w-[320px] py-2.5">
 										<Link
 											to="/runs/$taskId"
 											params={{ taskId: row.taskId }}
@@ -319,7 +319,7 @@ function RunsPage() {
 									<TableCell className="text-[11px] text-ink-secondary">
 										<RelativeTime value={row.createdAt} />
 									</TableCell>
-									<TableCell className="pr-0 text-right text-[11px] text-ink-muted">
+									<TableCell className="text-right text-[11px] text-ink-muted">
 										<RelativeTime value={row.updatedAt} />
 									</TableCell>
 								</TableRow>

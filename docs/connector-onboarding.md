@@ -2,13 +2,13 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design of record; credential foundation implemented, connect UI and device transport pending** |
+| Status | **Partially implemented; wave 23 adds browser-driven pairing and per-organization GitHub installation** |
 | Audience | Product, web, worker and connector authors building the user-connect flow |
-| Date | 2026-11-01 |
+| Date | 2026-11-02 |
 | Architecture of record | [`docs/connector-usage.md`](connector-usage.md) — this page builds on it and does not replace it |
 | Security boundaries | [`ARCHITECTURE.md`](../ARCHITECTURE.md) §7–§11 |
 | Vendor facts | Per-connector pages under [`docs/connectors/`](connectors/); free-tier matrix in [`free-tier-catalog.md`](connectors/free-tier-catalog.md) |
-| Implemented today | Generic signed webhook intake; GitHub trigger, read-only context and two scoped-write functions (not agent-callable). Wave 17 added migration `0010_connectors.sql` (device registry, credential metadata, usage ledger), tenant-scoped repositories and fakes, and device token/proxy/broker contracts. The connect UI and the device-daemon poll transport are not wired |
+| Implemented today | Generic signed webhook intake; GitHub trigger, read context and two scoped writes; ten device-held connectors; migration `0010` (device registry, credential metadata, ledger), `0011` (durable `connector_calls` queue) and `0012`–`0015` hardening; device register/list/revoke/rotate and claim/result/heartbeat routes; metadata-only connect/list/revoke routes and the Devices/Connectors UI; worker tool-registry binding behind `DEVICE_GATEWAY_ENABLED`. Wave 23 adds per-organization GitHub installation, trigger subscriptions/delivery receipts, and browser/relay pairing with a local secret store. The remaining operator-shaped step is the relay install command, not a `.env` key |
 
 ## 0. The product rule this page exists to enforce
 
@@ -266,7 +266,7 @@ provider key, so it has nothing to encrypt or decrypt.
   `last_seen_at`, usage counters and sha256 token hashes. It yields no provider
   key; guessing a 256-bit token from its hash is infeasible.
 
-**Device daemon poll flow (design; transport not wired).**
+**Device daemon poll flow (implemented; browser pairing is wave 23).**
 
 ```text
 1 register   device token generated locally → only sha256 hex sent
@@ -291,11 +291,14 @@ re-checked by `deviceProxySuccess`; failures are limited to
 `INTEGRATION_UNAVAILABLE`, `RATE_LIMITED`, `POLICY_DENIED`,
 `VALIDATION_FAILED`, `NOT_FOUND` and `INTERNAL` with fixed text.
 
-**Current limitation.** No durable connector call-queue table exists, no poll
-endpoint is deployed and the worker does not bind the broker. Until a queue
-migration lands, the transport is designed only, a single worker process is
-assumed, and `NullDeviceProxy` fails every call closed as
-`INTEGRATION_UNAVAILABLE`. Do not describe the poll path as available.
+**Current limitation.** The durable `connector_calls` queue (`0011`) and the
+claim/result/heartbeat routes are implemented, and the worker binds the broker
+when `DEVICE_GATEWAY_ENABLED=true`; calls fail closed as
+`INTEGRATION_UNAVAILABLE` when no active device can serve them. The remaining
+gap is the browser-driven pairing and local secret store: until wave 23 lands,
+an operator still creates the device token and writes the relay's vendor
+credential by hand. Do not describe the pairing path as available before that
+lane is merged and proven.
 
 ### 2.4 Device registration, rotation, revocation and audit
 
@@ -692,9 +695,12 @@ onboarding plan. Where this page is more specific, it is additive:
   because it is the platform's own App. The target per-organization GitHub
   installation is a separate, later change and is not claimed here.
 
-The implemented part of this page is the credential foundation: migration 0010,
-the three tenant-scoped repositories with fakes, and the device token, proxy and
-broker contracts. The connect UI, worker binding and device-daemon poll
-transport are designed only. The GitHub and generic-webhook path described in
-[`connectors/README.md`](connectors/README.md) remains the only working
-connector execution.
+The implemented part of this page now includes migration `0010`–`0011`, the
+tenant-scoped device/credential/ledger/call repositories with fakes, device
+register/list/revoke/rotate and claim/result/heartbeat routes, the metadata-only
+connect/list/revoke routes and Devices/Connectors UI, and per-task connector tool
+binding behind `DEVICE_GATEWAY_ENABLED`. The GitHub and generic-webhook path
+described in [`connectors/README.md`](connectors/README.md) remains the only
+proven end-to-end connector execution. Wave 23 adds browser/relay pairing,
+per-organization GitHub installation and trigger subscriptions; update this
+paragraph only after those lanes are merged and proven.

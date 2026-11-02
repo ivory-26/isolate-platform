@@ -15,15 +15,15 @@ import {
 	type GitHubSetupResult,
 	type ImportRepositoriesInput,
 	type InstallationRepositoriesReadModel,
-	type RepositoriesImportResult,
-	type StartGitHubInstallResult,
 	importRepositoriesSchema,
 	listRepositoriesSchema,
 	type RegisterRepositoryInput,
+	type RepositoriesImportResult,
 	type RepositoriesQuery,
 	type RepositoriesReadModel,
 	type RepositorySummary,
 	registerRepositorySchema,
+	type StartGitHubInstallResult,
 } from "./contracts";
 import {
 	prepareRepositoryCreate,
@@ -121,9 +121,7 @@ export const importRepositories = createServerFn({ method: "POST" })
 		return parsed.data;
 	})
 	.handler(
-		async ({
-			data,
-		}): Promise<GitHubSetupResult<RepositoriesImportResult>> =>
+		async ({ data }): Promise<GitHubSetupResult<RepositoriesImportResult>> =>
 			runGitHubSetupAction((scope, service) =>
 				service.importRepositories(scope, data),
 			),

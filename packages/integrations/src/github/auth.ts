@@ -325,7 +325,8 @@ function base64UrlFromText(text: string): string {
 	return base64UrlFromBytes(new TextEncoder().encode(text));
 }
 
-function statusError(status: number): PlatformError {	switch (status) {
+function statusError(status: number): PlatformError {
+	switch (status) {
 		case 401:
 			// The error union has no AUTH_REQUIRED; a rejected App JWT is a
 			// broker-unavailable condition, never a caller-input failure.

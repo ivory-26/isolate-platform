@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	InMemoryGitHubInstallationRepository,
 	type ArtifactRow,
+	InMemoryGitHubInstallationRepository,
 	type PgSql,
 	type RepositoryRepository,
 	type RepositoryRow,
@@ -659,7 +659,13 @@ describe("wave 23 per-organization GitHub installation", () => {
 				}),
 			).toBeNull();
 		}
-		for (const fallbackInstallationId of ["0", "-1", "12ab", "1".repeat(21), null]) {
+		for (const fallbackInstallationId of [
+			"0",
+			"-1",
+			"12ab",
+			"1".repeat(21),
+			null,
+		]) {
 			expect(
 				await resolveGitHubInstallationIdForOrganization({
 					organizationId: ORG_A,

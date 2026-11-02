@@ -4,6 +4,7 @@ import {
 	type ArtifactRepository,
 	type ConnectorCallRepository,
 	createDb,
+	type GitHubInstallationRepository,
 	type PgSql,
 	PostgresArtifactRepository,
 	PostgresAuditRepository,
@@ -23,7 +24,6 @@ import {
 	PostgresTaskRepository,
 	PostgresToolInvocationRepository,
 	PostgresUsageRepository,
-	type GitHubInstallationRepository,
 	type RepositoryRepository,
 	type RunEventRepository,
 	type TaskAttemptRepository,
@@ -505,9 +505,10 @@ export function selectGitHubAppCredentials(
 
 export type GitHubInstallationIdResolverInput = {
 	readonly organizationId: OrganizationId;
-	readonly installations:
-		| Pick<GitHubInstallationRepository, "findActiveByOrganization">
-		| null;
+	readonly installations: Pick<
+		GitHubInstallationRepository,
+		"findActiveByOrganization"
+	> | null;
 	readonly fallbackInstallationId?: string | null;
 };
 
@@ -536,10 +537,9 @@ export async function resolveGitHubInstallationIdForOrganization(
 			: null;
 	if (input.installations === null) return fallback;
 	try {
-		const installation =
-			await input.installations.findActiveByOrganization(
-				input.organizationId,
-			);
+		const installation = await input.installations.findActiveByOrganization(
+			input.organizationId,
+		);
 		if (
 			installation !== null &&
 			installation.status === "active" &&
@@ -1020,8 +1020,9 @@ export async function createConfiguredWorkerComposition(
 					resolveInstallationId,
 				});
 	if (providerForOrganization !== null && sandbox.real) {
-		overrides.resolveSandboxEnv =
-			createOrganizationSandboxEnvResolver(providerForOrganization);
+		overrides.resolveSandboxEnv = createOrganizationSandboxEnvResolver(
+			providerForOrganization,
+		);
 		// Push is the approval-gated action. Opt out explicitly with
 		// GITHUB_PUSH_ENABLED=false; without a broker, tasks stop at review_ready.
 		overrides.pushEnabled = env.GITHUB_PUSH_ENABLED?.trim() !== "false";

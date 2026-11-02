@@ -23,7 +23,8 @@ export const SETUP_STATE_SQL = `SELECT
 	) AS relay_active,
 	EXISTS (
 		SELECT 1 FROM connector_credentials
-		WHERE organization_id = $1 AND status = 'active'
+		WHERE organization_id = $1
+		  AND status IN ('active', 'pending_validation')
 	) AS connection_active,
 	EXISTS (
 		SELECT 1 FROM integration_subscriptions
@@ -44,7 +45,8 @@ export const SETUP_STATE_SQL = `SELECT
 	) AS has_connection,
 	(
 		SELECT connector_id FROM connector_credentials
-		WHERE organization_id = $1 AND status = 'active'
+		WHERE organization_id = $1
+		  AND status IN ('active', 'pending_validation')
 		ORDER BY created_at ASC, id ASC
 		LIMIT 1
 	) AS active_connector_id`;

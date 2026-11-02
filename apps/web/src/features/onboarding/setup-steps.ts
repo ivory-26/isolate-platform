@@ -92,7 +92,7 @@ export function buildRelayInstallCommand(input: {
 	if (!/^[A-Za-z0-9._~-]{16,512}$/.test(token)) return null;
 	const name = input.name.trim().slice(0, 100);
 	if (name.length === 0) return null;
-	return `curl -fsSL ${shellQuote(`${serverUrl}/install/relay.sh`)} | sh -s -- --server ${shellQuote(serverUrl)} --token ${shellQuote(token)} --name ${shellQuote(name)}`;
+	return `curl -fsSL ${shellQuote(`${serverUrl}/api/install/relay`)} | sh -s -- --server ${shellQuote(serverUrl)} --token ${shellQuote(token)} --name ${shellQuote(name)}`;
 }
 
 function normalizeServerUrl(value: string): string | null {

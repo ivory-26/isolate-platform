@@ -18,7 +18,6 @@ import { Label } from "@/components/ui/label";
 import {
 	AUTH_KIND_LABELS,
 	type DeviceView,
-	parseScopeTokens,
 } from "@/features/devices/contracts";
 import type { IntegrationCatalogEntry } from "../catalog";
 import {
@@ -112,18 +111,20 @@ export function ConnectPairingPanel({
 		if (create.isPending || activeRelays.length === 0) return;
 		setError(null);
 		const form = new FormData(event.currentTarget);
-		const scopes = parseScopeTokens(String(form.get("scopes") ?? ""));
-		if (!scopes.ok) {
-			setError(scopes.error);
-			return;
-		}
+		// The keychain item name is an implementation detail. Generate an
+		// opaque, unique reference; the user only names the connection and
+		// enters the provider credential on the relay's loopback page.
+		const suffix =
+			typeof crypto !== "undefined" && "randomUUID" in crypto
+				? crypto.randomUUID().slice(0, 8)
+				: `${Date.now().toString(36)}`;
 		create.mutate({
 			relayId: String(form.get("relayId") ?? ""),
 			connectorId: entry.id,
 			displayName: String(form.get("displayName") ?? ""),
 			authKind: entry.defaultAuthKind,
-			credentialRef: String(form.get("credentialRef") ?? ""),
-			scopes: scopes.scopes,
+			credentialRef: `isolate/${entry.id}/${suffix}`,
+			scopes: [],
 		});
 	}
 
@@ -261,36 +262,11 @@ export function ConnectPairingPanel({
 							/>
 						</div>
 					</div>
-					<div className="space-y-1.5">
-						<Label htmlFor="pairing-credential-ref">Keychain item name</Label>
-						<Input
-							id="pairing-credential-ref"
-							name="credentialRef"
-							required
-							maxLength={200}
-							autoComplete="off"
-							spellCheck={false}
-							defaultValue={`isolate/${entry.id}/default`}
-							aria-describedby="pairing-credential-ref-hint"
-						/>
-						<p
-							id="pairing-credential-ref-hint"
-							className="text-xs leading-5 text-ink-muted"
-						>
-							The name the relay uses for its encrypted local store. Never paste
-							the provider key here; the key goes on the relay page.
-						</p>
-					</div>
-					<div className="space-y-1.5">
-						<Label htmlFor="pairing-scopes">Scopes (optional)</Label>
-						<Input
-							id="pairing-scopes"
-							name="scopes"
-							autoComplete="off"
-							spellCheck={false}
-							placeholder="read:events read:projects"
-						/>
-					</div>
+					<ConsoleNote role="note" icon={KeyIcon}>
+						You will enter the provider credential on the relay&apos;s one-time
+						loopback page. Isolate generates the local store reference and never
+						sees the key.
+					</ConsoleNote>
 					<ConsoleNote role="note" icon={LockIcon}>
 						{entry.credentialHint}
 					</ConsoleNote>

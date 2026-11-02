@@ -4,21 +4,21 @@ import type {
 	RepositoryId,
 	UserId,
 } from "@isolate/shared";
-import type {
-	EventDeliveryRow,
-	GitHubInstallationRow,
-	IntegrationSubscriptionRow,
-} from "../schema";
 import {
 	type ListInboxDeliveriesInput,
 	type ListRecentDeliveriesInput,
 	normalizeEventDeliveryInput,
 	normalizeEventDeliveryStatusUpdate,
+	paginateDeliveries,
 	type RecordEventDeliveryInput,
 	type RecordEventDeliveryResult,
 	type UpdateEventDeliveryStatusInput,
-	paginateDeliveries,
 } from "../repositories/event-deliveries";
+import {
+	type GitHubInstallationRepository,
+	normalizeGitHubInstallationInput,
+	type UpsertGitHubInstallationInput,
+} from "../repositories/github-installations";
 import {
 	type CreateIntegrationSubscriptionInput,
 	type IntegrationEventMatch,
@@ -29,11 +29,11 @@ import {
 	subscriptionMatchesEvent,
 	type UpdateIntegrationSubscriptionInput,
 } from "../repositories/integration-subscriptions";
-import {
-	type GitHubInstallationRepository,
-	normalizeGitHubInstallationInput,
-	type UpsertGitHubInstallationInput,
-} from "../repositories/github-installations";
+import type {
+	EventDeliveryRow,
+	GitHubInstallationRow,
+	IntegrationSubscriptionRow,
+} from "../schema";
 
 /**
  * In-memory twins for the wave-23 event-first tables. Each fake shares the

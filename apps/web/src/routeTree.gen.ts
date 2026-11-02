@@ -45,6 +45,7 @@ import { Route as ApiDeviceRotateRouteImport } from './routes/api.device.rotate'
 import { Route as ApiGithubCallbackRouteImport } from './routes/api.github.callback'
 import { Route as ApiGithubInstallRouteImport } from './routes/api.github.install'
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api.github.repositories'
+import { Route as ApiInstallRelayRouteImport } from './routes/api.install.relay'
 import { Route as ApiRepositoriesImportRouteImport } from './routes/api.repositories.import'
 import { Route as ApiTracesTaskIdRouteImport } from './routes/api.traces.$taskId'
 import { Route as ApiWebhooksSplatRouteImport } from './routes/api.webhooks.$'
@@ -234,6 +235,11 @@ const ApiGithubRepositoriesRoute = ApiGithubRepositoriesRouteImport.update({
   path: '/api/github/repositories',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInstallRelayRoute = ApiInstallRelayRouteImport.update({
+  id: '/api/install/relay',
+  path: '/api/install/relay',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiRepositoriesImportRoute = ApiRepositoriesImportRouteImport.update({
   id: '/api/repositories/import',
   path: '/api/repositories/import',
@@ -312,6 +318,7 @@ export interface FileRoutesByFullPath {
   '/api/github/callback': typeof ApiGithubCallbackRoute
   '/api/github/install': typeof ApiGithubInstallRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/install/relay': typeof ApiInstallRelayRoute
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
@@ -356,6 +363,7 @@ export interface FileRoutesByTo {
   '/api/github/callback': typeof ApiGithubCallbackRoute
   '/api/github/install': typeof ApiGithubInstallRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/install/relay': typeof ApiInstallRelayRoute
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
@@ -403,6 +411,7 @@ export interface FileRoutesById {
   '/api/github/callback': typeof ApiGithubCallbackRoute
   '/api/github/install': typeof ApiGithubInstallRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/install/relay': typeof ApiInstallRelayRoute
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
@@ -450,6 +459,7 @@ export interface FileRouteTypes {
     | '/api/github/callback'
     | '/api/github/install'
     | '/api/github/repositories'
+    | '/api/install/relay'
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
@@ -494,6 +504,7 @@ export interface FileRouteTypes {
     | '/api/github/callback'
     | '/api/github/install'
     | '/api/github/repositories'
+    | '/api/install/relay'
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
@@ -540,6 +551,7 @@ export interface FileRouteTypes {
     | '/api/github/callback'
     | '/api/github/install'
     | '/api/github/repositories'
+    | '/api/install/relay'
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
@@ -571,6 +583,7 @@ export interface RootRouteChildren {
   ApiGithubCallbackRoute: typeof ApiGithubCallbackRoute
   ApiGithubInstallRoute: typeof ApiGithubInstallRoute
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
+  ApiInstallRelayRoute: typeof ApiInstallRelayRoute
   ApiRepositoriesImportRoute: typeof ApiRepositoriesImportRoute
   ApiTracesTaskIdRoute: typeof ApiTracesTaskIdRoute
   ApiWebhooksSplatRoute: typeof ApiWebhooksSplatRoute
@@ -835,6 +848,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGithubRepositoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/install/relay': {
+      id: '/api/install/relay'
+      path: '/api/install/relay'
+      fullPath: '/api/install/relay'
+      preLoaderRoute: typeof ApiInstallRelayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/repositories/import': {
       id: '/api/repositories/import'
       path: '/api/repositories/import'
@@ -983,6 +1003,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubCallbackRoute: ApiGithubCallbackRoute,
   ApiGithubInstallRoute: ApiGithubInstallRoute,
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
+  ApiInstallRelayRoute: ApiInstallRelayRoute,
   ApiRepositoriesImportRoute: ApiRepositoriesImportRoute,
   ApiTracesTaskIdRoute: ApiTracesTaskIdRoute,
   ApiWebhooksSplatRoute: ApiWebhooksSplatRoute,

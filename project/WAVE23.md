@@ -14,6 +14,28 @@ audit, rate limits, OTLP. The web app has a landing page, auth, overview, runs,
 approvals, repositories, workflows library, usage, settings, devices/connectors.
 2,600+ tests pass; 0010–0015 are applied.
 
+### 1.1 Corrections to the spec's baseline table
+
+The remote spec's "repository baseline at 2 November 2026" is stale in both directions.
+Against current `main`:
+
+- The device call queue and poll transport **are** implemented (`connector_calls`,
+  `POST /api/device/claim`, `POST /api/device/calls/{id}/result`,
+  `POST /api/device/heartbeat`), not design-only. The missing piece is the
+  browser-driven pairing and local secret store, not the transport.
+- The connector tool registry is bound for 31 typed tools behind
+  `DEVICE_GATEWAY_ENABLED=true`, with risk bands and ledger consumption.
+- Datadog, New Relic, Honeycomb, Axiom and SigNoz adapters exist; the spec lists
+  Datadog as design-only. Kafka bridge and per-provider webhook routing remain the
+  real gaps.
+- Sentry/Grafana/PagerDuty normalization and device context handlers exist; their
+  tenant-scoped webhook routes and subscription rules do not.
+- There is **no multi-agent/subagent tree** in the backend. Run detail can show the
+  real execution tree (task → attempt → agent turn → tool/connector/validation/
+  approval/artifact); it must not invent delegated agents.
+- GitHub is deployment-bound by `GITHUB_APP_INSTALLATION_ID`; the per-organization
+  installation and repository picker are new work.
+
 ## 2. What is missing or wrong
 
 1. The product is **not event-first**. The primary action is a manual task form that
@@ -57,6 +79,42 @@ Events create tasks; tasks run through the existing durable worker.
 Manual delegation is secondary: a topbar action and a two-field composer at `/submit`
 (repository + goal; acceptance criteria optional; workflow/branch/budgets under
 "Advanced"). Workflows leave primary navigation but the route remains available.
+
+### Home composition (event-first)
+
+In order, every section answering one operator question:
+
+1. **Setup banner** (only when incomplete): the next incomplete step with one
+   action; the full checklist lives on `/onboarding`.
+2. **Needs you**: pending approvals first, then failed runs that are retryable.
+   If both are empty, a quiet "Nothing needs a decision" row.
+3. **Running now**: active/queued tasks with source badge (Manual, GitHub, Sentry…),
+   repository, stage and elapsed time.
+4. **Inbox**: the latest 8 deliveries with source, event, severity, matched
+   repository, status (task created / deduplicated / ignored / rejected) and a
+   task link. "Open inbox" goes to the paginated page.
+5. **Sources**: GitHub installation and connected connectors with relay name,
+   status, last verified/event, trigger count and a link to `/integrations`.
+   Never a green "all systems operational" claim without a real heartbeat.
+6. **Metrics**: Needs you, Running, Events 24h, Autonomous tasks 24h. A metric
+   with no measured data shows a dash or zero with a hint, never an estimate.
+
+New-org empty state: the three setup steps, not "No data". Existing-org empty
+inbox: explain how triggers create tasks and link to Integrations.
+
+### Delegate composer
+
+Manual delegation is secondary. Fields:
+
+- Repository (select from imported repositories; no UUID input)
+- Goal (textarea)
+- Acceptance criteria (optional, one per line)
+- Advanced (collapsed): file ownership, branch (default `task/manual-<short id>`),
+  workflow version (default first published), budgets (defaults).
+
+If no repository exists, the primary action is "Connect a repository" and the
+form is disabled. The page explains that connected sources normally create tasks
+without this form.
 
 ### Onboarding flow
 

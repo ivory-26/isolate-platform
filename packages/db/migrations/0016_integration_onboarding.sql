@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS integration_subscriptions (
 CREATE INDEX IF NOT EXISTS integration_subscriptions_org_connector_enabled_idx
 	ON integration_subscriptions (organization_id, connector_id, enabled);
 
+CREATE UNIQUE INDEX IF NOT EXISTS integration_subscriptions_org_id_unique
+	ON integration_subscriptions (organization_id, id);
+
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'integration_subscriptions_org_repository_fk') THEN ALTER TABLE integration_subscriptions ADD CONSTRAINT integration_subscriptions_org_repository_fk FOREIGN KEY (organization_id, repository_id) REFERENCES repositories (organization_id, id) ON DELETE SET NULL; END IF; END $$;
 
 -- ---------------------------------------------------------------------------

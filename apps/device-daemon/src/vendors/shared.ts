@@ -89,11 +89,44 @@ export async function runAdapter(
 	}
 }
 
-/** Fails closed when a vendor dependency cannot be built from config/env. */
-export async function withDependencies<T>(
-	dependencies: T | null,
+/** Why a per-call settings resolution could not produce dependencies. */
+export type SettingsFailureReason = "CONFIG_REQUIRED" | "INVALID_SELECTOR";
+
+/**
+ * Resolution outcome shared by every vendor handler and by `connector.verify`.
+ * A missing secret/selector and a malformed stored selector are distinct here
+ * so verification can report `CONFIG_REQUIRED`, while normal tool calls stay a
+ * fixed `INTEGRATION_UNAVAILABLE` / `VALIDATION_FAILED`.
+ */
+export type SettingsResult<T> =
+	| { readonly ok: true; readonly deps: T }
+	| { readonly ok: false; readonly reason: SettingsFailureReason };
+
+export function settingsOk<T>(deps: T): SettingsResult<T> {
+	return { ok: true, deps };
+}
+
+export function settingsFailure<T>(
+	reason: SettingsFailureReason,
+): SettingsResult<T> {
+	return { ok: false, reason };
+}
+
+/**
+ * Runs one adapter call with resolved settings. A malformed stored selector is
+ * a fixed `VALIDATION_FAILED`; every missing piece is `INTEGRATION_UNAVAILABLE`.
+ * Both fail before the adapter (and therefore before any fetch).
+ */
+export async function runWithSettings<T>(
+	settings: SettingsResult<T>,
 	run: (dependencies: T) => Promise<unknown>,
 ): Promise<DispatchOutcome> {
-	if (dependencies === null) return failure("INTEGRATION_UNAVAILABLE");
-	return runAdapter(() => run(dependencies));
+	if (!settings.ok) {
+		return failure(
+			settings.reason === "INVALID_SELECTOR"
+				? "VALIDATION_FAILED"
+				: "INTEGRATION_UNAVAILABLE",
+		);
+	}
+	return runAdapter(() => run(settings.deps));
 }

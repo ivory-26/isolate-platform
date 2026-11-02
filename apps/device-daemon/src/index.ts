@@ -15,7 +15,7 @@ import { openSecretStore } from "./secret-store";
  *
  * Boot order: load and validate the device-local config, read the bearer token
  * from the daemon's own environment, open the encrypted secret store, start the
- * loopback pairing page when enabled, build the 40-entry connector table, then
+ * loopback pairing page when enabled, build the 41-entry connector table, then
  * poll. The startup summary lists configured vendor names, the poll interval
  * and the pairing listener URL (never a code or a secret) only — never a token,
  * env value, provider URL with credentials, tool param or provider response.

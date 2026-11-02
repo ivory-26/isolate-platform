@@ -17,50 +17,81 @@ import {
 	readContextParams,
 	requiredService,
 } from "./context";
-import { failure, withDependencies } from "./shared";
+import { resolveOptionalSelector, resolveRequiredSelector } from "./selectors";
+import {
+	failure,
+	runWithSettings,
+	type SettingsResult,
+	settingsFailure,
+	settingsOk,
+} from "./shared";
 
 /**
- * New Relic handlers: one user API key from the paired store first, then the
- * legacy env var; the account id is non-secret configuration.
+ * New Relic settings: one user API key from the paired store first, then the
+ * legacy env var. The account id is a required selector; the optional GraphQL
+ * endpoint resolves from the paired selector or the static config.
  */
+export function resolveNewRelicSettings(
+	config: NewRelicVendorConfig | undefined,
+	env: Env,
+	fetchImpl: typeof fetch,
+	credentialRef: string,
+	secretStore?: SecretLookup,
+): SettingsResult<NewRelicContextDependencies> {
+	const apiKey = resolveVendorSecret(
+		config?.secretEnv,
+		"apiKey",
+		env,
+		credentialRef,
+		secretStore,
+	);
+	if (apiKey === null) return settingsFailure("CONFIG_REQUIRED");
+	const accountId = resolveRequiredSelector({
+		connectorId: "newrelic",
+		key: "accountId",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.accountId,
+	});
+	if (!accountId.ok) return settingsFailure(accountId.reason);
+	const endpoint = resolveOptionalSelector({
+		connectorId: "newrelic",
+		key: "endpoint",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.endpoint,
+	});
+	if (!endpoint.ok) return settingsFailure(endpoint.reason);
+	return settingsOk({
+		apiKey,
+		accountId: accountId.value,
+		fetchImpl,
+		...(endpoint.value === undefined ? {} : { endpoint: endpoint.value }),
+		...(config?.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+	});
+}
+
+/** New Relic handlers: paired selectors > static config > legacy env. */
 export function createNewRelicHandlers(
-	config: NewRelicVendorConfig,
+	config: NewRelicVendorConfig | undefined,
 	env: Env,
 	fetchImpl: typeof fetch,
 	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (
-		credentialRef: string,
-	): NewRelicContextDependencies | null => {
-		const apiKey = resolveVendorSecret(
-			config.secretEnv,
-			"apiKey",
-			env,
-			credentialRef,
-			secretStore,
-		);
-		if (apiKey === null) return null;
-		return {
-			apiKey,
-			accountId: config.accountId,
-			fetchImpl,
-			...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
-			...(config.timeoutMs === undefined
-				? {}
-				: { timeoutMs: config.timeoutMs }),
-		};
-	};
+	const settings = (credentialRef: string) =>
+		resolveNewRelicSettings(config, env, fetchImpl, credentialRef, secretStore);
+
 	return {
 		"newrelic.run_nrql": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				runNewRelicNrql(deps, params),
 			),
 		"newrelic.get_entity": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				getNewRelicEntity(deps, params),
 			),
 		"newrelic.list_alert_policies": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				listNewRelicAlertPolicies(deps, params),
 			),
 		"newrelic.context.fetch": async (params, context) => {
@@ -74,7 +105,7 @@ export function createNewRelicHandlers(
 			if (ref === null || service === null) {
 				return failure("VALIDATION_FAILED");
 			}
-			return withDependencies(dependencies(context.credentialRef), (deps) =>
+			return runWithSettings(settings(context.credentialRef), (deps) =>
 				fetchNewRelicContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					service,

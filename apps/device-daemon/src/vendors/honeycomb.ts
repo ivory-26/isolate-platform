@@ -17,7 +17,14 @@ import {
 	readContextParams,
 	requiredService,
 } from "./context";
-import { failure, withDependencies } from "./shared";
+import { resolveOptionalSelector, resolveRequiredSelector } from "./selectors";
+import {
+	failure,
+	runWithSettings,
+	type SettingsResult,
+	settingsFailure,
+	settingsOk,
+} from "./shared";
 
 /**
  * Honeycomb's fingerprint carries `dataset:trigger-id:alert-state`. The key is
@@ -49,47 +56,78 @@ function honeycombQueryKind(value: string): HoneycombQueryKind | null {
 	return HONEYCOMB_QUERY_KINDS.find((candidate) => candidate === value) ?? null;
 }
 
-/** Honeycomb handlers: paired key first, legacy env var second; one dataset. */
+/**
+ * Honeycomb settings: paired key first, legacy env var second. The dataset is a
+ * required selector and the API base is optional; both may come only from the
+ * paired entry, so no `vendors.honeycomb` config is required.
+ */
+export function resolveHoneycombSettings(
+	config: HoneycombVendorConfig | undefined,
+	env: Env,
+	fetchImpl: typeof fetch,
+	credentialRef: string,
+	secretStore?: SecretLookup,
+): SettingsResult<HoneycombToolDependencies> {
+	const apiKey = resolveVendorSecret(
+		config?.secretEnv,
+		"apiKey",
+		env,
+		credentialRef,
+		secretStore,
+	);
+	if (apiKey === null) return settingsFailure("CONFIG_REQUIRED");
+	const dataset = resolveRequiredSelector({
+		connectorId: "honeycomb",
+		key: "dataset",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.dataset,
+	});
+	if (!dataset.ok) return settingsFailure(dataset.reason);
+	const apiBaseUrl = resolveOptionalSelector({
+		connectorId: "honeycomb",
+		key: "apiBaseUrl",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.apiBaseUrl,
+	});
+	if (!apiBaseUrl.ok) return settingsFailure(apiBaseUrl.reason);
+	return settingsOk({
+		apiKey,
+		dataset: dataset.value,
+		fetchImpl,
+		...(apiBaseUrl.value === undefined ? {} : { apiBaseUrl: apiBaseUrl.value }),
+		...(config?.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+	});
+}
+
+/** Honeycomb handlers: paired fields > static config > legacy env. */
 export function createHoneycombHandlers(
-	config: HoneycombVendorConfig,
+	config: HoneycombVendorConfig | undefined,
 	env: Env,
 	fetchImpl: typeof fetch,
 	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (
-		credentialRef: string,
-	): HoneycombToolDependencies | null => {
-		const apiKey = resolveVendorSecret(
-			config.secretEnv,
-			"apiKey",
+	const settings = (credentialRef: string) =>
+		resolveHoneycombSettings(
+			config,
 			env,
+			fetchImpl,
 			credentialRef,
 			secretStore,
 		);
-		if (apiKey === null) return null;
-		return {
-			apiKey,
-			dataset: config.dataset,
-			fetchImpl,
-			...(config.apiBaseUrl === undefined
-				? {}
-				: { apiBaseUrl: config.apiBaseUrl }),
-			...(config.timeoutMs === undefined
-				? {}
-				: { timeoutMs: config.timeoutMs }),
-		};
-	};
+
 	return {
 		"honeycomb.run_query": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				runHoneycombQuery(deps, params),
 			),
 		"honeycomb.get_trigger": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				getHoneycombTrigger(deps, params),
 			),
 		"honeycomb.list_slos": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				listHoneycombSlos(deps, params),
 			),
 		"honeycomb.context.fetch": async (params, context) => {
@@ -114,7 +152,7 @@ export function createHoneycombHandlers(
 				if (requested === null) return failure("VALIDATION_FAILED");
 				kind = requested;
 			}
-			return withDependencies(dependencies(context.credentialRef), (deps) =>
+			return runWithSettings(settings(context.credentialRef), (deps) =>
 				fetchHoneycombIncidentContext(
 					{
 						...deps,

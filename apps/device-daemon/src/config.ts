@@ -18,8 +18,10 @@ import { z } from "zod";
  * - Provider URLs are https-only with no userinfo, query or fragment.
  * - Errors name a field path and a Zod code; they never echo a value, so a
  *   secret pasted into the wrong field cannot appear in a log.
- * - The paired secret store is the product path; `resolveSecret` remains the
- *   env-var fallback for existing installs.
+ * - The paired secret store is the product path: the secret fields and the
+ *   non-secret selectors for a credential ref both come from that entry. The
+ *   static vendor config is a fallback for existing installs, and `resolveSecret`
+ *   remains the legacy env-var fallback only.
  */
 
 export const DEVICE_CONFIG_PATH_ENV = "ISOLATE_DEVICE_CONFIG";
@@ -370,9 +372,16 @@ export function resolveSecret(
 	return trimmed.length === 0 ? null : trimmed;
 }
 
-/** Read-only view of the encrypted local secret store used at dispatch time. */
+/**
+ * Read-only view of the encrypted local secret store used at dispatch time.
+ *
+ * `getSelectors` is optional so older fakes that only model secret fields keep
+ * compiling; the concrete store implements both. A paired selector for a
+ * credential ref beats the static vendor config and the env fallback.
+ */
 export type SecretLookup = {
 	getFields(credentialRef: string): Readonly<Record<string, string>> | null;
+	getSelectors?(credentialRef: string): Readonly<Record<string, string>> | null;
 };
 
 function nonEmpty(value: unknown): string | null {

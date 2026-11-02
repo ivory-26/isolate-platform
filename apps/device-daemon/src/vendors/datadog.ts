@@ -18,65 +18,89 @@ import {
 	readContextParams,
 	requiredService,
 } from "./context";
-import { failure, withDependencies } from "./shared";
+import { resolveRequiredSelector } from "./selectors";
+import {
+	failure,
+	runWithSettings,
+	type SettingsResult,
+	settingsFailure,
+	settingsOk,
+} from "./shared";
 
 /**
- * Datadog handlers: API key + scoped application key, both resolved from the
- * paired secret store first (a paired entry may hold `apiKey`/`appKey`) and the
- * legacy env vars second.
+ * Datadog settings: API key + scoped application key, both from the paired
+ * store first, then the legacy env vars. The site origin is a required selector
+ * so a paired credential works with no `vendors.datadog` entry.
  */
+export function resolveDatadogSettings(
+	config: DatadogVendorConfig | undefined,
+	env: Env,
+	fetchImpl: typeof fetch,
+	credentialRef: string,
+	secretStore?: SecretLookup,
+): SettingsResult<DatadogContextDependencies> {
+	const apiKey = resolveVendorSecret(
+		config?.secretEnv,
+		"apiKey",
+		env,
+		credentialRef,
+		secretStore,
+	);
+	const appKey = resolveVendorSecret(
+		config?.secretEnv,
+		"appKey",
+		env,
+		credentialRef,
+		secretStore,
+	);
+	if (apiKey === null || appKey === null) {
+		return settingsFailure("CONFIG_REQUIRED");
+	}
+	const baseUrl = resolveRequiredSelector({
+		connectorId: "datadog",
+		key: "baseUrl",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.baseUrl,
+	});
+	if (!baseUrl.ok) return settingsFailure(baseUrl.reason);
+	return settingsOk({
+		baseUrl: baseUrl.value,
+		apiKey,
+		appKey,
+		fetchImpl,
+		...(config?.logsEnabled === undefined
+			? {}
+			: { logsEnabled: config.logsEnabled }),
+		...(config?.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+	});
+}
+
+/** Datadog handlers: paired fields > static config > legacy env. */
 export function createDatadogHandlers(
-	config: DatadogVendorConfig,
+	config: DatadogVendorConfig | undefined,
 	env: Env,
 	fetchImpl: typeof fetch,
 	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (
-		credentialRef: string,
-	): DatadogContextDependencies | null => {
-		const apiKey = resolveVendorSecret(
-			config.secretEnv,
-			"apiKey",
-			env,
-			credentialRef,
-			secretStore,
-		);
-		const appKey = resolveVendorSecret(
-			config.secretEnv,
-			"appKey",
-			env,
-			credentialRef,
-			secretStore,
-		);
-		if (apiKey === null || appKey === null) return null;
-		return {
-			baseUrl: config.baseUrl,
-			apiKey,
-			appKey,
-			fetchImpl,
-			...(config.logsEnabled === undefined
-				? {}
-				: { logsEnabled: config.logsEnabled }),
-			...(config.timeoutMs === undefined
-				? {}
-				: { timeoutMs: config.timeoutMs }),
-		};
-	};
+	const settings = (credentialRef: string) =>
+		resolveDatadogSettings(config, env, fetchImpl, credentialRef, secretStore);
+
 	return {
 		"datadog.query_metrics": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				queryDatadogMetrics(deps, params),
 			),
 		"datadog.search_logs": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				searchDatadogLogs(deps, params),
 			),
 		"datadog.get_incident": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				getDatadogIncident(deps, params),
 			),
 		"datadog.get_monitor": (params, context) =>
-			withDependencies(dependencies(context.credentialRef), (deps) =>
+			runWithSettings(settings(context.credentialRef), (deps) =>
 				getDatadogMonitor(deps, params),
 			),
 		"datadog.context.fetch": async (params, context) => {
@@ -90,7 +114,7 @@ export function createDatadogHandlers(
 			if (ref === null || service === null) {
 				return failure("VALIDATION_FAILED");
 			}
-			return withDependencies(dependencies(context.credentialRef), (deps) =>
+			return runWithSettings(settings(context.credentialRef), (deps) =>
 				fetchDatadogContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					service,

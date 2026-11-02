@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { CONNECTOR_VERIFY_TOOL_NAME } from "@isolate/shared";
 import { CONNECTOR_TOOL_NAMES } from "../../../packages/mastra/src/tools/connector-tools";
 import { type DeviceConfig, deviceConfigSchema } from "./config";
 import type { DeviceCall } from "./contracts";
 import {
 	createDispatcher,
 	createHandlerTable,
+	DEVICE_HANDLER_COUNT,
 	DEVICE_TOOL_NAMES_BY_VENDOR,
 } from "./dispatch";
+import { resolveDatadogSettings } from "./vendors/datadog";
+import { resolveGrafanaSettings } from "./vendors/grafana";
 
 const TOKEN = "A".repeat(43);
 
@@ -42,20 +46,25 @@ const countingFetch = () => {
 };
 
 describe("handler table completeness", () => {
-	test("has the 31 connector names plus 9 context tools, even with no vendor configured", () => {
+	test("has the 31 connector names, 9 context tools and connector.verify", () => {
 		expect(CONNECTOR_TOOL_NAMES).toHaveLength(31);
 		const handlers = createHandlerTable({ config: baseConfig(), env: {} });
 		const names = Object.keys(handlers);
-		expect(names).toHaveLength(40);
+		expect(names).toHaveLength(DEVICE_HANDLER_COUNT);
+		expect(DEVICE_HANDLER_COUNT).toBe(41);
 		for (const name of CONNECTOR_TOOL_NAMES) {
 			expect(names).toContain(name);
 		}
+		expect(names).toContain(CONNECTOR_VERIFY_TOOL_NAME);
 		expect(names.sort()).toEqual(
-			Object.values(DEVICE_TOOL_NAMES_BY_VENDOR).flat().sort(),
+			[
+				...Object.values(DEVICE_TOOL_NAMES_BY_VENDOR).flat(),
+				CONNECTOR_VERIFY_TOOL_NAME,
+			].sort(),
 		);
 	});
 
-	test("the static vendor map covers the same 40 names", () => {
+	test("the static vendor map covers the 40 vendor names", () => {
 		const flat = Object.values(DEVICE_TOOL_NAMES_BY_VENDOR).flat();
 		expect(flat).toHaveLength(40);
 		expect(new Set(flat).size).toBe(40);
@@ -233,6 +242,78 @@ describe("paired secret store resolution", () => {
 		expect(
 			await dispatch(call("sentry.list_issues", { orgSlug: "acme" })),
 		).toEqual({ ok: false, errorCode: "INTEGRATION_UNAVAILABLE" });
+		expect(capture.authHeaders).toHaveLength(0);
+	});
+
+	test("a paired Grafana credential works with no vendor config entry", () => {
+		const settings = resolveGrafanaSettings(
+			undefined,
+			{},
+			(async () => Response.json([])) as unknown as typeof fetch,
+			"keychain:isolate/test",
+			{
+				getFields: () => ({ token: storeSecret }),
+				getSelectors: () => ({
+					baseUrl: "https://grafana.example.com",
+					orgId: "7",
+					metricsDatasourceUid: "metrics-1",
+					logsDatasourceUid: "logs-1",
+				}),
+			},
+		);
+		expect(settings.ok).toBe(true);
+		if (!settings.ok) return;
+		expect(settings.deps).toMatchObject({
+			baseUrl: "https://grafana.example.com",
+			token: storeSecret,
+			orgId: "7",
+			metricsDatasourceUid: "metrics-1",
+			logsDatasourceUid: "logs-1",
+		});
+	});
+
+	test("Datadog resolves both paired keys and the required site origin", () => {
+		const apiKey = `api-${crypto.randomUUID()}`;
+		const appKey = `app-${crypto.randomUUID()}`;
+		const settings = resolveDatadogSettings(
+			undefined,
+			{},
+			(async () => Response.json({})) as unknown as typeof fetch,
+			"keychain:isolate/test",
+			{
+				getFields: () => ({ apiKey, appKey }),
+				getSelectors: () => ({ baseUrl: "https://api.datadoghq.eu" }),
+			},
+		);
+		expect(settings.ok).toBe(true);
+		if (!settings.ok) return;
+		expect(settings.deps.apiKey).toBe(apiKey);
+		expect(settings.deps.appKey).toBe(appKey);
+		expect(settings.deps.baseUrl).toBe("https://api.datadoghq.eu");
+	});
+
+	test("an unconfigured vendor still fails closed without a paired entry", () => {
+		const settings = resolveDatadogSettings(undefined, {}, fetch, "missing", {
+			getFields: () => null,
+			getSelectors: () => null,
+		});
+		expect(settings).toEqual({ ok: false, reason: "CONFIG_REQUIRED" });
+	});
+
+	test("a malformed paired selector fails closed before any fetch", async () => {
+		const capture = captureFetch();
+		const dispatch = createDispatcher({
+			config: baseConfig(),
+			env: {},
+			fetchImpl: capture.fetchImpl,
+			secretStore: {
+				getFields: () => ({ token: storeSecret }),
+				getSelectors: () => ({ baseUrl: "http://plain.example.com" }),
+			},
+		});
+		expect(
+			await dispatch(call("grafana.query_metrics", { service: "checkout" })),
+		).toEqual({ ok: false, errorCode: "VALIDATION_FAILED" });
 		expect(capture.authHeaders).toHaveLength(0);
 	});
 });

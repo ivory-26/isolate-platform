@@ -30,6 +30,7 @@ type GatewayState = {
 	completions: number;
 	claimBody: unknown;
 	completeBody: unknown;
+	claimConnector: string;
 };
 
 const state: GatewayState = {
@@ -37,6 +38,7 @@ const state: GatewayState = {
 	completions: 0,
 	claimBody: null,
 	completeBody: null,
+	claimConnector: "sentry",
 };
 
 const gateway = Bun.serve({
@@ -60,7 +62,7 @@ const gateway = Bun.serve({
 			return Response.json({
 				pairingId,
 				relayId,
-				connectorId: "sentry",
+				connectorId: state.claimConnector,
 				authKind: "api_key",
 				credentialRef: CREDENTIAL_REF,
 				displayName: "Sentry production",
@@ -103,13 +105,18 @@ async function createStore(secretPath?: string) {
 }
 
 async function startServer(
-	options: { now?: () => number; sessionTtlMs?: number } = {},
+	options: {
+		now?: () => number;
+		sessionTtlMs?: number;
+		claimConnector?: string;
+	} = {},
 ): Promise<{
 	server: PairingServerHandle;
 	store: Awaited<ReturnType<typeof createStore>>["store"];
 	path: string;
 	lines: string[];
 }> {
+	state.claimConnector = options.claimConnector ?? "sentry";
 	const { path, store } = await createStore();
 	const logger = createMemoryLogger();
 	const server = await startPairingServer({
@@ -127,8 +134,18 @@ async function startServer(
 	return { server, store, path, lines: logger.lines };
 }
 
-async function openPage(localUrl: string, code: string): Promise<string> {
-	const response = await fetch(`${localUrl}?code=${encodeURIComponent(code)}`);
+async function openPage(
+	localUrl: string,
+	code: string,
+	connector?: string,
+): Promise<string> {
+	const connectorParam =
+		connector === undefined
+			? ""
+			: `&connector=${encodeURIComponent(connector)}`;
+	const response = await fetch(
+		`${localUrl}?code=${encodeURIComponent(code)}${connectorParam}`,
+	);
 	expect(response.status).toBe(200);
 	return response.text();
 }
@@ -312,6 +329,145 @@ describe("localhost pairing page", () => {
 				hostname: "0.0.0.0",
 			}),
 		).rejects.toBeInstanceOf(PairingServerError);
+	});
+
+	test("renders vendor-specific labelled fields for a known connector", async () => {
+		const { server } = await startServer({ claimConnector: "grafana" });
+		const html = await openPage(server.localUrl, expectedCode, "grafana");
+		expect(html).toContain('name="secret_token"');
+		expect(html).toContain('type="password"');
+		expect(html).toContain('name="selector_baseUrl"');
+		expect(html).toContain('name="selector_orgId"');
+		expect(html).toMatch(/name="selector_baseUrl"[^>]*required/);
+		expect(html).toContain("Grafana URL");
+		expect(html).toContain("Organization id");
+		expect(html).toContain("hint");
+		expect(html).not.toContain('name="selectors"');
+	});
+
+	test("stores a Grafana base URL and token from the vendor form", async () => {
+		const { server, store, lines } = await startServer({
+			claimConnector: "grafana",
+		});
+		const html = await openPage(server.localUrl, expectedCode, "grafana");
+		const nonce = readNonce(html);
+		const token = randomToken();
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret_token: token,
+			selector_baseUrl: "https://grafana.example.com/",
+			selector_orgId: "12",
+		});
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain("Provider connected");
+		expect(body).not.toContain(token);
+		expect(store.getFields(CREDENTIAL_REF)).toEqual({ token });
+		expect(store.getSelectors(CREDENTIAL_REF)).toEqual({
+			baseUrl: "https://grafana.example.com",
+			orgId: "12",
+		});
+		expect(lines.join("\n")).not.toContain(token);
+	});
+
+	test("stores Datadog's two keys from separate inputs", async () => {
+		const { server, store } = await startServer({
+			claimConnector: "datadog",
+		});
+		const html = await openPage(server.localUrl, expectedCode, "datadog");
+		expect(html).toContain('name="secret_apiKey"');
+		expect(html).toContain('name="secret_appKey"');
+		const nonce = readNonce(html);
+		const apiKey = randomToken();
+		const appKey = randomToken();
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret_apiKey: apiKey,
+			secret_appKey: appKey,
+			selector_baseUrl: "https://api.datadoghq.com",
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).not.toContain(apiKey);
+		expect(store.getFields(CREDENTIAL_REF)).toEqual({ apiKey, appKey });
+		expect(store.getSelectors(CREDENTIAL_REF)).toEqual({
+			baseUrl: "https://api.datadoghq.com",
+		});
+	});
+
+	test("stores a Kubernetes API URL, namespace and token path", async () => {
+		const { server, store } = await startServer({
+			claimConnector: "kubernetes",
+		});
+		const html = await openPage(server.localUrl, expectedCode, "kubernetes");
+		expect(html).toContain('name="secret_serviceAccountTokenFile"');
+		expect(html).toContain('name="selector_namespace"');
+		const nonce = readNonce(html);
+		const tokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret_serviceAccountTokenFile: tokenPath,
+			selector_apiUrl: "https://cluster.example.com:6443",
+			selector_namespace: "production",
+			selector_clusterId: "prod-eu",
+		});
+		expect(response.status).toBe(200);
+		expect(store.getFields(CREDENTIAL_REF)).toEqual({
+			serviceAccountTokenFile: tokenPath,
+		});
+		expect(store.getSelectors(CREDENTIAL_REF)).toEqual({
+			apiUrl: "https://cluster.example.com:6443",
+			namespace: "production",
+			clusterId: "prod-eu",
+		});
+	});
+
+	test("rejects an invalid selector after claiming, without storing", async () => {
+		const { server, store } = await startServer({
+			claimConnector: "grafana",
+		});
+		const html = await openPage(server.localUrl, expectedCode, "grafana");
+		const nonce = readNonce(html);
+		const before = state.claims;
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret_token: randomToken(),
+			selector_baseUrl: "http://plain.example.com",
+		});
+		expect(response.status).toBe(400);
+		expect(state.claims).toBe(before + 1);
+		expect(store.refs()).toEqual([]);
+	});
+
+	test("the claim connector id overrides the local URL hint", async () => {
+		const { server, store } = await startServer({ claimConnector: "sentry" });
+		// The URL hint renders Grafana's orgId field, but the claim says Sentry.
+		const html = await openPage(server.localUrl, expectedCode, "grafana");
+		const nonce = readNonce(html);
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret_token: randomToken(),
+			selector_orgId: "1",
+		});
+		expect(response.status).toBe(400);
+		expect(store.refs()).toEqual([]);
+	});
+
+	test("an unknown connector keeps the generic textarea fallback", async () => {
+		const { server, store } = await startServer({ claimConnector: "sentry" });
+		const html = await openPage(server.localUrl, expectedCode, "github");
+		expect(html).toContain('name="secret"');
+		expect(html).toContain('name="selectors"');
+		expect(html).not.toContain('name="secret_token"');
+		const nonce = readNonce(html);
+		const secret = randomToken();
+		const response = await postForm(server.localUrl, {
+			nonce,
+			secret,
+			selectors: JSON.stringify({ orgSlug: "acme" }),
+		});
+		expect(response.status).toBe(200);
+		expect(store.getFields(CREDENTIAL_REF)).toEqual({ token: secret });
+		expect(store.getSelectors(CREDENTIAL_REF)).toEqual({ orgSlug: "acme" });
 	});
 });
 

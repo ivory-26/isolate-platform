@@ -82,6 +82,8 @@ export type ToolParams = Record<string, unknown>;
 /** Per-call context: which device-side secret slot this call may resolve. */
 export type ToolContext = {
 	readonly credentialRef: string;
+	/** The call's connector id; `connector.verify` selects its probe with it. */
+	readonly connectorId: string;
 };
 
 export type DispatchSuccess = {

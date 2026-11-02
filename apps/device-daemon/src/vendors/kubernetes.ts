@@ -17,7 +17,14 @@ import {
 	parseContextFingerprint,
 	readContextParams,
 } from "./context";
-import { failure, runAdapter } from "./shared";
+import { resolveOptionalSelector, resolveRequiredSelector } from "./selectors";
+import {
+	failure,
+	runWithSettings,
+	type SettingsResult,
+	settingsFailure,
+	settingsOk,
+} from "./shared";
 
 export type KubernetesClientOptions = {
 	apiUrl: string;
@@ -30,78 +37,124 @@ export type KubernetesClientFactory = (
 	options: KubernetesClientOptions,
 ) => KubernetesHttpClient;
 
+function storedPath(
+	secretStore: SecretLookup | undefined,
+	credentialRef: string,
+	field: string,
+): string | null {
+	// Paths, not key material: exact field names only, never the single-value
+	// fallback (which would let a token path masquerade as the CA path).
+	const fields = secretStore?.getFields(credentialRef) ?? null;
+	const value = fields?.[field];
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * Kubernetes settings. A paired credential carries the token-file path (and an
+ * optional CA path) plus the API URL and namespace selectors, so no
+ * `vendors.kubernetes` entry is needed. The legacy
+ * `KUBERNETES_API_URL`/`KUBERNETES_NAMESPACE` env vars remain a fallback.
+ */
+export function resolveKubernetesSettings(
+	config: KubernetesVendorConfig | undefined,
+	env: Env,
+	clientFactory: KubernetesClientFactory,
+	credentialRef: string,
+	secretStore?: SecretLookup,
+): SettingsResult<KubernetesContextDependencies> {
+	const tokenFile =
+		storedPath(secretStore, credentialRef, "serviceAccountTokenFile") ??
+		resolveSecret(config?.secretEnv, "serviceAccountTokenFile", env);
+	if (tokenFile === null) return settingsFailure("CONFIG_REQUIRED");
+	const caFile =
+		storedPath(secretStore, credentialRef, "caFile") ??
+		resolveSecret(config?.secretEnv, "caFile", env);
+	const apiUrl = resolveRequiredSelector({
+		connectorId: "kubernetes",
+		key: "apiUrl",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.apiUrl,
+		envValue: env.KUBERNETES_API_URL,
+	});
+	if (!apiUrl.ok) return settingsFailure(apiUrl.reason);
+	const namespace = resolveRequiredSelector({
+		connectorId: "kubernetes",
+		key: "namespace",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.namespace,
+		envValue: env.KUBERNETES_NAMESPACE,
+	});
+	if (!namespace.ok) return settingsFailure(namespace.reason);
+	const clusterId = resolveOptionalSelector({
+		connectorId: "kubernetes",
+		key: "clusterId",
+		credentialRef,
+		store: secretStore,
+		configValue: config?.clusterId,
+	});
+	if (!clusterId.ok) return settingsFailure(clusterId.reason);
+
+	let client: KubernetesHttpClient;
+	try {
+		client = clientFactory({
+			apiUrl: apiUrl.value,
+			serviceAccountTokenFile: tokenFile,
+			...(caFile === null ? {} : { caFile }),
+			...(config?.timeoutMs === undefined
+				? {}
+				: { timeoutMs: config.timeoutMs }),
+		});
+	} catch {
+		return settingsFailure("CONFIG_REQUIRED");
+	}
+	return settingsOk({
+		client,
+		namespace: namespace.value,
+		displayUrl: apiUrl.value,
+		...(clusterId.value === undefined ? {} : { clusterId: clusterId.value }),
+	});
+}
+
 /**
  * Kubernetes handlers. The API URL and namespace are configuration, not tool
  * input: the adapter rejects a call for any other namespace as NOT_FOUND before
- * an API request. The token-file/CA paths resolve from the paired store first
- * (they are paths, never key material), then the daemon's environment.
+ * an API request.
  */
 export function createKubernetesHandlers(
-	config: KubernetesVendorConfig,
+	config: KubernetesVendorConfig | undefined,
 	env: Env,
 	clientFactory: KubernetesClientFactory,
 	secretStore?: SecretLookup,
 ): Record<string, ToolHandler> {
-	const dependencies = (
-		credentialRef: string,
-	): KubernetesContextDependencies | null => {
-		// Paths, not key material: exact field names only, never the single-value
-		// fallback (which would let a token path masquerade as the CA path).
-		const stored = secretStore?.getFields(credentialRef) ?? null;
-		const storedTokenFile = stored?.serviceAccountTokenFile?.trim() ?? "";
-		const storedCaFile = stored?.caFile?.trim() ?? "";
-		const tokenFile =
-			storedTokenFile.length > 0
-				? storedTokenFile
-				: resolveSecret(config.secretEnv, "serviceAccountTokenFile", env);
-		if (tokenFile === null) return null;
-		const caFile =
-			storedCaFile.length > 0
-				? storedCaFile
-				: resolveSecret(config.secretEnv, "caFile", env);
-		const apiUrl = config.apiUrl ?? env.KUBERNETES_API_URL?.trim();
-		const namespace = config.namespace ?? env.KUBERNETES_NAMESPACE?.trim();
-		if (
-			apiUrl === undefined ||
-			apiUrl.length === 0 ||
-			namespace === undefined ||
-			namespace.length === 0
-		) {
-			return null;
-		}
-		let client: KubernetesHttpClient;
-		try {
-			client = clientFactory({
-				apiUrl,
-				serviceAccountTokenFile: tokenFile,
-				...(caFile === null ? {} : { caFile }),
-				...(config.timeoutMs === undefined
-					? {}
-					: { timeoutMs: config.timeoutMs }),
-			});
-		} catch {
-			return null;
-		}
-		return {
-			client,
-			namespace,
-			displayUrl: apiUrl,
-			...(config.clusterId === undefined
-				? {}
-				: { clusterId: config.clusterId }),
-		};
-	};
+	const settings = (credentialRef: string) =>
+		resolveKubernetesSettings(
+			config,
+			env,
+			clientFactory,
+			credentialRef,
+			secretStore,
+		);
 
 	const handlerFor =
 		(toolName: KubernetesToolName): ToolHandler =>
 		async (params, context) => {
-			const deps = dependencies(context.credentialRef);
-			if (deps === null) return failure("INTEGRATION_UNAVAILABLE");
-			const tool = createKubernetesReadTools(deps).find(
-				(candidate) => candidate.name === toolName,
+			const resolved = await runWithSettings(
+				settings(context.credentialRef),
+				(deps) => {
+					const tool = createKubernetesReadTools(deps).find(
+						(candidate) => candidate.name === toolName,
+					);
+					if (tool === undefined) {
+						return Promise.resolve({ ok: false, code: "VALIDATION_FAILED" });
+					}
+					return tool.execute(params);
+				},
 			);
-			if (tool === undefined) return failure("VALIDATION_FAILED");
-			return runAdapter(() => tool.execute(params));
+			return resolved;
 		};
 
 	return {
@@ -132,9 +185,7 @@ export function createKubernetesHandlers(
 			}
 			const kind = requestedKind ?? fingerprintKind;
 			if (kind === null) return failure("VALIDATION_FAILED");
-			const deps = dependencies(context.credentialRef);
-			if (deps === null) return failure("INTEGRATION_UNAVAILABLE");
-			return runAdapter(() =>
+			return runWithSettings(settings(context.credentialRef), (deps) =>
 				fetchKubernetesContext(deps, {
 					incidentFingerprint: parsed.incidentFingerprint,
 					namespace: ref.namespace,

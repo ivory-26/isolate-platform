@@ -1,8 +1,14 @@
 import { randomBytes } from "node:crypto";
+import { findCredentialMaterial } from "@isolate/shared";
 import { z } from "zod";
 import { PAIRING_DEFAULT_PORT, PAIRING_LOOPBACK_HOST } from "./config";
 import { createConsoleLogger, type Logger } from "./logger";
 import type { SecretStore } from "./secret-store";
+import {
+	getPairingSpec,
+	parsePairingSubmission,
+	type VendorPairingSpec,
+} from "./vendors/selectors";
 
 /**
  * One-time localhost pairing page served by the relay daemon.
@@ -114,7 +120,10 @@ function page(title: string, body: string): string {
 body{font-family:system-ui,sans-serif;margin:0;padding:2rem;background:#0b0d12;color:#e8eaf0}
 main{max-width:34rem;margin:0 auto}
 label{display:block;margin:1rem 0 .25rem;font-weight:600}
-textarea{width:100%;min-height:5rem;box-sizing:border-box;font-family:ui-monospace,monospace;background:#141824;color:#e8eaf0;border:1px solid #2a3040;border-radius:6px;padding:.5rem}
+input,textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;background:#141824;color:#e8eaf0;border:1px solid #2a3040;border-radius:6px;padding:.5rem}
+textarea{min-height:5rem}
+.hint{margin:.25rem 0 0;font-size:.85rem;color:#8e97a8}
+.required{color:#ff8f70}
 button{margin-top:1rem;padding:.6rem 1rem;border-radius:6px;border:0;background:#4f7cff;color:#fff;font-weight:600}
 p{line-height:1.5;color:#aab1c0}
 </style>
@@ -190,7 +199,40 @@ function parseSelectorsInput(
 		if (typeof selectorValue !== "string") return null;
 		selectors[key] = selectorValue;
 	}
+	if (findCredentialMaterial(selectors) !== null) return null;
 	return selectors;
+}
+
+type PrefixedSubmission = {
+	readonly present: boolean;
+	readonly secretFields: Record<string, string>;
+	readonly selectorFields: Record<string, string>;
+};
+
+/**
+ * Reads the vendor form's `secret_*` / `selector_*` names. The `secret` and
+ * `selectors` textareas of the generic form do not match these prefixes, so
+ * their presence falls back to the compatibility parser.
+ */
+function readPrefixedSubmission(params: URLSearchParams): PrefixedSubmission {
+	const secretFields: Record<string, string> = Object.create(null);
+	const selectorFields: Record<string, string> = Object.create(null);
+	for (const [key, value] of params) {
+		if (key.startsWith("secret_") && key.length > "secret_".length) {
+			secretFields[key.slice("secret_".length)] = value;
+			continue;
+		}
+		if (key.startsWith("selector_") && key.length > "selector_".length) {
+			selectorFields[key.slice("selector_".length)] = value;
+		}
+	}
+	return {
+		present:
+			Object.keys(secretFields).length > 0 ||
+			Object.keys(selectorFields).length > 0,
+		secretFields,
+		selectorFields,
+	};
 }
 
 function endpoint(serverUrl: string, path: string): string {
@@ -256,6 +298,62 @@ function isFormRequest(request: Request): boolean {
 	if (contentType === null) return false;
 	const [mediaType] = contentType.split(";", 1);
 	return mediaType.trim().toLowerCase() === "application/x-www-form-urlencoded";
+}
+
+function requiredMarker(required: boolean): string {
+	return required ? ' <span class="required" aria-hidden="true">*</span>' : "";
+}
+
+function secretInput(field: VendorPairingSpec["secrets"][number]): string {
+	const id = `secret_${field.key}`;
+	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}</label>
+<input id="${escapeHtml(id)}" name="${escapeHtml(id)}" type="password"${field.required ? " required" : ""} autocomplete="off" spellcheck="false">
+${field.hint === undefined ? "" : `<p class="hint">${escapeHtml(field.hint)}</p>`}`;
+}
+
+function selectorInput(field: VendorPairingSpec["selectors"][number]): string {
+	const id = `selector_${field.key}`;
+	const placeholder =
+		field.placeholder === undefined
+			? ""
+			: ` placeholder="${escapeHtml(field.placeholder)}"`;
+	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}</label>
+<input id="${escapeHtml(id)}" name="${escapeHtml(id)}" type="${field.inputType}"${field.required ? " required" : ""}${placeholder} autocomplete="off" spellcheck="false">
+${field.hint === undefined ? "" : `<p class="hint">${escapeHtml(field.hint)}</p>`}`;
+}
+
+/**
+ * Vendor-specific form. Only labels, hints and non-secret selectors are
+ * rendered; a secret is never placed in the HTML, a URL or a log line.
+ */
+function vendorFormBody(spec: VendorPairingSpec, nonce: string): string {
+	const secrets = spec.secrets.map(secretInput).join("\n");
+	const selectors = spec.selectors.map(selectorInput).join("\n");
+	return `<h1>Connect ${escapeHtml(spec.connectorId)}</h1>
+<p>${escapeHtml(spec.summary)} Secrets are stored only on this device, encrypted with a key derived from the relay token. They are never sent to the Isolate server.</p>
+<form method="post" action="/pair">
+<input type="hidden" name="nonce" value="${nonce}">
+${secrets}
+${selectors}
+<button type="submit">Store secret and finish</button>
+</form>
+<p>This page is available only on 127.0.0.1 and expires in ten minutes.</p>`;
+}
+
+/** Compatibility form for a connector without a guided specification. */
+function genericFormBody(nonce: string): string {
+	return `<h1>Connect a provider</h1>
+<p>Paste the provider credential below. It is stored only on this device, encrypted with a key derived from the relay token. It is never sent to the Isolate server.</p>
+<form method="post" action="/pair">
+<input type="hidden" name="nonce" value="${nonce}">
+<label for="secret">Provider secret</label>
+<textarea id="secret" name="secret" required autocomplete="off" spellcheck="false"></textarea>
+<p>If the provider needs two keys, paste a JSON object such as <code>{"apiKey":"...","appKey":"..."}</code>.</p>
+<label for="selectors">Optional non-secret selectors (JSON)</label>
+<textarea id="selectors" name="selectors" autocomplete="off" spellcheck="false" placeholder='{"orgSlug":"acme"}'></textarea>
+<button type="submit">Store secret and finish</button>
+</form>
+<p>This page is available only on 127.0.0.1 and expires in ten minutes.</p>`;
 }
 
 export async function startPairingServer(
@@ -376,20 +474,12 @@ export async function startPairingServer(
 					code,
 					expiresAt: now() + sessionTtlMs,
 				});
+				// The connector query is only a rendering hint from the server. The
+				// claim response remains authoritative for what is stored.
+				const spec = getPairingSpec(url.searchParams.get("connector"));
 				const form = page(
 					"Connect a provider",
-					`<h1>Connect a provider</h1>
-<p>Paste the provider credential below. It is stored only on this device, encrypted with a key derived from the relay token. It is never sent to the Isolate server.</p>
-<form method="post" action="/pair">
-<input type="hidden" name="nonce" value="${nonce}">
-<label for="secret">Provider secret</label>
-<textarea id="secret" name="secret" required autocomplete="off" spellcheck="false"></textarea>
-<p>If the provider needs two keys, paste a JSON object such as <code>{"apiKey":"...","appKey":"..."}</code>.</p>
-<label for="selectors">Optional non-secret selectors (JSON)</label>
-<textarea id="selectors" name="selectors" autocomplete="off" spellcheck="false" placeholder='{"orgSlug":"acme"}'></textarea>
-<button type="submit">Store secret and finish</button>
-</form>
-<p>This page is available only on 127.0.0.1 and expires in ten minutes.</p>`,
+					spec === null ? genericFormBody(nonce) : vendorFormBody(spec, nonce),
 				);
 				return new Response(form, { status: 200, headers: HTML_HEADERS });
 			}
@@ -448,16 +538,8 @@ export async function startPairingServer(
 				logger.warn("pairing", { status: "failed", stage: "session" });
 				return errorResponse(400, GENERIC_ERROR);
 			}
-			const fields = parseSecretFieldInput(params.get("secret"));
-			if (fields === null) {
-				logger.warn("pairing", { status: "failed", stage: "secret" });
-				return errorResponse(400, GENERIC_ERROR);
-			}
-			const selectors = parseSelectorsInput(params.get("selectors"));
-			if (selectors === null) {
-				logger.warn("pairing", { status: "failed", stage: "selectors" });
-				return errorResponse(400, GENERIC_ERROR);
-			}
+			// Claim first: the gateway's connector id is authoritative for which
+			// field vocabulary applies. The local URL hint never authorizes a field.
 			const claim = await claimPairing(session.code);
 			if (claim === null) {
 				logger.warn("pairing", { status: "failed", stage: "claim" });
@@ -467,6 +549,33 @@ export async function startPairingServer(
 				status: "claimed",
 				connector: claim.connectorId,
 			});
+			const prefixed = readPrefixedSubmission(params);
+			let fields: Record<string, string> | null;
+			let selectors: Record<string, string> | undefined;
+			if (prefixed.present) {
+				const parsed = parsePairingSubmission(claim.connectorId, prefixed);
+				if (!parsed.ok) {
+					logger.warn("pairing", { status: "failed", stage: "fields" });
+					return errorResponse(400, GENERIC_ERROR);
+				}
+				fields = parsed.value.fields;
+				selectors =
+					Object.keys(parsed.value.selectors).length === 0
+						? undefined
+						: parsed.value.selectors;
+			} else {
+				fields = parseSecretFieldInput(params.get("secret"));
+				if (fields === null) {
+					logger.warn("pairing", { status: "failed", stage: "secret" });
+					return errorResponse(400, GENERIC_ERROR);
+				}
+				const parsedSelectors = parseSelectorsInput(params.get("selectors"));
+				if (parsedSelectors === null) {
+					logger.warn("pairing", { status: "failed", stage: "selectors" });
+					return errorResponse(400, GENERIC_ERROR);
+				}
+				selectors = parsedSelectors;
+			}
 			try {
 				await options.secretStore.setSecret(claim.credentialRef, {
 					fields: { ...fields },

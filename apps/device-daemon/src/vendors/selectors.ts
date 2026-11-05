@@ -24,6 +24,7 @@ export const MAX_PAIRING_SECRET_CHARS = 8_192;
 export const MAX_PAIRING_URL_CHARS = 512;
 export const MAX_PAIRING_PATH_CHARS = 1_024;
 export const MAX_PAIRING_NAME_CHARS = 128;
+export const MAX_PAIRING_HELP_URL_CHARS = 512;
 
 export const PAIRING_FIELD_ERROR_CODES = [
 	"UNKNOWN_CONNECTOR",
@@ -39,6 +40,8 @@ export type PairingSecretField = {
 	readonly label: string;
 	readonly required: boolean;
 	readonly hint?: string;
+	/** Static "where to get this" link; validated as a public https URL. */
+	readonly helpUrl?: string;
 };
 
 export type SelectorFieldKind =
@@ -61,13 +64,19 @@ export type PairingSelectorField = {
 	readonly inputType: "text" | "url";
 	readonly hint?: string;
 	readonly placeholder?: string;
+	/** Static "where to find this" link; validated as a public https URL. */
+	readonly helpUrl?: string;
 	/** Upper bound for `digits`; ignored by other kinds. */
 	readonly maxDigits?: number;
 };
 
 export type VendorPairingSpec = {
 	readonly connectorId: string;
+	/** Human vendor name used by the guided panel copy. */
+	readonly vendorName: string;
 	readonly summary: string;
+	/** Static vendor key/console page shown in step 1 of the panel. */
+	readonly keyPageUrl?: string;
 	readonly secrets: readonly PairingSecretField[];
 	readonly selectors: readonly PairingSelectorField[];
 };
@@ -119,6 +128,32 @@ const emailSchema = z.email().max(254);
 const RFC1123_LABEL = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const UID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CLUSTER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * A help link is static vendor documentation, never user input. It must still be
+ * a public https URL with no embedded credentials, because the pairing page
+ * renders it as a real anchor and a bad constant would become a live link.
+ */
+export function isSafeHelpUrl(value: string): boolean {
+	if (
+		value.length === 0 ||
+		value.length > MAX_PAIRING_HELP_URL_CHARS ||
+		hasControlCharacters(value)
+	) {
+		return false;
+	}
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return false;
+	}
+	if (url.protocol !== "https:") return false;
+	if (url.username !== "" || url.password !== "") return false;
+	const host = url.hostname.toLowerCase();
+	if (host === "localhost" || host.endsWith(".local")) return false;
+	return host.includes(".");
+}
 
 function normalizeBoundedName(value: string): string | null {
 	const trimmed = value.trim();
@@ -177,14 +212,14 @@ export function normalizeSelectorValue(
 function secret(
 	key: string,
 	label: string,
-	hint?: string,
-	required = true,
+	options: { hint?: string; required?: boolean; helpUrl?: string } = {},
 ): PairingSecretField {
 	return {
 		key,
 		label,
-		required,
-		...(hint === undefined ? {} : { hint }),
+		required: options.required ?? true,
+		...(options.hint === undefined ? {} : { hint: options.hint }),
+		...(options.helpUrl === undefined ? {} : { helpUrl: options.helpUrl }),
 	};
 }
 
@@ -196,6 +231,7 @@ function selector(
 		required?: boolean;
 		hint?: string;
 		placeholder?: string;
+		helpUrl?: string;
 		maxDigits?: number;
 	} = {},
 ): PairingSelectorField {
@@ -208,6 +244,7 @@ function selector(
 		kind,
 		inputType,
 		...(options.hint === undefined ? {} : { hint: options.hint }),
+		...(options.helpUrl === undefined ? {} : { helpUrl: options.helpUrl }),
 		...(options.placeholder === undefined
 			? {}
 			: { placeholder: options.placeholder }),
@@ -219,8 +256,14 @@ function selector(
 
 const SENTRY_SPEC: VendorPairingSpec = {
 	connectorId: "sentry",
+	vendorName: "Sentry",
+	keyPageUrl: "https://sentry.io/settings/developer-settings/",
 	summary: "Sentry auth token and optional self-hosted origin.",
-	secrets: [secret("token", "Sentry auth token")],
+	secrets: [
+		secret("token", "Sentry auth token", {
+			helpUrl: "https://docs.sentry.io/account/auth-tokens/",
+		}),
+	],
 	selectors: [
 		selector("baseUrl", "Sentry URL", "https-origin", {
 			hint: "Leave blank for https://sentry.io; self-hosted instances use their own https origin.",
@@ -231,8 +274,16 @@ const SENTRY_SPEC: VendorPairingSpec = {
 
 const GRAFANA_SPEC: VendorPairingSpec = {
 	connectorId: "grafana",
+	vendorName: "Grafana",
+	keyPageUrl:
+		"https://grafana.com/docs/grafana/latest/administration/service-accounts/",
 	summary: "Grafana stack URL plus a service-account token.",
-	secrets: [secret("token", "Grafana service-account token")],
+	secrets: [
+		secret("token", "Grafana service-account token", {
+			helpUrl:
+				"https://grafana.com/docs/grafana/latest/administration/service-accounts/",
+		}),
+	],
 	selectors: [
 		selector("baseUrl", "Grafana URL", "https-origin", {
 			required: true,
@@ -246,17 +297,25 @@ const GRAFANA_SPEC: VendorPairingSpec = {
 		}),
 		selector("metricsDatasourceUid", "Metrics datasource UID", "uid", {
 			hint: "Optional; the adapter uses the stack default when blank.",
+			helpUrl: "https://grafana.com/docs/grafana/latest/datasources/",
 		}),
 		selector("logsDatasourceUid", "Logs datasource UID", "uid", {
 			hint: "Optional; the adapter uses the stack default when blank.",
+			helpUrl: "https://grafana.com/docs/grafana/latest/datasources/",
 		}),
 	],
 };
 
 const PAGERDUTY_SPEC: VendorPairingSpec = {
 	connectorId: "pagerduty",
+	vendorName: "PagerDuty",
+	keyPageUrl: "https://docs.pagerduty.com/account-admin/api-access-keys",
 	summary: "PagerDuty API token and optional sender address.",
-	secrets: [secret("token", "PagerDuty API token")],
+	secrets: [
+		secret("token", "PagerDuty API token", {
+			helpUrl: "https://docs.pagerduty.com/account-admin/api-access-keys",
+		}),
+	],
 	selectors: [
 		selector("fromEmail", "From email", "email", {
 			hint: "Optional for reads; required before acknowledge or resolve.",
@@ -271,20 +330,21 @@ const PAGERDUTY_SPEC: VendorPairingSpec = {
 
 const KUBERNETES_SPEC: VendorPairingSpec = {
 	connectorId: "kubernetes",
+	vendorName: "Kubernetes",
+	keyPageUrl:
+		"https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
 	summary:
 		"Cluster API URL, namespace and the local service-account token file.",
 	secrets: [
-		secret(
-			"serviceAccountTokenFile",
-			"Service-account token file",
-			"Path on this relay to the mounted token file, for example /var/run/secrets/kubernetes.io/serviceaccount/token.",
-		),
-		secret(
-			"caFile",
-			"Cluster CA file",
-			"Optional path on this relay to the cluster CA certificate.",
-			false,
-		),
+		secret("serviceAccountTokenFile", "Service-account token file", {
+			hint: "Path on this relay to the mounted token file, for example /var/run/secrets/kubernetes.io/serviceaccount/token.",
+			helpUrl:
+				"https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
+		}),
+		secret("caFile", "Cluster CA file", {
+			hint: "Optional path on this relay to the cluster CA certificate.",
+			required: false,
+		}),
 	],
 	selectors: [
 		selector("apiUrl", "Kubernetes API URL", "https-url", {
@@ -305,29 +365,46 @@ const KUBERNETES_SPEC: VendorPairingSpec = {
 
 const DATADOG_SPEC: VendorPairingSpec = {
 	connectorId: "datadog",
+	vendorName: "Datadog",
+	keyPageUrl: "https://docs.datadoghq.com/account_management/api-app-keys/",
 	summary: "Datadog API key and scoped application key.",
 	secrets: [
-		secret("apiKey", "Datadog API key"),
-		secret("appKey", "Datadog application key"),
+		secret("apiKey", "Datadog API key", {
+			helpUrl: "https://docs.datadoghq.com/account_management/api-app-keys/",
+		}),
+		secret("appKey", "Datadog application key", {
+			helpUrl: "https://docs.datadoghq.com/account_management/api-app-keys/",
+		}),
 	],
 	selectors: [
 		selector("baseUrl", "Datadog API site", "https-origin", {
 			required: true,
 			hint: "The API origin for your site, for example https://api.datadoghq.com.",
 			placeholder: "https://api.datadoghq.com",
+			helpUrl: "https://docs.datadoghq.com/getting_started/site/",
 		}),
 	],
 };
 
 const NEWRELIC_SPEC: VendorPairingSpec = {
 	connectorId: "newrelic",
+	vendorName: "New Relic",
+	keyPageUrl:
+		"https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/",
 	summary: "New Relic user API key and account id.",
-	secrets: [secret("apiKey", "New Relic user API key")],
+	secrets: [
+		secret("apiKey", "New Relic user API key", {
+			helpUrl:
+				"https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/",
+		}),
+	],
 	selectors: [
 		selector("accountId", "Account id", "digits", {
 			required: true,
 			hint: "Numeric account id from New Relic.",
 			maxDigits: 20,
+			helpUrl:
+				"https://docs.newrelic.com/docs/accounts/accounts-billing/account-structure/account-id/",
 		}),
 		selector("endpoint", "GraphQL endpoint", "https-url", {
 			hint: "Leave blank for https://api.newrelic.com/graphql; EU accounts use the EU host.",
@@ -338,8 +415,16 @@ const NEWRELIC_SPEC: VendorPairingSpec = {
 
 const HONEYCOMB_SPEC: VendorPairingSpec = {
 	connectorId: "honeycomb",
+	vendorName: "Honeycomb",
+	keyPageUrl:
+		"https://docs.honeycomb.io/configure/environments/manage-api-keys/",
 	summary: "Honeycomb configuration key and environment dataset.",
-	secrets: [secret("apiKey", "Honeycomb configuration API key")],
+	secrets: [
+		secret("apiKey", "Honeycomb configuration API key", {
+			helpUrl:
+				"https://docs.honeycomb.io/configure/environments/manage-api-keys/",
+		}),
+	],
 	selectors: [
 		selector("dataset", "Dataset", "bounded-name", {
 			required: true,
@@ -355,8 +440,14 @@ const HONEYCOMB_SPEC: VendorPairingSpec = {
 
 const AXIOM_SPEC: VendorPairingSpec = {
 	connectorId: "axiom",
+	vendorName: "Axiom",
+	keyPageUrl: "https://axiom.co/docs/reference/tokens",
 	summary: "Axiom API token, API origin and default dataset.",
-	secrets: [secret("token", "Axiom API token")],
+	secrets: [
+		secret("token", "Axiom API token", {
+			helpUrl: "https://axiom.co/docs/reference/tokens",
+		}),
+	],
 	selectors: [
 		selector("baseUrl", "Axiom API URL", "https-origin", {
 			required: true,
@@ -373,13 +464,20 @@ const AXIOM_SPEC: VendorPairingSpec = {
 
 const SIGNOZ_SPEC: VendorPairingSpec = {
 	connectorId: "signoz",
+	vendorName: "SigNoz",
+	keyPageUrl: "https://signoz.io/docs/userguide/authentication/",
 	summary: "Self-hosted SigNoz URL and a read-only API key.",
-	secrets: [secret("apiKey", "SigNoz API key")],
+	secrets: [
+		secret("apiKey", "SigNoz API key", {
+			helpUrl: "https://signoz.io/docs/userguide/authentication/",
+		}),
+	],
 	selectors: [
 		selector("baseUrl", "SigNoz URL", "https-origin", {
 			required: true,
 			hint: "The SigNoz instance origin, for example https://signoz.example.com.",
 			placeholder: "https://signoz.example.com",
+			helpUrl: "https://signoz.io/docs/install/",
 		}),
 	],
 };

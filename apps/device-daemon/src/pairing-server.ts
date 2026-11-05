@@ -6,6 +6,7 @@ import { createConsoleLogger, type Logger } from "./logger";
 import type { SecretStore } from "./secret-store";
 import {
 	getPairingSpec,
+	isSafeHelpUrl,
 	parsePairingSubmission,
 	type VendorPairingSpec,
 } from "./vendors/selectors";
@@ -124,6 +125,12 @@ input,textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,monospa
 textarea{min-height:5rem}
 .hint{margin:.25rem 0 0;font-size:.85rem;color:#8e97a8}
 .required{color:#ff8f70}
+a{color:#8fb0ff}
+.get-key{margin-left:.5rem;font-size:.85rem;font-weight:500;color:#8fb0ff;text-decoration:none}
+.get-key:hover{text-decoration:underline}
+.steps{margin:1rem 0;padding-left:1.25rem;color:#aab1c0}
+.steps li{margin:.45rem 0;line-height:1.5}
+.steps strong{color:#e8eaf0}
 button{margin-top:1rem;padding:.6rem 1rem;border-radius:6px;border:0;background:#4f7cff;color:#fff;font-weight:600}
 p{line-height:1.5;color:#aab1c0}
 </style>
@@ -304,9 +311,15 @@ function requiredMarker(required: boolean): string {
 	return required ? ' <span class="required" aria-hidden="true">*</span>' : "";
 }
 
+/** A validated static vendor link; unsafe or absent URLs render nothing. */
+function helpLink(field: { readonly helpUrl?: string }): string {
+	if (field.helpUrl === undefined || !isSafeHelpUrl(field.helpUrl)) return "";
+	return ` <a class="get-key" href="${escapeHtml(field.helpUrl)}" target="_blank" rel="noopener noreferrer">Get this key</a>`;
+}
+
 function secretInput(field: VendorPairingSpec["secrets"][number]): string {
 	const id = `secret_${field.key}`;
-	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}</label>
+	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}${helpLink(field)}</label>
 <input id="${escapeHtml(id)}" name="${escapeHtml(id)}" type="password"${field.required ? " required" : ""} autocomplete="off" spellcheck="false">
 ${field.hint === undefined ? "" : `<p class="hint">${escapeHtml(field.hint)}</p>`}`;
 }
@@ -317,9 +330,26 @@ function selectorInput(field: VendorPairingSpec["selectors"][number]): string {
 		field.placeholder === undefined
 			? ""
 			: ` placeholder="${escapeHtml(field.placeholder)}"`;
-	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}</label>
+	return `<label for="${escapeHtml(id)}">${escapeHtml(field.label)}${requiredMarker(field.required)}${helpLink(field)}</label>
 <input id="${escapeHtml(id)}" name="${escapeHtml(id)}" type="${field.inputType}"${field.required ? " required" : ""}${placeholder} autocomplete="off" spellcheck="false">
 ${field.hint === undefined ? "" : `<p class="hint">${escapeHtml(field.hint)}</p>`}`;
+}
+
+/**
+ * Three-step guide: open the vendor's key page, paste on this relay, save and
+ * let Isolate verify. The key page is a static https constant, never input.
+ */
+function vendorSteps(spec: VendorPairingSpec): string {
+	const vendor = escapeHtml(spec.vendorName);
+	const keyPage =
+		spec.keyPageUrl !== undefined && isSafeHelpUrl(spec.keyPageUrl)
+			? ` <a href="${escapeHtml(spec.keyPageUrl)}" target="_blank" rel="noopener noreferrer">Open the ${vendor} key page</a>.`
+			: "";
+	return `<ol class="steps">
+<li><strong>Create a read-only key</strong> in ${vendor}.${keyPage}</li>
+<li><strong>Paste it below.</strong> It goes only to this relay, which stores it encrypted on this machine.</li>
+<li><strong>Save.</strong> Isolate then verifies it with one bounded read and marks the connector active.</li>
+</ol>`;
 }
 
 /**
@@ -329,8 +359,9 @@ ${field.hint === undefined ? "" : `<p class="hint">${escapeHtml(field.hint)}</p>
 function vendorFormBody(spec: VendorPairingSpec, nonce: string): string {
 	const secrets = spec.secrets.map(secretInput).join("\n");
 	const selectors = spec.selectors.map(selectorInput).join("\n");
-	return `<h1>Connect ${escapeHtml(spec.connectorId)}</h1>
+	return `<h1>Connect ${escapeHtml(spec.vendorName)}</h1>
 <p>${escapeHtml(spec.summary)} Secrets are stored only on this device, encrypted with a key derived from the relay token. They are never sent to the Isolate server.</p>
+${vendorSteps(spec)}
 <form method="post" action="/pair">
 <input type="hidden" name="nonce" value="${nonce}">
 ${secrets}

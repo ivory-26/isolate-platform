@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	getPairingSpec,
+	isSafeHelpUrl,
 	PAIRING_FIELD_ERROR_CODES,
 	parsePairingSubmission,
 	resolveOptionalSelector,
@@ -326,5 +327,35 @@ describe("call-time selector precedence", () => {
 				store: { getFields: () => ({ token: "stored" }) },
 			}),
 		).toEqual({ ok: true, value: undefined });
+	});
+});
+
+describe("pairing help links", () => {
+	test("every guided vendor has a safe key page and at least one field link", () => {
+		for (const spec of VENDOR_PAIRING_SPECS) {
+			expect(spec.vendorName.length).toBeGreaterThan(0);
+			expect(spec.keyPageUrl).toBeDefined();
+			expect(isSafeHelpUrl(spec.keyPageUrl ?? "")).toBe(true);
+			const links = [...spec.secrets, ...spec.selectors]
+				.map((field) => field.helpUrl)
+				.filter((url): url is string => url !== undefined);
+			expect(links.length).toBeGreaterThan(0);
+			for (const link of links) expect(isSafeHelpUrl(link)).toBe(true);
+		}
+	});
+
+	test("rejects non-https, credential-bearing, loopback and unbounded links", () => {
+		expect(isSafeHelpUrl("http://docs.sentry.io/account/auth-tokens/")).toBe(
+			false,
+		);
+		expect(isSafeHelpUrl("https://user:pass@example.com/page")).toBe(false);
+		expect(isSafeHelpUrl("https://localhost/page")).toBe(false);
+		expect(isSafeHelpUrl("https://printer.local/page")).toBe(false);
+		expect(isSafeHelpUrl("https://example.com/\nnext")).toBe(false);
+		expect(isSafeHelpUrl(`https://example.com/${"a".repeat(600)}`)).toBe(false);
+		expect(isSafeHelpUrl("")).toBe(false);
+		expect(isSafeHelpUrl("https://docs.sentry.io/account/auth-tokens/")).toBe(
+			true,
+		);
 	});
 });

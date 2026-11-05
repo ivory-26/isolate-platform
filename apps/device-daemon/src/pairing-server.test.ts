@@ -345,6 +345,34 @@ describe("localhost pairing page", () => {
 		expect(html).not.toContain('name="selectors"');
 	});
 
+	test("renders a three-step guide and safe vendor key links", async () => {
+		const { server } = await startServer({ claimConnector: "sentry" });
+		const html = await openPage(server.localUrl, expectedCode, "sentry");
+		expect(html).toContain('<ol class="steps">');
+		expect(html).toContain(
+			"<strong>Create a read-only key</strong> in Sentry.",
+		);
+		expect(html).toContain(
+			'href="https://sentry.io/settings/developer-settings/"',
+		);
+		expect(html).toContain(
+			'href="https://docs.sentry.io/account/auth-tokens/"',
+		);
+		expect(html).toContain('rel="noopener noreferrer"');
+		expect(html).toContain('target="_blank"');
+		expect(html).toContain("Get this key");
+		// The link is an anchor, not a form target, and no secret is rendered.
+		expect(html).not.toContain('name="secret_token" value=');
+	});
+
+	test("the generic form has no vendor key links", async () => {
+		const { server } = await startServer({ claimConnector: "sentry" });
+		const html = await openPage(server.localUrl, expectedCode);
+		expect(html).toContain("Connect a provider");
+		expect(html).not.toContain("Get this key");
+		expect(html).not.toContain('class="steps"');
+	});
+
 	test("stores a Grafana base URL and token from the vendor form", async () => {
 		const { server, store, lines } = await startServer({
 			claimConnector: "grafana",

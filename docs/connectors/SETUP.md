@@ -134,6 +134,14 @@ installs.
 | Axiom | `token` | `baseUrl`; `dataset` |
 | SigNoz | `apiKey` | `baseUrl` |
 
+The page opens with a three-step guide (create a read-only key at the vendor →
+paste on this relay → save and let Isolate verify) and every secret field carries
+a **Get this key** link to the vendor's own key page or documentation. Those links
+are static `https` constants in the daemon, open in a new tab with
+`rel="noopener noreferrer"`, and never carry a credential or user-supplied value.
+They are guidance only: the page still accepts any credential the vendor issues,
+and verification remains the authority on whether it works.
+
 Validation is the same on the page and in the relay config:
 
 - URLs are absolute `https` URLs with no userinfo, query or fragment, at most 512

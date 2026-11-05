@@ -139,6 +139,12 @@ also local; they are not sent to the Isolate server or written to the database.
 | Axiom | `token` | `baseUrl`; `dataset` |
 | SigNoz | `apiKey` | `baseUrl` |
 
+The page shows a three-step guide and a **Get this key** link beside each secret
+field. The link opens the vendor's key page or documentation in a new tab; it is
+a static `https` constant and never contains a credential. Creating the key still
+happens in your own vendor account, and **Verify** in Isolate is what proves it
+works.
+
 The local page and the relay config enforce the same bounds:
 
 - Base URLs and endpoints are absolute `https` URLs with no userinfo, query or

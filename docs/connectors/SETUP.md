@@ -116,7 +116,10 @@ Shape (values omitted; `timeoutMs` is optional per vendor, 1,000–30,000 ms):
 ### 2.2 Pairing fields on the relay
 
 The browser pairing page opens at `http://127.0.0.1:47821/pair?code=...` with a
-connector hint. It renders the fields for that connector instead of a single
+connector hint. `47821` is both the daemon default (`pairing.port`) and the port
+the Isolate server hardcodes in the link it gives the browser, so leave
+`pairing.port` at its default for the guided flow; a custom port only works if you
+edit the link by hand. It renders the fields for that connector instead of a single
 generic secret box. Secret fields and selectors are written to the encrypted local
 store; the platform receives credential metadata only. A field not marked optional
 is required. `vendors.<vendor>` JSON and env values remain fallbacks for legacy
@@ -210,7 +213,7 @@ GitHub is the deliberate exception to the device model. The App identifies the p
 
 **Where it lives:** the App key is server-side (inline or a file path), never in the repository, prompt or relay config. The slug and state secret are deployment-level values shared by all tenants; they are never per-tenant. The webhook secret is an inbound verifier secret. No user provider key is involved.
 
-**Install per workspace:** the setup page opens `/api/github/install`, signs a 10-minute state bound to the workspace and user, and GitHub returns to `/api/github/callback`. Missing or invalid App configuration returns the fixed `GITHUB_APP_NOT_CONFIGURED` result; the checklist is in [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
+**Install per workspace:** the setup page opens `/api/github/install` in a new tab, signs a 10-minute state bound to the workspace and user, and GitHub returns to the App's **Post installation → Setup URL**, which must be `https://<host>/api/github/callback` (not the OAuth callback field). With the Setup URL blank, GitHub stays on its own success page and the installation is never stored. Missing or invalid App configuration returns the fixed `GITHUB_APP_NOT_CONFIGURED` result; the checklist is in [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
 
 **Comment permission:** `github.comment` requests both `issues:write` and `pull_requests:write`. The first live attempt returned 403 "Resource not accessible by integration" until `pull_requests:write` was added. The live-proven call posted comment `6547408811` on PR #2 on 2026-10-31.
 
@@ -222,7 +225,12 @@ Sources (accessed 2026-11-01): [GitHub App authentication](https://docs.github.c
 
 ## 4. Sentry
 
-**What you need:** organization slug, region (US or EU), one organization auth token, one internal integration for the issue webhook, and its Client Secret. Free Developer plan is sufficient.
+**What you need:** one organization auth token, the token's region expressed as
+the API base URL (US `https://sentry.io`, EU `https://de.sentry.io`), one
+internal integration for the issue webhook, and its Client Secret. Free
+Developer plan is sufficient. The pairing form collects the token and an optional
+base URL; the organization slug is not entered there and is used only by the
+legacy `[connectors.sentry] org_slug` path.
 
 **Create the read token:** `Settings > Developer Settings > Organization Tokens > Create New Token`. Select only `event:read`, `project:read`, `org:read` and `project:releases`. Omit `member:read`; it exposes personal data. Organization tokens cannot be edited after creation, so a scope change is a new token.
 
@@ -248,7 +256,10 @@ Sources (accessed 2026-11-01): [Sentry pricing](https://sentry.io/pricing/), [in
 
 ## 5. Grafana
 
-**What you need:** stack URL, one service-account token, the metric and log data-source UIDs, and an alerting webhook contact point with a random secret and timestamp header.
+**What you need:** stack URL, one service-account token, and an alerting webhook
+contact point with a random secret and timestamp header. The metric and log
+data-source UIDs are optional at pairing time; when left blank the bounded
+verification read uses the stack default.
 
 **Create the identity:** `Administration > Users and access > Service accounts > Add service account`, choose the Viewer basic role, then `Add service account token` with a 90-day expiry. Assign the fixed roles `fixed:datasources:reader` (carries `datasources:query`), `fixed:alerting.rules:reader` and `fixed:annotations:reader`.
 

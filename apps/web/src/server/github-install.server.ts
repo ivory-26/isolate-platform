@@ -79,6 +79,18 @@ export class GitHubAppNotConfiguredError extends Error {
 	}
 }
 
+/**
+ * The App is configured but this organization has no active installation.
+ * Distinct from a genuine provider `NOT_FOUND` so the UI can tell the caller
+ * to install the App instead of suggesting a transient error.
+ */
+export class GitHubInstallationRequiredError extends Error {
+	constructor() {
+		super("GitHub installation required");
+		this.name = "GitHubInstallationRequiredError";
+	}
+}
+
 /** Fixed failure text; no entry interpolates request data or env values. */
 export const GITHUB_SETUP_FAILURE_MESSAGES: Record<
 	GitHubSetupFailureCode,
@@ -118,6 +130,9 @@ function failure<T>(code: GitHubSetupFailureCode): GitHubSetupResult<T> {
 function failureFromError<T>(error: unknown): GitHubSetupResult<T> {
 	if (error instanceof GitHubAppNotConfiguredError) {
 		return failure("GITHUB_APP_NOT_CONFIGURED");
+	}
+	if (error instanceof GitHubInstallationRequiredError) {
+		return failure("GITHUB_INSTALLATION_REQUIRED");
 	}
 	if (error instanceof RequestGuardError) {
 		return failure(error.status === 403 ? "FORBIDDEN" : "INVALID_INPUT");
@@ -412,10 +427,7 @@ async function activeInstallation(
 	const installation =
 		await dependencies.installations.findActiveByOrganization(organizationId);
 	if (installation === null) {
-		throw new PlatformError(
-			"NOT_FOUND",
-			"no active GitHub installation for this organization",
-		);
+		throw new GitHubInstallationRequiredError();
 	}
 	return installation;
 }

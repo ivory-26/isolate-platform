@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useSession } from "@/components/auth/SessionProvider";
 import { CopyButton } from "@/components/common/copy-button";
 import { ErrorState } from "@/components/common/error-state";
@@ -26,6 +26,7 @@ import { registerDevice, toDeviceApiError } from "@/features/devices/api";
 import {
 	type DeviceView,
 	type IssuedDeviceToken,
+	RELAY_OFFLINE_AFTER_MS,
 	validateDeviceName,
 } from "@/features/devices/contracts";
 import { deviceKeys, deviceListOptions } from "@/features/devices/queries";
@@ -236,7 +237,11 @@ function GitHubStep({ state }: { state: SetupState }) {
 			</div>
 			<div className="flex shrink-0 flex-wrap gap-2">
 				<Button asChild>
-					<a href="/api/github/install">
+					<a
+						href="/api/github/install"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
 						Install GitHub App
 						<ArrowRightIcon />
 					</a>
@@ -262,11 +267,13 @@ function RelayStep({
 	const [issued, setIssued] = useState<IssuedDeviceToken | null>(null);
 	const [issuedName, setIssuedName] = useState("relay");
 	const [error, setError] = useState<string | null>(null);
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
 	const devices = useQuery({
 		...deviceListOptions(),
 		refetchInterval: (query) =>
 			query.state.data?.some((device) => device.status === "active")
-				? false
+				? 15_000
 				: 4_000,
 	});
 	const register = useMutation({
@@ -295,7 +302,17 @@ function RelayStep({
 	}
 
 	const relayDevices = devices.data ?? [];
-	const active = relayDevices.find((device) => device.status === "active");
+	// A stored `active` status is not liveness: the row stays active after the
+	// relay stops. Treat a heartbeat older than the same 5-minute window the
+	// relays panel uses as offline so the wizard cannot claim a dead relay.
+	const active = relayDevices.find(
+		(device) =>
+			device.status === "active" &&
+			(!mounted ||
+				(device.lastSeenAt !== null &&
+					Date.now() - new Date(device.lastSeenAt).getTime() <=
+						RELAY_OFFLINE_AFTER_MS)),
+	);
 	const command =
 		issued === null
 			? null

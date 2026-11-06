@@ -44,6 +44,13 @@ export function connectorLabel(id: string): string {
 	return CONNECTOR_LABELS[id as ConnectorId] ?? id;
 }
 
+/**
+ * A stored `active` status is not liveness. The relay row stays active after
+ * the daemon stops, so the UI treats a heartbeat older than this window as
+ * offline without rewriting the stored status.
+ */
+export const RELAY_OFFLINE_AFTER_MS = 5 * 60 * 1000;
+
 export const CONNECTOR_AUTH_KINDS = [
 	"api_key",
 	"oauth_client_credentials",

@@ -87,11 +87,30 @@ private networks. You install it once per environment; every connector reuses it
    (`~/.isolate/secrets.json`, mode 0600) keyed from the device token. The plaintext
    key never leaves the machine.
 
+**Windows:** the one-line installer is a POSIX `sh` script and does not run
+natively. Start the daemon manually on the relay machine:
+
+```powershell
+$env:ISOLATE_DEVICE_TOKEN = "<one-time-device-token>"
+cd C:\path\to\isolate-platform\apps\device-daemon
+bun start
+```
+
+Create `%USERPROFILE%\.isolate\connectors.json` first:
+
+```json
+{ "serverUrl": "https://<your-isolate-host>", "deviceTokenEnv": "ISOLATE_DEVICE_TOKEN" }
+```
+
+The web app does **not** start the relay for you. Closing the terminal stops it,
+and the stored relay row stays `active` until the UI notices a stale heartbeat
+(about five minutes).
+
 ### Relay states
 
 | State | Meaning | Next action |
 |---|---|---|
-| Pending | Registered, never seen | Run the install command |
+| Pending | Registered, never seen (the current register API stores `active` immediately, so this is normally derived from the heartbeat time) | Run the install command |
 | Active | Heartbeating | Connect a source |
 | Offline | Missed heartbeats | Start the relay / check network |
 | Revoked | Token revoked | Register a new relay |
@@ -105,9 +124,12 @@ private networks. You install it once per environment; every connector reuses it
    source while leaving its write tools off.
 3. Choose the relay that will hold the credential. If none is active, Isolate sends
    you back to Setup → Relay.
-4. Choose **Connect securely**. Isolate opens a one-time page on the relay's
-   loopback address (`http://127.0.0.1:47821/pair?...`). The page is served by your
-   relay, not by Isolate, and it renders the fields for that connector.
+4. Choose **Connect securely**, then click **Open relay page**. That opens a
+   one-time page on the relay's loopback address
+   (`http://127.0.0.1:47821/pair?...`) in a new tab. The page is served by your
+   relay, not by Isolate, and it renders the fields for that connector. If no page
+   opens, the relay is not running on this machine: start it and confirm
+   `127.0.0.1:47821` is listening.
 5. Enter the connector's secret fields and non-secret selectors on that page. The
    relay writes them to its encrypted local store and confirms the pairing. The
    Isolate server receives only the connector id, a display name, an opaque

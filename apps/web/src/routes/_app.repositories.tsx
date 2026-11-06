@@ -147,7 +147,10 @@ function RepositoriesPage() {
 				</ConsoleNote>
 			) : null}
 
-			<ConnectGitHubPanel canManage={canManage} />
+			<ConnectGitHubPanel
+				canManage={canManage}
+				autoExpand={search.github === "connected"}
+			/>
 
 			<ConsoleNote role="note">
 				Installation account metadata is not part of this read model yet; rows

@@ -78,6 +78,7 @@ describe("shouldStartOnboarding", () => {
 
 	test("never redirects a workspace that already has any surface", () => {
 		for (const partial of [
+			{ githubConnected: true },
 			{ hasRepository: true },
 			{ hasRelay: true },
 			{ hasConnection: true },

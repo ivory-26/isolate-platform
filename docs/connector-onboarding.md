@@ -118,6 +118,12 @@ functions and routes. Each resolves the caller scope server-side
 | `revokeConnectorCredential` | POST | `connector:manage` | `{ credentialId }` | `{ status: "revoked" }` |
 | `listConnectorUsage` | GET | `connector:read` | `{ connector }` | Ledger counters and budgets |
 
+Of the actions above, only **verify** is implemented beyond registration and
+revocation; `submitConnectorCredential`, `completeConnectorOAuth`,
+`updateConnectorTools` and `rotateConnectorCredential` remain design. The
+implemented writes enforce `member:manage`; the `connector:manage` name is the
+documentation label, not a separate capability.
+
 `verifyConnectorCredential` is implemented. It enqueues exactly one
 `connector.verify` device call and waits a bounded time. On success the credential
 becomes `active`, `last_validated_at` is recorded, and the view carries
@@ -136,11 +142,12 @@ time, update `last_seen_at` and return bounded queued requests. No browser sessi
 is involved.
 
 A `connectorId` is a closed union, not free text. Each connector accepts only its
-documented selectors. URL selectors are https-only, have no userinfo, query or
-fragment, and must match the connector's host allowlist (or the operator's pinned
-host). A display name is 1–100 characters and is not a secret. A `credentialRef`
-is 1–200 characters naming a device-local keychain or store entry; it is not a
-secret either.
+documented selectors. URL selectors are https-only, at most 512 characters, and
+have no userinfo, query or fragment. The device, not the server, performs the
+fetch; **no host allowlist is enforced today** (an earlier draft of this page
+claimed one). A display name is 1–100 characters and is not a secret. A
+`credentialRef` is 1–200 characters naming a device-local keychain or store
+entry; it is not a secret either.
 
 ## 2. Credential intake and storage
 
@@ -707,14 +714,14 @@ bun run acceptance:offline
 | Device-token theft and replay | An attacker copies the bearer token from a device | Token is 256 random bits; only its sha256 hash is stored; constant-time compare; revoke flips status and rejects new polls; rotation means register-new/revoke-old | Replay before revocation succeeds; there is no per-request nonce or binding to a client certificate yet |
 | Request authenticity / queue poisoning | A compromised or buggy producer enqueues a provider call for a device | Worker-only enqueue; typed request schema; closed operation vocabulary; opaque `credential_ref`; 16 KiB params cap; ledger and audit per call; deterministic device/credential resolution | The proxy model inherently lets the server ask a device to perform allowed operations; request signing and per-request ids are design-only |
 | Offline device | Daemon not running, laptop closed, network loss | Fail closed as `INTEGRATION_UNAVAILABLE` after the queue deadline; no server-key or shared-key fallback; task continues with partial evidence | The task loses that connector's evidence until the device returns |
-| SSRF via base URL | A self-hosted URL points at a private IP or metadata service | The **device** fetches, not the server; https only, no userinfo/query/fragment, host allowlist, no redirects, connect timeout | A compromised DNS or a provider-side redirect; the device's network position is the new trust boundary |
+| SSRF via base URL | A self-hosted URL points at a private IP or metadata service | The **device** fetches, not the server; https only, no userinfo/query/fragment, no redirects, connect timeout | No host allowlist is implemented; a compromised DNS or provider-side redirect is out of scope, and the device's network position is the trust boundary |
 | Webhook spoofing | Forged delivery to a known endpoint | HMAC over raw bytes, constant-time compare, timestamp window, per-endpoint platform secret, 64 KiB cap | A leaked endpoint secret; rotation is the only remedy |
 | Tenant cross-read | Guessing another org's device, credential or endpoint id | Every query carries `organization_id`; FK; membership re-check in the write transaction; cross-tenant id is `FORBIDDEN`; broker checks `device_id` membership | A missing predicate in a new query; repository tests assert the scope |
 | Replay | Re-sending a valid webhook, OAuth code or device request | 30-minute dedupe by fingerprint; single-use OAuth state and code; `202` is idempotent; short request expiry (design) | A replay inside the window is deduped, not rejected; device request ids are design-only |
 | Quota exhaustion | A flapping alert or an agent loop | Fingerprint dedupe, two-active-task cap, per-task tool caps, 80% ledger budget, `429` with `Retry-After` | A distributed burst across orgs is still provider-visible; the platform stays within its own budget |
 | Confused deputy | A member uses an admin's connection | Capability per action; `connector:use` only for enabled read tools; `scoped_write` owner/admin | A misconfigured enabled set; the UI shows every enabled tool |
 | OAuth CSRF / mix-up | Attacker-supplied `state` or code | State bound to session, org, connector and a server nonce; PKCE; exact redirect URI; exchange runs on the device | A stolen browser session; the state is single-use |
-| Model-authored URL or query | Prompt injection asks for a different host or a wider window | No URL parameter in any tool; closed operations; typed ids; window enums; device-side host allowlist | A provider id that resolves to another tenant's object; provider ACL is the backstop |
+| Model-authored URL or query | Prompt injection asks for a different host or a wider window | No URL parameter in any tool; closed operations; typed ids; window enums; the device validates https-only selectors | A provider id that resolves to another tenant's object; provider ACL is the backstop |
 
 **Device token rotation and revocation.** Revocation is a status flip on
 `connector_devices` and is checked on every poll; it does not recall an

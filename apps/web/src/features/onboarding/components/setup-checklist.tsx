@@ -128,7 +128,7 @@ function SetupAction({ step, state }: { step: SetupStep; state: SetupState }) {
 	if (step.id === "github" && !state.githubConnected) {
 		return (
 			<Button asChild size="sm">
-				<a href="/api/github/install">
+				<a href="/api/github/install" target="_blank" rel="noopener noreferrer">
 					{step.actionLabel}
 					<ArrowRightIcon />
 				</a>

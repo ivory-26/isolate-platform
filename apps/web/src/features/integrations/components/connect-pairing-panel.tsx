@@ -310,7 +310,13 @@ export function ConnectPairingPanel({
 							</Link>
 						</Button>
 						<Button asChild size="sm" variant="outline">
-							<a href="/api/github/install">Install App</a>
+							<a
+								href="/api/github/install"
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								Install App
+							</a>
 						</Button>
 					</div>
 				</div>

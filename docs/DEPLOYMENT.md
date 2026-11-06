@@ -41,9 +41,12 @@ does not affect the install flow.
 
 ## 2. Checklist
 
-1. Create the GitHub App under the deployment owner. Register the callback URL as
-   `https://<your-isolate-host>/api/github/callback` and the webhook URL as
-   `https://<your-isolate-host>/api/webhooks`.
+1. Create the GitHub App under the deployment owner. Set the **Post installation
+   → Setup URL** to `https://<your-isolate-host>/api/github/callback` and enable
+   **Redirect on update**. The Setup URL is what receives `installation_id` +
+   `state` after install; the OAuth "Callback URL" field is not used by this flow.
+   Set the webhook URL to `https://<your-isolate-host>/api/webhooks` only when
+   event intake is enabled.
 2. Grant only the permissions the connector needs. The current read set and the two
    scoped writes are listed in [`connectors/github.md`](connectors/github.md).
 3. Generate a private key in the App settings and place it in the secret manager,

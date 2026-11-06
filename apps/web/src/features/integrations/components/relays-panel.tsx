@@ -38,12 +38,11 @@ import {
 import {
 	type DeviceView,
 	type IssuedDeviceToken,
+	RELAY_OFFLINE_AFTER_MS,
 	validateDeviceName,
 } from "@/features/devices/contracts";
 import { deviceKeys, deviceListOptions } from "@/features/devices/queries";
 import { buildRelayInstallCommand } from "@/features/onboarding/setup-steps";
-
-const OFFLINE_AFTER_MS = 5 * 60 * 1000;
 
 /**
  * Relay management: register (token shown once), the one-line install command,
@@ -62,9 +61,12 @@ export function RelaysPanel({ canManage }: { canManage: boolean }) {
 
 	const devices = useQuery({
 		...deviceListOptions(),
+		// Keep polling while a relay is active: `last_seen_at` only advances when
+		// the relay claims work, so a stopped relay must be able to flip to
+		// Offline without a remount.
 		refetchInterval: (query) =>
 			query.state.data?.some((device) => device.status === "active")
-				? false
+				? 15_000
 				: 5_000,
 	});
 	const register = useMutation({
@@ -271,7 +273,7 @@ export function RelaysPanel({ canManage }: { canManage: boolean }) {
 									device.status === "active" &&
 									device.lastSeenAt !== null &&
 									Date.now() - new Date(device.lastSeenAt).getTime() >
-										OFFLINE_AFTER_MS;
+										RELAY_OFFLINE_AFTER_MS;
 								return (
 									<TableRow key={device.id} className="h-12 border-line-subtle">
 										<TableCell>

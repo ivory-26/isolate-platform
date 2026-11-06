@@ -344,13 +344,16 @@ describe("install service", () => {
 		const { service } = harness();
 		expect(await service.listRepositories(scope())).toMatchObject({
 			ok: false,
-			error: { code: "NOT_FOUND" },
+			error: { code: "GITHUB_INSTALLATION_REQUIRED" },
 		});
 		expect(
 			await service.importRepositories(scope(), {
 				fullNames: ["acme/widgets"],
 			}),
-		).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+		).toMatchObject({
+			ok: false,
+			error: { code: "GITHUB_INSTALLATION_REQUIRED" },
+		});
 	});
 
 	test("imports at most 25 visible repositories and skips the rest", async () => {

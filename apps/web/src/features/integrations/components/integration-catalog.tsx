@@ -107,6 +107,7 @@ function CatalogRow({
 						to="/integrations/$connectorId"
 						params={{ connectorId: entry.id }}
 						search={{ tab: "catalog" }}
+						hash="connect"
 					>
 						{connection ? "Open" : "Connect"}
 						<ArrowRightIcon />

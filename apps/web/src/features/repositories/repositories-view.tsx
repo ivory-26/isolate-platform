@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { onboardingKeys } from "@/features/onboarding/queries";
 import { formatDurationMs } from "@/lib/format";
 import type {
 	GitHubSetupResult,
@@ -61,7 +62,6 @@ import {
 	importRepositories,
 	listInstallationRepositories,
 	registerRepository,
-	startGitHubInstall,
 } from "./repositories.functions";
 
 const PROVIDER_LABEL: Record<RepositoryProvider, string> = {
@@ -256,6 +256,8 @@ function failureHint(result: GitHubSetupResult<unknown>): string | null {
 			return "Only an owner or admin can install the App or import repositories.";
 		case "RATE_LIMITED":
 			return "GitHub is rate limiting Isolate. Wait a moment and refresh the list.";
+		case "NOT_FOUND":
+			return "The stored GitHub installation is no longer available. Reinstall the Isolate App, then refresh this list.";
 		default:
 			return "The installation repository list could not be read. Try again shortly.";
 	}
@@ -266,9 +268,16 @@ function failureHint(result: GitHubSetupResult<unknown>): string | null {
  * installation's own repositories. Manual registration stays available as an
  * advanced form below; it is never the main path.
  */
-export function ConnectGitHubPanel({ canManage }: { canManage: boolean }) {
+export function ConnectGitHubPanel({
+	canManage,
+	autoExpand = false,
+}: {
+	canManage: boolean;
+	/** Open the picker immediately, e.g. after GitHub redirects back. */
+	autoExpand?: boolean;
+}) {
 	const queryClient = useQueryClient();
-	const [expanded, setExpanded] = useState(false);
+	const [expanded, setExpanded] = useState(autoExpand);
 	const [selected, setSelected] = useState<string[]>([]);
 	const [notice, setNotice] = useState<string | null>(null);
 
@@ -280,18 +289,22 @@ export function ConnectGitHubPanel({ canManage }: { canManage: boolean }) {
 		retry: false,
 	});
 
-	const install = useMutation({
-		mutationFn: () => startGitHubInstall(),
-		onSuccess: (result) => {
-			if (!result.ok) {
-				setNotice(failureHint(result));
-				return;
-			}
-			// The install URL is GitHub's own origin; the browser leaves Isolate.
-			window.location.assign(result.value.url);
-		},
-		onError: () => setNotice("The GitHub install could not be started."),
-	});
+	// The install runs in a new tab. When the user returns to this tab, refresh
+	// the installation list so a repository installed meanwhile appears without
+	// a manual click.
+	const { refetch: refetchInstallation } = installation;
+	useEffect(() => {
+		if (!expanded) return;
+		const refresh = () => {
+			if (document.visibilityState === "visible") void refetchInstallation();
+		};
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", refresh);
+		return () => {
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", refresh);
+		};
+	}, [expanded, refetchInstallation]);
 
 	const importMutation = useMutation({
 		mutationFn: (fullNames: string[]) =>
@@ -308,7 +321,10 @@ export function ConnectGitHubPanel({ canManage }: { canManage: boolean }) {
 				}${skipped.length > 0 ? `; ${skipped.length} skipped (already imported or not visible)` : ""}.`,
 			);
 			setSelected([]);
-			await queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: repositoryKeys.all }),
+				queryClient.invalidateQueries({ queryKey: onboardingKeys.setup }),
+			]);
 		},
 		onError: () => setNotice("The import request could not be completed."),
 	});
@@ -350,17 +366,16 @@ export function ConnectGitHubPanel({ canManage }: { canManage: boolean }) {
 			description="Install the Isolate App, then choose the repositories it may work on. Tasks get a repository and default branch from this list."
 			action={
 				canManage ? (
-					<Button
-						type="button"
-						size="sm"
-						disabled={install.isPending}
-						onClick={() => {
-							setNotice(null);
-							install.mutate();
-						}}
-					>
-						<RepositoriesIcon size={14} />
-						{install.isPending ? "Opening GitHub…" : "Install GitHub App"}
+					<Button asChild size="sm">
+						{/* New tab: the GitHub round trip must not replace the app. */}
+						<a
+							href="/api/github/install"
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							<RepositoriesIcon size={14} />
+							Install GitHub App
+						</a>
 					</Button>
 				) : null
 			}

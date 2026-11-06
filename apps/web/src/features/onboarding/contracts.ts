@@ -83,10 +83,16 @@ export const EMPTY_SETUP_STATE: SetupState = {
  * The only condition under which `_app` sends a caller to `/onboarding`:
  * setup is incomplete and the organization has never made a first step in any
  * surface. An existing populated workspace is never redirected.
+ *
+ * A connected GitHub App counts as a first step even before a repository is
+ * imported. Without this, the callback's cold load to
+ * `/repositories?github=connected` is redirected to `/onboarding` and the
+ * success banner and repository picker are unreachable.
  */
 export function shouldStartOnboarding(state: SetupState): boolean {
 	return (
 		!state.complete &&
+		!state.githubConnected &&
 		!state.hasRepository &&
 		!state.hasRelay &&
 		!state.hasConnection &&

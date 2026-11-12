@@ -34,3 +34,20 @@ commits = ["17d5e25ecf5ba58ea5865e0597c12eb09eb90732"]
 description = "Synthetic ghs_w7sbx_* fixtures in sandbox provider tests"
 paths = ['''packages/sandbox/src/providers/modal\.test\.ts''', '''packages/sandbox/src/providers/modal-client\.test\.ts''']
 regexes = ['''ghs_w7sbx_[A-Za-z0-9_]+''']
+
+# Wave 23 fixture: a placeholder token used only to assert that the relay install
+# command embeds the server URL and token. The literal is not a credential and no
+# provider would accept it; the exact value is allowlisted so a different token
+# in this file still trips the scanner.
+[[allowlists]]
+description = "Placeholder relay token in the onboarding setup-steps test"
+paths = ['''apps/web/src/features/onboarding/setup-steps\.test\.ts''']
+regexes = ['''abcdefghijklmnopqrstuvwx1234567890''']
+
+# `keychain:<vendor>/<env>` is a credential *reference* stored in the database,
+# never the secret itself. Scoped to the test that builds a fake repository, and
+# to the reference shape only.
+[[allowlists]]
+description = "Credential references, not secrets, in connector verification tests"
+paths = ['''apps/web/src/server/connector-verification\.test\.ts''']
+regexes = ['''keychain:[a-z0-9/_-]+''']

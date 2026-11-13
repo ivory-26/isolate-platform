@@ -180,6 +180,11 @@ export function createOfflineWorkerDeps(
 		...(overrides.acquireBranchLock === undefined
 			? {}
 			: { acquireBranchLock: overrides.acquireBranchLock }),
+		// Wave 26: task-wide usage for cumulative caps. The configured composition
+		// binds it to the usage repository; absent (offline) starts from zero.
+		...(overrides.loadTaskUsage === undefined
+			? {}
+			: { loadTaskUsage: overrides.loadTaskUsage }),
 	};
 
 	const handlers: JobHandler[] = [createTaskExecutionHandler(taskExecution)];

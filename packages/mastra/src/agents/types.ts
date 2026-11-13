@@ -84,14 +84,27 @@ export type AgentUsageListener = (usage: AgentUsage) => Promise<void> | void;
 /**
  * Hard per-task bounds enforced by the runtime, not by model judgement.
  * Exhaustion surfaces as `PlatformError("BUDGET_EXCEEDED")`.
+ *
+ * The token bound is **task-wide**, not per runtime instance: a requeued job
+ * gets a fresh runtime, so the worker seeds {@link priorTaskTokens} with the
+ * spend already recorded for the same task. The runtime then blocks a turn
+ * when the cumulative total reaches `maxTaskTokens`, and reserves the size of
+ * the previous turn so the bound is a true upper bound from turn 2 onward
+ * (turn 1 is the only unavoidable overshoot: the next turn's size is unknown).
  */
 export type AgentTurnCaps = {
 	/** Max output tokens requested per model call. */
 	maxOutputTokensPerTurn: number;
-	/** Max cumulative tokens for the whole task. */
+	/** Max cumulative tokens for the whole task, including prior attempts. */
 	maxTaskTokens: number;
 	/** Finite Mastra step bound passed to `generate()`. */
 	maxSteps: number;
+	/**
+	 * Tokens already spent by earlier attempts of this same task (default 0).
+	 * Must be a finite non-negative integer; validated with the other caps.
+	 * Model-agnostic: only the count matters, never the provider or model.
+	 */
+	priorTaskTokens?: number;
 };
 
 /** Minimal agent-facing surface driven by the worker's imperative handler. */

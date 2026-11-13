@@ -27,6 +27,7 @@ import {
 	createIncidentContextBundleLoader,
 	createRunSummaryReader,
 	createSandboxEnvResolver,
+	createTaskUsageLoader,
 	createToolInvocationRecorder,
 	loadPullRequestTargetFromEvents,
 	loadPullRequestTaskState,
@@ -196,6 +197,8 @@ describe("configured composition", () => {
 		expect(composition.queue).toBeDefined();
 		expect(typeof composition.overrides.usageSink?.record).toBe("function");
 		expect(typeof composition.overrides.loadTaskContext).toBe("function");
+		// Wave 26: cumulative caps read task-wide spend from `usage_records`.
+		expect(typeof composition.overrides.loadTaskUsage).toBe("function");
 		expect(composition.overrides.lifecycle).toBeDefined();
 		// Wave 11: large diffs are stored through the tenant-scoped blob table.
 		expect(composition.overrides.blobStore).toBeDefined();
@@ -976,5 +979,68 @@ describe("wave-11 price table and run summary", () => {
 		expect(
 			await reader({ organizationId: OTHER_ORG, taskId: TASK }),
 		).toBeNull();
+	});
+
+	test("task usage loader returns task-wide tokens and parses exact cost", async () => {
+		const seen: TaskId[] = [];
+		const load = createTaskUsageLoader({
+			tasks: {
+				get: async (taskId) =>
+					({
+						id: taskId,
+						organization_id: ORG,
+					}) as unknown as TaskRow,
+			},
+			usage: {
+				sumByTask: async (taskId) => {
+					seen.push(taskId);
+					return {
+						promptTokens: 120,
+						completionTokens: 30,
+						totalTokens: 150,
+						costUsd: "1.250042",
+					};
+				},
+			},
+		});
+		expect(await load({ organizationId: ORG, taskId: TASK })).toEqual({
+			tokens: 150,
+			costUsd: 1.250042,
+		});
+		expect(seen).toEqual([TASK]);
+
+		// A foreign task is never read: `sumByTask` is keyed by task id only.
+		expect(await load({ organizationId: OTHER_ORG, taskId: TASK })).toBeNull();
+		expect(seen).toEqual([TASK]);
+	});
+
+	test("task usage loader treats a null or malformed cost as zero", async () => {
+		const loadWith = (costUsd: string | null) =>
+			createTaskUsageLoader({
+				tasks: {
+					get: async (taskId) =>
+						({ id: taskId, organization_id: ORG }) as unknown as TaskRow,
+				},
+				usage: {
+					sumByTask: async () => ({
+						promptTokens: 0,
+						completionTokens: 0,
+						totalTokens: 0,
+						costUsd,
+					}),
+				},
+			});
+		expect(await loadWith(null)({ organizationId: ORG, taskId: TASK })).toEqual(
+			{
+				tokens: 0,
+				costUsd: 0,
+			},
+		);
+		expect(
+			await loadWith("not-a-decimal")({
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toEqual({ tokens: 0, costUsd: 0 });
 	});
 });

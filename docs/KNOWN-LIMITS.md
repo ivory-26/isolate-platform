@@ -32,10 +32,30 @@ listed as implemented in the code and the wave status, treat it as not shipped.
 
 | Area | Current status |
 |---|---|
-| Datadog canonical re-fetch | **Design-only.** Datadog does not sign webhooks; a delivery is a hint. The bridge must verify its own token and re-fetch the incident or monitor before creating a task. The canonical re-fetch path is not implemented. |
+| Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes intake | **No native intake adapter for any of the six.** The intake mode union is `generic`, `github`, `sentry`, `grafana` and `pagerduty`; none of the six vendors has a mode. The only supported trigger is the generic signed bridge: `POST /api/webhooks/<any-path>`, HMAC-SHA256 over `<timestamp>.<body>` with `WEBHOOK_SIGNING_SECRET`, carrying a full `IncidentSignal` whose `source` is the connector id. The receiver never parses a vendor payload. |
+| Connector evidence | **Requires a paired relay.** The worker loads connector evidence only when an `active` device, an `active` credential and a stored signal row for `(organization, source, fingerprint)` all exist; it then enqueues exactly one `<source>.context.fetch` device call (`k8s.context.fetch` for Kubernetes), using that row's `service` and `kind`. A credential that exists only through a relay env fallback has no device queue and loads nothing. Any failure - no device, offline relay, missing row, timeout, malformed or mismatched bundle - returns `null`, and the task continues without evidence. |
+| Fingerprint prerequisites | A device call is made only for a fingerprint the device parser accepts: `datadog:<monitorId>`, `newrelic:<digest>`, `honeycomb:<dataset>:<triggerId>:<state>`, `axiom:<monitorId>`, `signoz:<ruleId>` and `k8s:<cluster>:<namespace>:<kind>/<name>:<reason>`. An invented id, or an over-length builder form that appends `~<12hex>` (`honeycomb`, `k8s`), fails the parser and yields no evidence. |
+| Task provenance | The bridge records `incident_source`/`incident_fingerprint` only when an enabled subscription for the connector id matches the delivery. Without a matching subscription the legacy generic path creates the task without a fingerprint, so the worker loads no connector evidence. |
 | Kafka bridge | **Design-only.** Kafka has no inbound webhook; the consumer bridge is specified, not built. |
 | Other unsigned vendors | A signed bridge is required before trusting a payload. Per-vendor webhook routing and canonical re-fetch are not implemented for every vendor. |
 | Signed vendor intake | Sentry, Grafana and PagerDuty have signed modes. Their tenant-scoped routing and subscription rules are not all live-proven; GitHub remains the end-to-end live path. |
+
+### 2.1 Model stream stalls and cap accounting
+
+- Budget caps are checked **before each turn**, not during a provider call: sandbox
+  wall time against `WORKER_MAX_SANDBOX_SECONDS`, cumulative
+  `promptTokens + completionTokens` against `WORKER_MAX_TOKENS_PER_TASK`, and
+  recorded spend against `WORKER_MAX_COST_USD_PER_TASK`. A turn that starts under
+  a cap may finish over it; the next turn is refused. A token, cost or wall-time
+  stop fails the task with reason `budget exhausted`.
+- A Meta model stream that stalls mid-turn is not interrupted by those caps. The
+  worker cuts the handler at the job timeout (`WORKER_JOB_TIMEOUT_MS`, 120,000 ms
+  by default), aborts the request, and ack-fails the job with the terminal
+  `BUDGET_EXCEEDED` code, which dead-letters it. There is no per-token mid-stream
+  interrupt and no partial-result salvage.
+- `usage_records.cost_usd` is `null` unless a `COST_PRICE_TABLE` entry prices the
+  model and sandbox. Spend accumulates only non-null costs, so without a price
+  table the USD cap cannot bind; the token, turn and wall-time caps still apply.
 
 ## 3. Autonomy
 
@@ -75,7 +95,12 @@ instead of starting a partial flow. `GITHUB_APP_SLUG` and
 
 - A1 investigate.
 - A4 production mutation.
-- Datadog canonical re-fetch.
+- Native webhook intake for Datadog, New Relic, Honeycomb, Axiom, SigNoz or
+  Kubernetes; the generic signed bridge is the only intake path for those six.
+- Connector evidence without a paired relay, or from a fingerprint the device
+  parser rejects.
+- A USD spend cap that binds without `COST_PRICE_TABLE`, or a mid-stream
+  interrupt for a stalled model response.
 - The Kafka consumer bridge.
 - Per-vendor webhook routing for every documented vendor.
 - A subagent or delegation tree.

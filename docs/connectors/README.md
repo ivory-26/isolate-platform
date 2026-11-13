@@ -105,7 +105,7 @@ Binding rules are in `apps/web/src/server/incident-intake-runtime.server.ts`. Th
 Cross-cutting documents:
 
 - [connector-onboarding.md](../connector-onboarding.md) — how a user connects an account, how credentials are stored/rotated, how the sandbox agent gets tool access, and the free-tier guardrails.
-- [KNOWN-LIMITS.md](../KNOWN-LIMITS.md) — what is not shipped or not proven: A1, A4, Datadog canonical re-fetch, Kafka bridge, subagents and live visual QA.
+- [KNOWN-LIMITS.md](../KNOWN-LIMITS.md) — what is not shipped or not proven: A1, A4, the absence of native intake adapters for Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes, the Kafka bridge, subagents and live visual QA.
 - [DEPLOYMENT.md](../DEPLOYMENT.md) — operator checklist for the deployment-level GitHub App settings and the fixed `GITHUB_APP_NOT_CONFIGURED` behavior.
 - [DEVICE.md](DEVICE.md) — end-to-end device runbook: registration, connect metadata, daemon config, call flow, failure behavior and tests.
 - [MCP-AND-A2A.md](MCP-AND-A2A.md) — native adapter vs vendor MCP servers vs A2A; device-side MCP plan and onboarding impact.

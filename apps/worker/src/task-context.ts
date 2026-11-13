@@ -82,6 +82,15 @@ export function toTaskContext(
 	// malformed value can never become an unbounded prompt gate.
 	const incidentFingerprint = (row as { incidentFingerprint?: unknown })
 		.incidentFingerprint;
+	// The handler clones the default branch and then creates the task branch;
+	// `git switch -c <base>` is guaranteed to fail, so fail closed here with a
+	// clear code instead of an opaque sandbox `GIT_FAILED` after provisioning.
+	if (row.branch === row.repositoryDefaultBranch) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			"task branch must differ from the repository default branch",
+		);
+	}
 	return {
 		taskId: row.taskId,
 		organizationId: row.organizationId,

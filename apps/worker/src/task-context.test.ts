@@ -116,6 +116,17 @@ describe("toTaskContext", () => {
 		).toBeUndefined();
 	});
 
+	test("rejects a task branch equal to the base branch before provisioning", () => {
+		// `git switch -c main` cannot succeed after cloning main; the handler
+		// would otherwise spend a sandbox to discover it as GIT_FAILED.
+		expect(() =>
+			toTaskContext(row({ branch: "main" }), {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toThrow(/task branch must differ/);
+	});
+
 	test("rejects a mismatched organization", () => {
 		expect(() =>
 			toTaskContext(row(), {

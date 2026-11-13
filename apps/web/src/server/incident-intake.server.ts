@@ -466,10 +466,21 @@ export function buildIncidentGoal(signal: IncidentSignal): string {
 }
 
 /**
+ * A markdown owned target is a report file, not a fix location. Reporting
+ * routes declare `INCIDENT_REPORT.md`; remediation routes declare source paths
+ * (`src/**`), which cannot be written as a file.
+ */
+function isReportTarget(target: string): boolean {
+	return target.toLowerCase().endsWith(".md");
+}
+
+/**
  * Incident goal plus the concrete deliverable for the owned path. Without one,
  * an incident task only describes the failure and the agent has no reason to
- * write anything, so the diff gate can never pass. The line is added only when
- * an owned path exists and only while the goal stays bounded.
+ * write anything, so the diff gate can never pass. A markdown owned path gets
+ * the report deliverable; any other owned path is remediation, so the goal asks
+ * for a fix inside the owned paths only. The line is added only when an owned
+ * path exists and only while the goal stays bounded.
  */
 export function buildIncidentGoalFor(
 	signal: IncidentSignal,
@@ -478,7 +489,9 @@ export function buildIncidentGoalFor(
 	const base = buildIncidentGoal(signal);
 	const target = fileOwnership[0];
 	if (target === undefined || target.length === 0) return base;
-	const deliverable = `\n\nDeliverable: write a short incident report to ${target} and commit it with git.commit_local. Do not modify any other file.`;
+	const deliverable = isReportTarget(target)
+		? `\n\nDeliverable: write a short incident report to ${target} and commit it with git.commit_local. Do not modify any other file.`
+		: "\n\nDeliverable: diagnose the cause of this incident and fix it, modifying only the owned paths above. Run the repository's tests to confirm the fix, then commit locally with git.commit_local.";
 	if (base.length + deliverable.length > MAX_INCIDENT_GOAL_CHARS) return base;
 	return `${base}${deliverable}`;
 }

@@ -77,6 +77,7 @@ export interface QueueLike {
 		ownerId: string;
 		code: string;
 		message: string;
+		terminal?: boolean;
 	}): Promise<Awaited<ReturnType<QueueRepository["ackFail"]>>>;
 	requeueExpiredLeases(nowMs: number): Promise<number>;
 }

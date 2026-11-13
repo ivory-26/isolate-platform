@@ -224,6 +224,7 @@ export function createWorkerLoop(
 					ownerId: config.workerId,
 					code: "VALIDATION_FAILED",
 					message: "job payload rejected by handler",
+					terminal: true,
 				}),
 				"ackFail",
 				jobLogger,
@@ -286,6 +287,7 @@ export function createWorkerLoop(
 						ownerId: config.workerId,
 						code: "BUDGET_EXCEEDED",
 						message: `handler exceeded the ${jobTimeoutMs}ms execution budget`,
+						terminal: true,
 					}),
 					"ackFail",
 					jobLogger,
@@ -336,11 +338,14 @@ export function createWorkerLoop(
 				return;
 			}
 
-			// "retry" and "dead_letter" both go through ackFail: whether the job
-			// is requeued or dead-lettered is the queue's decision (attempts vs
-			// task budget), never the handler's.
+			// "retry" and "dead_letter" both go through ackFail. A handler that
+			// classified the failure as terminal is not retried: an approval
+			// follow-up carries 60 attempts to outlast a human decision, so
+			// letting a deterministic failure ride that budget would pay for a
+			// sandbox on every attempt.
 			const code = clampErrorCode(verdict.code);
-			const note = verdict.outcome === "dead_letter" ? verdict.note : undefined;
+			const terminal = verdict.outcome === "dead_letter";
+			const note = terminal ? verdict.note : undefined;
 			const message =
 				sanitizeMessage(note ?? "") ||
 				`${verdict.outcome} requested by handler`;
@@ -350,6 +355,7 @@ export function createWorkerLoop(
 					ownerId: config.workerId,
 					code,
 					message,
+					terminal,
 				}),
 				"ackFail",
 				jobLogger,

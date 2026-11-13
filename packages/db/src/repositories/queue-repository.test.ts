@@ -43,6 +43,20 @@ test("ackFailOutcome caps backoff at the configured ceiling", () => {
 	expect(ackFailOutcome(0, 11)?.backoffSeconds).toBe(1);
 });
 
+test("ackFailOutcome dead-letters a terminal classification on the first attempt", () => {
+	// A deterministic failure must not spend the 60-attempt approval budget.
+	expect(ackFailOutcome(1, 60, true)).toEqual({
+		requeued: false,
+		status: "dead_letter",
+		backoffSeconds: null,
+	});
+	expect(ackFailOutcome(1, 60, false)).toEqual({
+		requeued: true,
+		status: "pending",
+		backoffSeconds: 2,
+	});
+});
+
 test("ackFailOutcome treats a bogus maxAttempts as at least one attempt", () => {
 	// maxAttempts = 0 clamps to 1: the FIRST failure (attempts 1) dead-letters.
 	expect(ackFailOutcome(1, 0).status).toBe("dead_letter");

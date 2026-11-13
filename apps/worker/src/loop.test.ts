@@ -149,6 +149,7 @@ class FakeQueue implements QueueLike {
 		ownerId: string;
 		code: string;
 		message: string;
+		terminal?: boolean;
 	}): Promise<
 		| { ok: true; requeued: boolean }
 		| { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }
@@ -162,6 +163,10 @@ class FakeQueue implements QueueLike {
 		});
 		job.lastError = { code: input.code, message: input.message };
 		job.lease = null;
+		if (input.terminal === true) {
+			job.status = "dead_letter";
+			return { ok: true, requeued: false };
+		}
 		if (job.attempts < job.maxAttempts) {
 			job.status = "pending";
 			job.notBefore = new Date(this.now + this.backoffMs).toISOString();
@@ -361,6 +366,28 @@ describe("worker loop — failure ordering", () => {
 		await harness.stop("done");
 	});
 
+	test("a terminal verdict does not ride an approval follow-up's budget", async () => {
+		// Approval follow-ups carry 60 attempts to outlast a human decision; a
+		// deterministic failure that retried on every one of them would pay for
+		// a sandbox each time.
+		const handler: JobHandler = {
+			jobType: "resume_task",
+			supports: () => true,
+			handle: async () => ({
+				outcome: "dead_letter",
+				code: "AGENT_EXECUTION_FAILED",
+				note: "git failed",
+			}),
+		};
+		const harness = makeHarness([handler]);
+		harness.queue.jobs.push(makeJob({ type: "resume_task", maxAttempts: 60 }));
+		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
+		expect(harness.queue.jobs[0]?.attempts).toBe(1);
+		expect(harness.queue.ackFails.length).toBe(1);
+		expect(harness.queue.ackFails[0]?.code).toBe("AGENT_EXECUTION_FAILED");
+		await harness.stop("done");
+	});
+
 	test("unknown handler throw maps to INTERNAL with no payload leak", async () => {
 		const handler: JobHandler = {
 			jobType: "run_task",
@@ -396,7 +423,9 @@ describe("worker loop — failure ordering", () => {
 		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
 		expect(handleRan).toBe(false);
 		expect(harness.queue.ackFails[0]?.code).toBe("VALIDATION_FAILED");
-		expect(harness.queue.ackFails.length).toBe(2); // redelivered, not retried in loop
+		// The same payload can only be rejected again: no redelivery.
+		expect(harness.queue.ackFails.length).toBe(1);
+		expect(harness.queue.jobs[0]?.attempts).toBe(1);
 		await harness.stop("done");
 	});
 

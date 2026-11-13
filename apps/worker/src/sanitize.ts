@@ -43,6 +43,24 @@ export function sanitizeMessage(raw: string, maxLength = MAX_MESSAGE_LENGTH) {
 	return stripped.slice(0, maxLength);
 }
 
+/** Provider HTTP responses that are worth another attempt. */
+const TRANSIENT_PROVIDER_STATUS: ReadonlySet<number> = new Set([
+	408, 409, 425, 429,
+]);
+
+/**
+ * True when an inference/SDK error carries a provider HTTP status that will not
+ * change on retry (bad request, auth, model deactivated). Retrying such a call
+ * is pure spend: each attempt provisions a fresh sandbox first.
+ */
+export function isDeterministicProviderRejection(error: unknown): boolean {
+	const status = (error as { statusCode?: unknown } | null)?.statusCode;
+	if (typeof status !== "number" || !Number.isInteger(status)) return false;
+	return (
+		status >= 400 && status < 500 && !TRANSIENT_PROVIDER_STATUS.has(status)
+	);
+}
+
 export type AckError = {
 	code: ErrorCode;
 	message: string;

@@ -780,6 +780,41 @@ describe("task execution handler — failure mapping", () => {
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
+	test("provider 4xx → dead_letter without another sandbox", async () => {
+		const harness = makeHarness({
+			script: [
+				{
+					output: "deactivated",
+					throwError: Object.assign(new Error("Model version deactivated"), {
+						statusCode: 400,
+					}),
+				},
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "AGENT_EXECUTION_FAILED",
+			note: "inference provider rejected the request",
+		});
+		expect(JSON.stringify(verdict)).not.toContain("deactivated");
+	});
+
+	test("provider 429 stays retryable", async () => {
+		const harness = makeHarness({
+			script: [
+				{
+					output: "slow down",
+					throwError: Object.assign(new Error("rate limited"), {
+						statusCode: 429,
+					}),
+				},
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({ outcome: "retry", code: "INTERNAL" });
+	});
+
 	test("unknown throw → bounded INTERNAL retry with no raw message", async () => {
 		const harness = makeHarness({
 			script: [

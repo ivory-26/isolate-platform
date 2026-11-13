@@ -65,7 +65,11 @@ import {
 	PULL_REQUEST_APPROVAL_ACTION,
 	parseGitHubFullName,
 } from "./pull-request-approval";
-import { clampErrorCode, sanitizeMessage } from "./sanitize";
+import {
+	clampErrorCode,
+	isDeterministicProviderRejection,
+	sanitizeMessage,
+} from "./sanitize";
 
 /**
  * Task execution handler (`run_task`) and its wave-7 companion
@@ -676,6 +680,15 @@ function toVerdict(error: unknown, ctx: HandlerContext): HandlerVerdict {
 		return note === ""
 			? { outcome: "dead_letter", code }
 			: { outcome: "dead_letter", code, note };
+	}
+	// An inference provider 4xx (bad request, bad key, deactivated model) is
+	// deterministic: retrying re-provisions a sandbox to get the same refusal.
+	if (isDeterministicProviderRejection(error)) {
+		return {
+			outcome: "dead_letter",
+			code: "AGENT_EXECUTION_FAILED",
+			note: "inference provider rejected the request",
+		};
 	}
 	// Sandbox adapters throw SandboxError, which is not a PlatformError; map its
 	// bounded code instead of collapsing every provisioning/Git failure to

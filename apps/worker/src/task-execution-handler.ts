@@ -904,7 +904,9 @@ function createHandler(
 				sink: deps.traceSink ?? createLoggerTraceSink(ctx.logger),
 			});
 
-			let createdAt = 0;
+			// Clock reading at provisioning; sandbox wall time and its accrued
+			// cost are both measured from this moment.
+			let provisionedAt = 0;
 			let promptTokens = 0;
 			let completionTokens = 0;
 			let spentUsd = 0;
@@ -1065,7 +1067,7 @@ function createHandler(
 					}
 				}
 
-				createdAt = now();
+				provisionedAt = now();
 				const handle = await deps.provider.create(spec);
 
 				try {
@@ -1259,7 +1261,7 @@ function createHandler(
 								break;
 							}
 						}
-						if (now() - createdAt > maxSandboxMs) {
+						if (now() - provisionedAt > maxSandboxMs) {
 							stop = {
 								kind: "budget",
 								note: "sandbox wall-time budget exhausted",
@@ -1270,9 +1272,34 @@ function createHandler(
 							stop = { kind: "budget", note: "agent token budget exhausted" };
 							break;
 						}
-						// Cumulative task-wide spend, including earlier attempts and
-						// sandbox rows. `0` disables cost gating exactly as before.
-						if (maxCostUsd > 0 && spentUsd >= maxCostUsd) {
+						// The current attempt's sandbox bill accrues while the turns
+						// run but is only written as a usage row at teardown. Price it
+						// from the same trusted table so the cap can see it before the
+						// next model call; this estimate is for gating only and never
+						// becomes a second usage row. No table (or no price) leaves the
+						// accrual unmetered: warn once, never invent a price.
+						let accruedSandboxUsd = 0;
+						if (maxCostUsd > 0) {
+							const accrued = sandboxCostUsd(
+								{
+									cpuCount: deps.sandbox.cpuCount,
+									memoryMb: deps.sandbox.memoryMb,
+									seconds: Math.max(0, (now() - provisionedAt) / 1000),
+								},
+								deps.priceTable ?? null,
+							);
+							if (accrued === null) {
+								warnUnmeteredUsage(
+									`sandbox:${deps.sandbox.cpuCount}x${deps.sandbox.memoryMb}`,
+								);
+							} else {
+								accruedSandboxUsd = accrued;
+							}
+						}
+						// Cumulative task-wide spend (model usage from this attempt and
+						// earlier attempts, plus the accrued sandbox cost above). `0`
+						// disables cost gating exactly as before.
+						if (maxCostUsd > 0 && spentUsd + accruedSandboxUsd >= maxCostUsd) {
 							stop = { kind: "budget", note: "task cost budget exhausted" };
 							break;
 						}
@@ -2079,7 +2106,7 @@ function createHandler(
 					// written after destroy (measured wall time) even if destroy
 					// threw, so accrued sandbox spend is not silently lost.
 					const endedAt = now();
-					const wallSeconds = Math.max(0, (endedAt - createdAt) / 1000);
+					const wallSeconds = Math.max(0, (endedAt - provisionedAt) / 1000);
 					// Attempt bookkeeping keeps the measured sandbox time so the run
 					// summary can report it without a second table.
 					attemptOutcome = {

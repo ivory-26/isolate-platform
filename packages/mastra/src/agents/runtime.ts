@@ -110,9 +110,10 @@ export function createFakeAgentRuntime(
  * - The token accumulator is **task-wide**: it starts at
  *   `caps.priorTaskTokens` (spend persisted by earlier attempts) and blocks the
  *   next turn with `PlatformError("BUDGET_EXCEEDED")` once `caps.maxTaskTokens`
- *   is reached. It also reserves the size of the previous turn, so from turn 2
- *   onward the cap is a true upper bound; turn 1 is the only unavoidable
- *   overshoot because the next call's size cannot be known in advance.
+ *   is reached. It also reserves the size of the previous turn before starting
+ *   the next one. That reservation is a heuristic, not an upper bound: a later
+ *   turn can be much larger than the turn before it, so the cap can still be
+ *   overshot by the size of the turn that crosses it.
  */
 export type MastraAgentRuntimeOptions = {
 	id: string;
@@ -273,6 +274,18 @@ function trustedTokenCount(value: unknown): number | undefined {
 		: undefined;
 }
 
+/**
+ * Next turn's heuristic reservation: the size of the turn that just reported
+ * usage. A turn that reports no usage keeps the previous reservation, so an
+ * unknown-size turn cannot silently disarm the estimate.
+ */
+export function nextTurnTokenReservation(
+	previousTokens: number,
+	usage: AgentUsage | null,
+): number {
+	return usage === null ? previousTokens : usage.totalTokens;
+}
+
 type RawUsageLike = Record<string, unknown>;
 
 /**
@@ -349,7 +362,7 @@ export function createMastraAgentRuntime(
 	let nextTurn = 0;
 	// Task-wide: earlier attempts of the same task already spent these tokens.
 	let totalTokensUsed = caps?.priorTaskTokens ?? 0;
-	// Size of the previous turn, reserved before the next one can start.
+	// Heuristic: size of the previous turn, reserved before the next one starts.
 	let lastTurnTokens = 0;
 	const onRecord = options.onRecord;
 	const onUsage = options.onUsage;
@@ -405,12 +418,12 @@ export function createMastraAgentRuntime(
 				);
 				if (usage !== null) {
 					totalTokensUsed += usage.totalTokens;
-					lastTurnTokens = usage.totalTokens;
-					if (onUsage) {
-						await onUsage(usage);
-					}
-				} else {
-					lastTurnTokens = 0;
+				}
+				// Heuristic reservation for the next turn; a usage-less turn keeps
+				// the previous value instead of disarming the estimate.
+				lastTurnTokens = nextTurnTokenReservation(lastTurnTokens, usage);
+				if (usage !== null && onUsage) {
+					await onUsage(usage);
 				}
 				// Reasoning models can spend the whole output budget on reasoning and
 				// return empty text. That means "truncated", not "no further work":

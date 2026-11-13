@@ -52,6 +52,14 @@ export type WorkerDeps = {
 	handlers: JobHandler[];
 	// The queue is injected as this interface so tests use in-memory fakes.
 	queue: QueueLike;
+	/**
+	 * Called once when a job is dead-lettered (hard budget cut, rejected
+	 * payload, exhausted attempts, or a terminal handler verdict). A terminal
+	 * job that leaves the task non-terminal would strand it, so the composition
+	 * binds this to close the task as `failed`. The loop never lets a failing
+	 * hook crash the worker.
+	 */
+	onJobDeadLettered?: (input: { job: JobRow; code: string }) => Promise<void>;
 };
 
 /**

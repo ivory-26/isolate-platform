@@ -84,6 +84,13 @@ export const WEBHOOK_FILE_OWNERSHIP_VARIABLE = "WEBHOOK_FILE_OWNERSHIP";
 export const WEBHOOK_SERVICE_VARIABLE = "WEBHOOK_SERVICE";
 /** Optional per-incident agent-turn budget; omitted keeps the submission default. */
 export const WEBHOOK_MAX_AGENT_TURNS_VARIABLE = "WEBHOOK_MAX_AGENT_TURNS";
+/**
+ * Optional per-incident execution budget in milliseconds. The worker's own
+ * `WORKER_JOB_TIMEOUT_MS` is the hard cut; this value is the task's declared
+ * budget, so an incident allowed several turns must declare a window that can
+ * hold them (the 120 s default cannot).
+ */
+export const WEBHOOK_JOB_TIMEOUT_MS_VARIABLE = "WEBHOOK_JOB_TIMEOUT_MS";
 
 export type IncidentIntakeSettings = {
 	/** Generic-mode HMAC secret; absent means generic deliveries get 503. */
@@ -109,6 +116,8 @@ export type IncidentIntakeSettings = {
 	service?: string;
 	/** Bounds how long an incident task may loop before the diff gate decides. */
 	maxAgentTurns?: number;
+	/** Declared wall-clock budget for the task, in milliseconds. */
+	jobTimeoutMs?: number;
 };
 
 const GRAFANA_HEADER_NAME_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
@@ -137,6 +146,7 @@ const settingsSchema = z.strictObject({
 	fileOwnership: submitTaskSchema.shape.fileOwnership,
 	service: z.string().trim().min(1).max(128).optional(),
 	maxAgentTurns: z.number().int().min(1).max(50).optional(),
+	jobTimeoutMs: z.number().int().min(1000).max(3_600_000).optional(),
 });
 
 function fileOwnershipFrom(env: Record<string, string | undefined>): string[] {
@@ -216,6 +226,10 @@ export function readIncidentIntakeSettings(
 			env[WEBHOOK_MAX_AGENT_TURNS_VARIABLE] === undefined
 				? undefined
 				: Number(env[WEBHOOK_MAX_AGENT_TURNS_VARIABLE]),
+		jobTimeoutMs:
+			env[WEBHOOK_JOB_TIMEOUT_MS_VARIABLE] === undefined
+				? undefined
+				: Number(env[WEBHOOK_JOB_TIMEOUT_MS_VARIABLE]),
 	});
 	if (!parsed.success) return null;
 	const service = parsed.data.service;
@@ -253,6 +267,9 @@ export function readIncidentIntakeSettings(
 		...(parsed.data.maxAgentTurns === undefined
 			? {}
 			: { maxAgentTurns: parsed.data.maxAgentTurns }),
+		...(parsed.data.jobTimeoutMs === undefined
+			? {}
+			: { jobTimeoutMs: parsed.data.jobTimeoutMs }),
 	};
 }
 
@@ -322,6 +339,31 @@ function getStore(databaseUrl: string): PostgresBundle {
 	};
 }
 
+/**
+ * The declared task budget. Both bounds come from operator configuration and
+ * are omitted when unset, so the submission defaults still apply.
+ */
+function budgetProperty(settings: IncidentIntakeSettings): {
+	budget?: NonNullable<IncidentRepositoryRoute["budget"]>;
+} {
+	if (
+		settings.maxAgentTurns === undefined &&
+		settings.jobTimeoutMs === undefined
+	) {
+		return {};
+	}
+	return {
+		budget: {
+			...(settings.maxAgentTurns === undefined
+				? {}
+				: { maxAgentTurns: settings.maxAgentTurns }),
+			...(settings.jobTimeoutMs === undefined
+				? {}
+				: { jobTimeoutMs: settings.jobTimeoutMs }),
+		},
+	};
+}
+
 export function incidentRepositoryRoute(
 	settings: IncidentIntakeSettings,
 	input: { organizationId: string; service: string },
@@ -336,9 +378,7 @@ export function incidentRepositoryRoute(
 		workflowDefinitionId: settings.workflowDefinitionId,
 		workflowVersion: settings.workflowVersion,
 		fileOwnership: settings.fileOwnership,
-		...(settings.maxAgentTurns === undefined
-			? {}
-			: { budget: { maxAgentTurns: settings.maxAgentTurns } }),
+		...budgetProperty(settings),
 	};
 }
 
@@ -379,9 +419,7 @@ async function resolveSubscriptionRoute(
 		workflowDefinitionId: settings.workflowDefinitionId,
 		workflowVersion: settings.workflowVersion,
 		fileOwnership: settings.fileOwnership,
-		...(settings.maxAgentTurns === undefined
-			? {}
-			: { budget: { maxAgentTurns: settings.maxAgentTurns } }),
+		...budgetProperty(settings),
 	};
 }
 

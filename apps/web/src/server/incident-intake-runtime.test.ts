@@ -4,6 +4,7 @@ import {
 	getIncidentIntake,
 	hasConfiguredIntakeMode,
 	IncidentIntakeNotConfiguredError,
+	incidentRepositoryRoute,
 	readIncidentIntakeSettings,
 } from "./incident-intake-runtime.server";
 
@@ -169,5 +170,52 @@ describe("incident intake settings", () => {
 			WEBHOOK_GRAFANA_ALLOW_UNSIGNED: "true",
 		});
 		expect(unsigned !== null && hasConfiguredIntakeMode(unsigned)).toBe(true);
+	});
+});
+
+describe("incident intake budget", () => {
+	const service = "checkout";
+
+	test("WEBHOOK_JOB_TIMEOUT_MS sizes the declared task budget", () => {
+		const settings = readIncidentIntakeSettings({
+			...binding,
+			WEBHOOK_SIGNING_SECRET: GENERIC_SECRET,
+			WEBHOOK_MAX_AGENT_TURNS: "8",
+			WEBHOOK_JOB_TIMEOUT_MS: "600000",
+		});
+		expect(settings?.jobTimeoutMs).toBe(600_000);
+		if (settings === null) throw new Error("binding should parse");
+		const route = incidentRepositoryRoute(settings, {
+			organizationId: settings.binding.organizationId,
+			service,
+		});
+		expect(route?.budget).toEqual({
+			maxAgentTurns: 8,
+			jobTimeoutMs: 600_000,
+		});
+	});
+
+	test("a job timeout outside the worker bound disables the binding", () => {
+		expect(
+			readIncidentIntakeSettings({
+				...binding,
+				WEBHOOK_SIGNING_SECRET: GENERIC_SECRET,
+				WEBHOOK_JOB_TIMEOUT_MS: "999",
+			}),
+		).toBeNull();
+	});
+
+	test("an absent timeout keeps the submission default", () => {
+		const settings = readIncidentIntakeSettings({
+			...binding,
+			WEBHOOK_SIGNING_SECRET: GENERIC_SECRET,
+		});
+		expect(settings?.jobTimeoutMs).toBeUndefined();
+		if (settings === null) throw new Error("binding should parse");
+		const route = incidentRepositoryRoute(settings, {
+			organizationId: settings.binding.organizationId,
+			service,
+		});
+		expect(route?.budget).toBeUndefined();
 	});
 });

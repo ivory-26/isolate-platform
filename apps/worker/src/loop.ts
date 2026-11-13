@@ -183,6 +183,26 @@ export function createWorkerLoop(
 		}
 	};
 
+	/**
+	 * Runs the dead-letter hook for one job. A hook failure is reported with a
+	 * bounded code and never replaces the queue outcome.
+	 */
+	const notifyDeadLetter = async (
+		job: JobRow,
+		code: string,
+		jobLogger: Logger,
+	): Promise<void> => {
+		const hook = deps.onJobDeadLettered;
+		if (hook === undefined) return;
+		try {
+			await hook({ job, code });
+		} catch (error) {
+			jobLogger.warn("dead-letter hook failed", {
+				code: errorCodeOf(error),
+			});
+		}
+	};
+
 	async function processJob(job: JobRow): Promise<void> {
 		const jobLogger = logger.child({ jobId: job.id, jobType: job.type });
 		jobLogger.info("job claimed", {
@@ -211,6 +231,9 @@ export function createWorkerLoop(
 				jobLogger,
 			);
 			emitJobFailure(jobLogger, job, "NOT_FOUND", result);
+			if (result?.ok === true && !result.requeued) {
+				await notifyDeadLetter(job, "NOT_FOUND", jobLogger);
+			}
 			return;
 		}
 
@@ -230,6 +253,9 @@ export function createWorkerLoop(
 				jobLogger,
 			);
 			emitJobFailure(jobLogger, job, "VALIDATION_FAILED", result);
+			if (result?.ok === true && !result.requeued) {
+				await notifyDeadLetter(job, "VALIDATION_FAILED", jobLogger);
+			}
 			return;
 		}
 
@@ -293,6 +319,9 @@ export function createWorkerLoop(
 					jobLogger,
 				);
 				emitJobFailure(jobLogger, job, "BUDGET_EXCEEDED", result);
+				if (result?.ok === true && !result.requeued) {
+					await notifyDeadLetter(job, "BUDGET_EXCEEDED", jobLogger);
+				}
 				return;
 			}
 
@@ -314,6 +343,9 @@ export function createWorkerLoop(
 					jobLogger,
 				);
 				emitJobFailure(jobLogger, job, ack.code, result);
+				if (result?.ok === true && !result.requeued) {
+					await notifyDeadLetter(job, ack.code, jobLogger);
+				}
 				return;
 			}
 
@@ -369,6 +401,9 @@ export function createWorkerLoop(
 					: null;
 			jobLogger.warn("job failed", { code, requeued, backoffMs });
 			emitJobFailure(jobLogger, job, code, result);
+			if (result?.ok === true && !result.requeued) {
+				await notifyDeadLetter(job, code, jobLogger);
+			}
 			onEvent({ kind: "failed", jobId: job.id, code, requeued });
 		} finally {
 			stopController.signal.removeEventListener("abort", abortJob);

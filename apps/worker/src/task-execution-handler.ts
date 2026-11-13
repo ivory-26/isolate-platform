@@ -385,6 +385,59 @@ function isLifecycleConflict(error: unknown): boolean {
 	return code === "CONFLICT" || code === "DEPENDENCY_CONFLICT";
 }
 
+/**
+ * Statuses from which `failed` is a declared transition, most likely first.
+ * The lifecycle transition is optimistic, so a stale `from` is a CONFLICT the
+ * caller skips; the first matching status performs the transition.
+ */
+const FAILABLE_TASK_STATUSES = [
+	"executing",
+	"validating",
+	"repairing",
+	"planning",
+	"awaiting_approval",
+	"queued",
+] as const;
+
+/**
+ * Closes a task as `failed` after its job dead-lettered.
+ *
+ * A hard budget cut kills the handler mid-flight, so nothing else moves the
+ * task out of `executing`: without this the task would stay active forever
+ * while its only job was terminal. Already-terminal tasks CONFLICT on every
+ * candidate and are left untouched.
+ */
+export async function closeTaskAsFailed(
+	lifecycle: ExecutionLifecycle,
+	logger: Logger,
+	input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		reason: string;
+	},
+): Promise<boolean> {
+	for (const from of FAILABLE_TASK_STATUSES) {
+		try {
+			await lifecycle.transition({
+				organizationId: input.organizationId,
+				taskId: input.taskId,
+				from,
+				to: "failed",
+				actor: "worker",
+				reason: input.reason,
+			});
+			return true;
+		} catch (error) {
+			if (isLifecycleConflict(error)) continue;
+			logger.warn("failed to close task after dead letter", {
+				code: clampErrorCode(errorCodeOf(error)),
+			});
+			return false;
+		}
+	}
+	return false;
+}
+
 async function transitionLifecycle(
 	lifecycle: ExecutionLifecycle,
 	logger: Logger,

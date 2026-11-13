@@ -7,6 +7,7 @@ import { loadWorkerConfig } from "./config";
 import type { JobHandler, WorkerDeps, WorkerLoop } from "./contracts";
 import { createUnavailableQueue, createWorkerLoop } from "./loop";
 import { createConfiguredWorkerComposition } from "./runtime-composition";
+import { closeTaskAsFailed } from "./task-execution-handler";
 
 /**
  * Worker entry point.
@@ -41,6 +42,10 @@ export function bootstrapWorkers(
 		});
 	}
 
+	// A dead-lettered job is the task's last word: close the task so it does
+	// not stay `executing` with no job left to move it.
+	const lifecycle = taskExecution?.lifecycle;
+
 	return createWorkerLoop({
 		config,
 		logger,
@@ -52,6 +57,17 @@ export function bootstrapWorkers(
 					? "queue unavailable: no database queue implementation bound yet"
 					: "queue unavailable: DATABASE_URL is not configured",
 			),
+		...(lifecycle === undefined
+			? {}
+			: {
+					onJobDeadLettered: async ({ job, code }) => {
+						await closeTaskAsFailed(lifecycle, logger, {
+							organizationId: job.organizationId,
+							taskId: job.taskId,
+							reason: `job dead-lettered: ${code}`,
+						});
+					},
+				}),
 	});
 }
 

@@ -89,8 +89,9 @@ export type AgentUsageListener = (usage: AgentUsage) => Promise<void> | void;
  * gets a fresh runtime, so the worker seeds {@link priorTaskTokens} with the
  * spend already recorded for the same task. The runtime then blocks a turn
  * when the cumulative total reaches `maxTaskTokens`, and reserves the size of
- * the previous turn so the bound is a true upper bound from turn 2 onward
- * (turn 1 is the only unavoidable overshoot: the next turn's size is unknown).
+ * the previous turn before starting the next one. That reservation is a
+ * heuristic, not an upper bound: a later turn can be much larger than the one
+ * before it, so a turn can still overshoot the cap.
  */
 export type AgentTurnCaps = {
 	/** Max output tokens requested per model call. */

@@ -6,8 +6,9 @@ import {
 	createMastraAgentRuntime,
 	limitSummary,
 	type MastraAgentRuntime,
+	nextTurnTokenReservation,
 } from "./runtime";
-import type { TaskContext } from "./types";
+import type { AgentUsage, TaskContext } from "./types";
 
 const CONTEXT: TaskContext = {
 	taskId: "task-1",
@@ -462,6 +463,61 @@ describe("createMastraAgentRuntime task-wide tokens", () => {
 		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
 		expect(fake.calls).toHaveLength(0);
 		expect(runtime.turns).toHaveLength(0);
+	});
+
+	test("a later turn much larger than the previous one is stopped at the next pre-turn check", async () => {
+		let turn = 0;
+		const fake = fakeAgent(() => {
+			turn += 1;
+			const totalTokens = turn === 1 ? 10 : 95;
+			return {
+				text: "ok",
+				totalUsage: {
+					inputTokens: totalTokens - 5,
+					outputTokens: 5,
+					totalTokens,
+				},
+			};
+		});
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 1000,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+			},
+		});
+
+		// Turn 1 (10 tokens) reserves 10, so turn 2 is allowed to start.
+		await runtime.runTurn({ prompt: "first", context: CONTEXT, signal });
+		await runtime.runTurn({ prompt: "second", context: CONTEXT, signal });
+		expect(fake.calls).toHaveLength(2);
+		// Turn 2 is far larger than turn 1: the heuristic reservation did not
+		// prevent it, and only the NEXT pre-turn check stops the run.
+		expect(runtime.totalTokensUsed).toBe(105);
+		expect(runtime.turns.map((record) => record.status)).toEqual([
+			"finished",
+			"finished",
+		]);
+
+		await expect(
+			runtime.runTurn({ prompt: "third", context: CONTEXT, signal }),
+		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
+		expect(fake.calls).toHaveLength(2);
+	});
+
+	test("a usage-less turn preserves the previous reservation", () => {
+		const previous: AgentUsage = {
+			providerId: "baseten",
+			modelId: "test-model",
+			promptTokens: 60,
+			completionTokens: 40,
+			totalTokens: 100,
+			costUsd: null,
+		};
+		// No usage reported: keep the reservation instead of resetting to zero.
+		expect(nextTurnTokenReservation(40, null)).toBe(40);
+		// Reported usage replaces it with the size of the turn that just ran.
+		expect(nextTurnTokenReservation(40, previous)).toBe(100);
 	});
 });
 

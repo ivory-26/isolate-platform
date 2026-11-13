@@ -1187,6 +1187,81 @@ describe("task execution handler — task-wide caps", () => {
 		expect(harness.runtime.runTurns).toEqual([1]);
 	});
 
+	test("elapsed sandbox time alone can exhaust the USD cap before the next turn", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			maxCostUsdPerTask: 1,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			// Model spend is zero: only the accrued sandbox bill (3s * 0.625)
+			// pushes the task past the cap.
+			script: [
+				{ output: "more", costUsd: 0, onTurn: () => clock.advance(3000) },
+				{ output: "never" },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		// The gating estimate never doubles as a spend row: teardown still writes
+		// the measured sandbox row exactly once.
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBe(1.875);
+	});
+
+	test("without a price table sandbox accrual never gates and the job completes", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			priceTable: null,
+			maxCostUsdPerTask: 1,
+			maxSandboxSeconds: 3600,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [
+				{ output: "more", costUsd: 0, onTurn: () => clock.advance(500_000) },
+				{ output: "" },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBeNull();
+		// One unmetered warning for the job, with an id only.
+		const unmetered = harness.logs.filter((record) =>
+			record.message.includes("usage has no trusted price"),
+		);
+		expect(unmetered).toHaveLength(1);
+		expect(unmetered[0]?.fields).toEqual({ modelId: "sandbox:1x512" });
+	});
+
+	test("the accrued sandbox estimate is not written as a second usage row", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			maxCostUsdPerTask: 10,
+			maxSandboxSeconds: 3600,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [
+				{ output: "more", onTurn: () => clock.advance(1000) },
+				{ output: "", onTurn: () => clock.advance(1000) },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		expect(modelRows(harness.sink.rows)).toHaveLength(2);
+		// Accrual is estimated before each turn but only teardown records spend:
+		// one row at the measured 2s wall time.
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBe(1.25);
+	});
+
 	test("a zero cost cap disables USD gating even with prior spend", async () => {
 		const harness = makeHarness({
 			maxCostUsdPerTask: 0,
@@ -1216,8 +1291,9 @@ describe("task execution handler — task-wide caps", () => {
 			record.message.includes("usage has no trusted price"),
 		);
 		expect(unmetered).toHaveLength(1);
-		// Ids only: no token counts or provider payloads in the warning fields.
-		expect(unmetered[0]?.fields).toEqual({ modelId: "test-model" });
+		// The first (and only) unmetered spend is the sandbox accrual; ids only,
+		// no token counts or provider payloads in the warning fields.
+		expect(unmetered[0]?.fields).toEqual({ modelId: "sandbox:1x512" });
 	});
 
 	test("a priced table still stops at the cumulative cap", async () => {
@@ -3382,6 +3458,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: lock.acquireBranchLock,
 			script: [
 				{
@@ -3413,6 +3492,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			workspaceGit: new FakeWorkspaceGit(),
 			acquireBranchLock: lock.acquireBranchLock,
 			script: [
@@ -3440,6 +3522,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: async () => ({
 				release: () => {},
 				renew: async () => {
@@ -3470,6 +3555,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: async () => {
 				const lease = await lock.acquireBranchLock();
 				return { release: lease.release };

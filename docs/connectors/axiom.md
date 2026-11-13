@@ -125,7 +125,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `axiom.context.fetch` parses `axiom:<monitorId>` and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No Axiom acceptance has been recorded. When authorized, use one APL aggregate for a named dataset over at most 15 minutes, record the measured rows and bytes, and do not edit a production monitor or notifier.
+Live: **run 2026-11-13.** A signed bridge delivery for `axiom:e2e-monitor` created a task; the relay executed `axiom.context.fetch` against `api.axiom.co` (7.7 s and 54.6 s end-to-end, the second including queue wait) and returned one item with `truncated: true` on both the first job and the resume job. No monitor or notifier was edited. Measured task spend: 357,015 prompt / 24,249 completion tokens. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

@@ -126,7 +126,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `honeycomb.context.fetch` parses `dataset:triggerId:state`, validates the trigger id and state, and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No Honeycomb acceptance has been recorded. When authorized, use one bounded query-result round trip for a named dataset over at most 15 minutes, record the measured rows and bytes, and do not create or edit a production trigger.
+Live: **run 2026-11-13.** A signed bridge delivery created a task and the relay executed `honeycomb.context.fetch` twice (4.9 s and 7.4 s end-to-end), both failing `INTEGRATION_UNAVAILABLE`: the workspace's `test` environment has no datasets, so the bounded query produces a bundle that fails the shared context contract. The task degraded to no-evidence as designed and still pushed its branch and opened a PR. No trigger was created or edited. Measured task spend: 354,585 prompt / 21,116 completion tokens. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

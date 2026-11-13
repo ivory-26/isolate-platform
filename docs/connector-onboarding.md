@@ -351,8 +351,11 @@ claim/result/heartbeat routes, browser pairing and the encrypted local store are
 implemented. The worker binds the broker when `DEVICE_GATEWAY_ENABLED=true`;
 calls fail closed as `INTEGRATION_UNAVAILABLE` when no active relay can serve
 them. Verification is one bounded read: it proves that the relay can authenticate
-and perform that read, not that every enabled tool has every vendor scope. Only
-Kubernetes has a local live proof; the SaaS adapters are fake-tested. See
+and perform that read, not that every enabled tool has every vendor scope. The
+bridge intake, the relay evidence call and the task path are live-proven for
+Grafana, PagerDuty, New Relic, Honeycomb, Axiom, Kubernetes, Datadog and SigNoz
+(the last without a PR); the recorded runs, including empty-bundle cases, are in
+[`connectors/live-verification.md`](connectors/live-verification.md). See
 [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ### 2.4 Device registration, rotation, revocation and audit
@@ -800,7 +803,14 @@ register/list/revoke/rotate and claim/result/heartbeat routes, browser/relay
 pairing with an encrypted local store, vendor-specific pairing fields, the
 metadata-only connect/list/revoke routes, Devices/Connectors UI, per-task
 connector tool binding behind `DEVICE_GATEWAY_ENABLED`, per-organization GitHub
-installation, trigger subscriptions and the bounded `connector.verify` read. The
-GitHub and generic-webhook paths remain the only end-to-end live-proven connector
-executions; Kubernetes has a local live proof. SaaS live acceptance and the
-remaining intake gaps are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
+installation, trigger subscriptions and the bounded `connector.verify` read.
+
+End-to-end live proofs now exist for GitHub, the generic webhook, Grafana,
+PagerDuty, New Relic, Honeycomb, Axiom, Kubernetes, Datadog and SigNoz: each was
+driven by a real signed bridge delivery against `ivory-26/isolate-e2e-fixture`,
+produced a real `<source>.context.fetch` execution through a paired relay, and —
+except where the vendor workspace returned no data (Honeycomb, SigNoz) or the job
+execution budget was exhausted (SigNoz) — opened a pull request. The measured run
+log, including the empty-data and budget findings, is
+[`connectors/live-verification.md`](connectors/live-verification.md). Remaining
+intake gaps are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).

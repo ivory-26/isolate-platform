@@ -126,7 +126,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `signoz.context.fetch` parses `signoz:<ruleId>` and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No SigNoz acceptance has been recorded. When authorized, use one `query_range` metric query for a named service over at most 15 minutes, record the measured series, points and bytes, and do not edit a production alert rule.
+Live: **run 2026-11-13.** A signed bridge delivery for `signoz:e2e-rule-0001` created a task and the relay executed `signoz.context.fetch` three times (3.9–4.1 s end-to-end), all completing with an **empty** bundle (`items: []`, `truncated: true`) because the workspace has no alert rules — `signoz.list_rules` returns `null` there. With no evidence to ground it, the agent spent its turns re-listing rules and the resume job hit the 900 s job execution budget (`BUDGET_EXCEEDED`), so no PR was opened; token spend was 305,406 prompt / 20,594 completion, far below the 800,000 token cap. No alert rule was created or edited. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

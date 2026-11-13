@@ -123,7 +123,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `newrelic.context.fetch` parses `newrelic:<digest>` and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No New Relic acceptance has been recorded. When authorized, use one bounded read (one entity search or one NRQL count over at most 15 minutes), record the measured operation count and bytes, and do not send a test alert to a production policy.
+Live: **run 2026-11-13.** A signed bridge delivery for `newrelic:<digest>` created a task, the worker enqueued `newrelic.context.fetch`, the paired relay executed it against the New Relic API in 2,044 ms and returned one item with `truncated: true`; the approved run opened a PR. No test alert was sent to a production policy. Measured task spend: 158,324 prompt / 8,971 completion tokens. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

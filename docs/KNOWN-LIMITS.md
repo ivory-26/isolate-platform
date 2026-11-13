@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | Audience | Operators, reviewers and anyone reading a status claim |
-| Scope | Capabilities that are not shipped, not proven, or deliberately out of scope in wave 24 |
-| Date | 2026-11-02 |
+| Scope | Capabilities that are not shipped, not proven, or deliberately out of scope in wave 27 |
+| Date | 2026-11-14 |
 | Related | [`USER-SETUP.md`](USER-SETUP.md), [`connector-onboarding.md`](connector-onboarding.md), [`connectors/SETUP.md`](connectors/SETUP.md), [`DEPLOYMENT.md`](DEPLOYMENT.md), [`devsecops-connectors.md`](devsecops-connectors.md) |
 
 This page records the honest limits behind the product copy. If a capability is not
@@ -18,10 +18,18 @@ listed as implemented in the code and the wave status, treat it as not shipped.
 - Verification is **one bounded read**. It proves that the relay can authenticate
   and perform that read; it does not prove every enabled tool, every scope, or
   every provider endpoint is usable.
-- Among the nine relay connectors, only Kubernetes has a local live proof (a
-  `kind` cluster and one bounded event read). The SaaS adapters are fake-tested.
-  No live SaaS connector acceptance run has been performed beyond GitHub, so do
-  not present another vendor as live-proven.
+- Every relay connector except Sentry now has an end-to-end live run recorded in
+  [`connectors/live-verification.md`](connectors/live-verification.md): a signed
+  bridge delivery → a real `<source>.context.fetch` through the paired relay → a
+  task. New Relic, Honeycomb, Axiom, Kubernetes, Datadog and (from earlier waves)
+  Grafana and PagerDuty reached a pull request; SigNoz did not. Those runs prove
+  the transport and the degradation paths, not that any one tenant's data is
+  reachable: Honeycomb, SigNoz and the Datadog rerun returned **empty** bundles
+  because the workspace had no datasets, no alert rules and no matching monitor.
+- The Kubernetes live proof uses a `kind` cluster with a short-lived
+  ServiceAccount token file. Stored token files are read on every call, so a
+  rotated token takes effect without re-pairing, but an expired token fails the
+  evidence call (`INTEGRATION_UNAVAILABLE`, API `401`) with no early warning.
 - GitHub is live-proven for intake, context and the two scoped writes. The writes
   are connector functions, not agent-callable tools.
 - Verification is not a substitute for the per-vendor manual acceptance steps in
@@ -53,6 +61,15 @@ listed as implemented in the code and the wave status, treat it as not shipped.
   by default), aborts the request, and ack-fails the job with the terminal
   `BUDGET_EXCEEDED` code, which dead-letters it. There is no per-token mid-stream
   interrupt and no partial-result salvage.
+- The wall-clock job budget and the per-task agent turn budget bind **before** the
+  token cap for incident tasks with weak evidence. Four live runs dead-lettered at
+  a 900,000 ms job budget or on turn exhaustion while spend stayed under 800,000
+  tokens; the worker reports the budget in `last_error_message`
+  (`handler exceeded the Nms execution budget`, `agent turn budget exhausted`).
+- A task whose evidence bundle is empty is told nothing about that fact, so the
+  model can spend its turns re-querying the vendor (`signoz.list_rules` was called
+  four times in one resume job) instead of working. Treat a no-evidence incident
+  run as slow and budget-bound until the prompt names the empty bundle.
 - `usage_records.cost_usd` is `null` unless a `COST_PRICE_TABLE` entry prices the
   model and sandbox. Spend accumulates only non-null costs, so without a price
   table the USD cap cannot bind; the token, turn and wall-time caps still apply.
@@ -104,4 +121,7 @@ instead of starting a partial flow. `GITHUB_APP_SLUG` and
 - The Kafka consumer bridge.
 - Per-vendor webhook routing for every documented vendor.
 - A subagent or delegation tree.
-- Live SaaS connector acceptance beyond GitHub, or authenticated live-data visual QA.
+- Authenticated live-data visual QA.
+- That a live connector run returns evidence: the transport is proven, but
+  Honeycomb, SigNoz and the Datadog rerun returned empty bundles in the recorded
+  runs, and no run has yet produced a PR from a SigNoz workspace with no rules.

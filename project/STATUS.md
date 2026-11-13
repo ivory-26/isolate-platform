@@ -1,8 +1,52 @@
 # Status
 
-Last updated: 2026-11-02 (wave 24: connector verification, vendor selectors, landing capture)
+Last updated: 2026-11-14 (wave 27: live end-to-end verification for six bridge connectors)
 
-## Current: wave 24 — connector verification and vendor selectors (2026-11-02)
+## Current: wave 27 — connector live E2E and honest run budgets (2026-11-14)
+
+Design source: the user's goal to test Datadog, New Relic, Honeycomb, Axiom, SigNoz
+and Kubernetes end to end from `ivory-26/isolate-e2e-fixture`, then bring the docs
+to the measured truth. Run log: [`docs/connectors/live-verification.md`](../docs/connectors/live-verification.md).
+
+### What changed
+
+- **Six connectors exercised end to end through the real bridge.** Each run was a
+  signed `POST /api/webhooks/<vendor>` carrying a full `IncidentSignal`, a matched
+  enabled subscription, a paired relay, a worker started with
+  `DEVICE_GATEWAY_ENABLED=true`, and A2 approvals in `/approvals`. New Relic (#4),
+  Honeycomb (#5), Axiom (#6) and Kubernetes (#7) opened pull requests on the fixture
+  repo; Datadog had already opened #3 from its legacy run. SigNoz did not reach a PR.
+- **Evidence transport is real, evidence content is vendor-dependent.** `newrelic`,
+  `axiom` (1 item, truncated) and `k8s` on the second attempt (2 items: events plus
+  pod logs in 5.0 s) returned non-empty bundles. Honeycomb (no datasets), SigNoz
+  (no alert rules) and the Datadog rerun (unknown monitor id) returned empty ones.
+- **A stale Kubernetes ServiceAccount token failed closed in 63 ms** as
+  `INTEGRATION_UNAVAILABLE` (provider `401`). Minting a fresh token into the same
+  file fixed the next call with no re-pairing or daemon restart.
+- **Wall-clock and turn budgets, not the token cap, ended four runs.** New Relic
+  run 1 (600 s), Datadog rerun and SigNoz (900 s) dead-lettered `BUDGET_EXCEEDED` at
+  the handler budget, and Kubernetes run 2 exhausted the agent turn budget; token
+  spend stayed under 800,000 in every case.
+- **Docs reconciled to measurement.** `docs/connectors/live-verification.md` records
+  every run with fingerprints, tasks, call timings, PR numbers and spend. The six
+  vendor pages replace "Live: not run" with the measured result; `KNOWN-LIMITS.md`
+  §1/§2.1 and `connector-onboarding.md` now state the empty-evidence and
+  budget-bound behaviour and no longer claim that only GitHub is live-proven.
+- Prior waves in this branch: **wave 26** task-wide spend caps and stalled-stream
+  retry (`274e3b1`), then sandbox-cost accrual and an honest token reservation
+  (`90895a1`); connector docs aligned with the bridge-only paths (`4a8c76b`);
+  **wave 25** connector-detail route, pairing-origin and dead-letter fixes
+  (`5389565`, `d1881ae`, `3c6bc6a`, `d4f19b0`, `2f03087`).
+
+### Verification semantics
+
+Measured, not estimated: task ids, `connector_calls` rows, `usage_records` totals and
+PR numbers come from the live stack. `cost_usd` is `NULL` for every row because no
+`COST_PRICE_TABLE` is configured, so the spend table reports tokens only. No provider
+key was read, printed or committed; the only sandboxes created were the ones each
+approved agent run provisioned, and zero were left running.
+
+## Previous: wave 24 — connector verification and vendor selectors (2026-11-02)
 
 Design sources: [`WAVE24.md`](WAVE24.md), [`WAVE23.md`](WAVE23.md), [`docs/USER-SETUP.md`](../docs/USER-SETUP.md), [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md), [`docs/KNOWN-LIMITS.md`](../docs/KNOWN-LIMITS.md).
 

@@ -168,7 +168,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `k8s.context.fetch` parses `k8s:<cluster>:<ns>:<kind>/<name>:<reason>`, canonicalizes the kind and rejects a conflicting `kind`; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No Kubernetes acceptance has been recorded. When authorized, use one Events list and one `tailLines=20` log read in a disposable namespace, record the measured call count and bytes, and assert no Secret/ConfigMap data and no token in the prompt.
+Live: **run 2026-11-13** against a disposable `kind` cluster (`kind-isolate-demo`, namespace `isolate-demo`, pod `crash-demo` in `ImagePullBackOff`). The first delivery's `k8s.context.fetch` failed `INTEGRATION_UNAVAILABLE` in 63 ms because the stored ServiceAccount token was stale (the API answered `401`); after minting a fresh token with `kubectl create token isolate-reader --duration=24h`, a second delivery returned a real bundle in 5.0 s — 2 items (warning events and pod logs), `truncated: true`. No Secret/ConfigMap data and no token reached the prompt. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

@@ -401,9 +401,10 @@ change, and until then the application predicate is the control.
 **Current limitation.** The durable `connector_calls` queue (`0011`) and the
 claim/result/heartbeat transport are implemented; a worker restart does not lose
 a queued call. The relay must still be online before the call deadline. Request
-signing and per-request nonces remain design-only, and only Kubernetes has a
-local live proof among the relay connectors. See
-[`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
+signing and per-request nonces remain design-only. Every relay connector except
+Sentry now has a recorded live run; the measured results, timings and empty-bundle
+cases are in [`connectors/live-verification.md`](connectors/live-verification.md).
+See [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ## 5. Multi-connector routing
 
@@ -559,7 +560,7 @@ The order is evidence value per unit of new trust, not vendor popularity.
 | P2 alt | PagerDuty | Free plan exists; verify current limits | `X-PagerDuty-Signature` | Incident lifecycle, service | **Implemented** (native intake, fake-tested) | Paging system of record |
 | P3 | Grafana / Prometheus | Grafana Cloud free tier; self-host free | Alert webhook / HMAC | Metric/log query | **Implemented for Grafana** (native intake, fake-tested); Prometheus only as a Grafana datasource | "What changed" |
 | P3 alt | Datadog / New Relic | Trial/credits, not free forever | Generic signed bridge; no native intake adapter | Metrics, logs, incidents | **Read adapter implemented** (fake-tested); trigger via the generic bridge | Only if it owns the data |
-| P4 | Kubernetes | No vendor tier; cluster RBAC | Generic signed bridge; no native intake adapter | Pods, events, deployments | **Read adapter implemented** (local live proof for one event read); trigger via the generic bridge | Runtime state |
+| P4 | Kubernetes | No vendor tier; cluster RBAC | Generic signed bridge; no native intake adapter | Pods, events, deployments | **Read adapter implemented** (live proof through the bridge: warning events + pod logs); trigger via the generic bridge | Runtime state |
 | P5 | Kafka bridge | Apache Kafka OSS is free; managed tiers vary | Bridge → generic HMAC | None (produce/consume) | Design-only | Existing event bus |
 | P5 | SCA scanners (Trivy/Grype/OSV) | OSS scanners are free | CI webhook / generic | Scan report | Design-only | Supply-chain evidence |
 

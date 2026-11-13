@@ -2,6 +2,37 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 27 — connector live E2E and honest run budgets (2026-11-14)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W27-E2E | `task/w25-connector-detail-outlet` (working tree) | pending | **done** — six connectors driven by signed bridge deliveries against `ivory-26/isolate-e2e-fixture`; PRs #3–#7; SigNoz blocked on an empty workspace |
+| W27-DOCS | same | pending | **done** — `docs/connectors/live-verification.md`; six vendor pages; `KNOWN-LIMITS` §1/§2.1; `connector-onboarding` |
+
+Evidence: task ids, `connector_calls`, `usage_records` and PR numbers recorded in
+[`docs/connectors/live-verification.md`](../docs/connectors/live-verification.md).
+Result: New Relic, Honeycomb, Axiom and Kubernetes reached a PR; Datadog had #3 from
+its legacy run; SigNoz produced no PR (no alert rules, job budget exhausted).
+Findings: worker needs `DEVICE_GATEWAY_ENABLED=true`; a stale k8s ServiceAccount token
+fails closed in 63 ms; empty evidence makes runs spend their turn/job budget; `cost_usd`
+stays `NULL` without `COST_PRICE_TABLE`. No provider keys used; zero sandboxes left running.
+
+## Wave 26 — task-wide spend caps and stalled-stream retry (2026-11-13)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W26-CAPS | `task/w26-caps` | `274e3b1` | **done** — task-wide token/USD seeding from `usage_records`, pre-turn token reservation, one bounded transport retry per turn |
+| W26-CAPS-FOLLOWUP | `task/w26-caps-followup` | `de1568f` (merge `90895a1`) | **done** — meter the current attempt's sandbox in the USD cap; keep the reservation for a usage-less turn; comments state the heuristic honestly |
+| W26-DOCS | `task/w26-docs-connectors` | `0c7f90e` (merge `4a8c76b`) | **done** — six bridge-only connector pages aligned with the implemented paths |
+
+## Wave 25 — connector detail outlet and pairing/dead-letter fixes (2026-11-13)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W25-DETAIL | `task/w25-connector-detail-outlet` | `5389565`, `8ba8744`, `860f7ae`, `7a7a459`, `93ca846` | **done** — connector detail route under `/integrations`, GitHub install return, guided pairing fields, landing alt cleanup |
+| W25-INTAKE | same | `993100d`, `d1881ae` | **done** — ask for a fix when the owned target is source; browser origin preserved on pairing posts |
+| W25-QUEUE | same | `3c6bc6a`, `d4f19b0`, `2f03087` | **done** — terminal handler verdict honored, deterministic provider rejection dead-lettered, task closed when its job dead-letters |
+
 ## Wave 24 — connector verification, selectors, landing truth (2026-11-02)
 
 | Lane | Branch | Commit | Status |

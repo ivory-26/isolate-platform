@@ -138,7 +138,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `datadog.context.fetch` parses `datadog:<monitorId>` and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **not run.** No Datadog acceptance has been recorded. When authorized, use one bounded read (a monitor get or one metric query), record the measured request count and bytes, and do not replay against production monitors.
+Live: **run 2026-11-13.** A signed bridge delivery for `datadog:344490966` created a task and the relay executed `datadog.context.fetch` twice (6.5 s and 5.2 s end-to-end); both completed with an empty bundle (`items: []`, `truncated: true`) because the synthetic monitor id matches no monitor in the account. The task still ran to a push approval. No monitor was replayed or edited. Measured task spend: 363,524 prompt / 24,177 completion tokens. Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

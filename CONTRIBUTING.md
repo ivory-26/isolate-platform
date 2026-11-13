@@ -1,8 +1,20 @@
 # Contributing to Isolate
 
-Thanks for helping improve Isolate. This repository is an event build: every file was
-written during the event week starting **October 27, 2026**, and the project is under
-active development. Contributions are accepted under the [MIT License](LICENSE).
+Thanks for helping improve Isolate. Contributions are accepted under the
+[MIT License](LICENSE).
+
+## Project background
+
+Isolate was built for a hackathon. Every file in this repository was written during the
+event week starting **October 27, 2026**, in a fresh git history. A pre-event spike that
+validated the stack lives in a separate private repository (`ivory-26/isolate`); none of
+its code, history or scaffolding has been committed here.
+
+The project was **not submitted to the hackathon on time**. Circumstances during the
+event week meant the submission deadline was missed, and the repository was published
+afterward as a complete record of the work. It is maintained on a best-effort basis. Do
+not describe the project or a contribution as a submitted, placed or awarded hackathon
+entry.
 
 ## Community expectations
 

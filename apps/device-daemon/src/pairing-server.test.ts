@@ -188,6 +188,9 @@ describe("localhost pairing page", () => {
 		);
 		expect(page.headers.get("access-control-allow-origin")).toBeNull();
 		expect(page.headers.get("cache-control")).toBe("no-store");
+		// `no-referrer` makes Chromium POST with `Origin: null`, which the CSRF
+		// check rejects, so the page must keep a policy that preserves origin.
+		expect(page.headers.get("referrer-policy")).toBe("strict-origin");
 
 		const secret = randomToken();
 		const before = state.claims;

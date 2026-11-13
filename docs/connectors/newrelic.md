@@ -2,20 +2,20 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
+| Status | **Adapter implemented (relay-bound read context and tools; fake-tested). No native intake adapter** |
 | Free tier verified | 2026-10-31 |
 | Auth | User API key in `API-Key`; NerdGraph GraphQL [S2][S4] |
-| Inbound | Workflow webhook destination; **no HMAC documented** — custom header plus re-fetch [S5] |
-| Read | NerdGraph `entitySearch`, NRQL, entity by GUID |
+| Inbound | **No native intake adapter.** The supported trigger is the generic signed bridge carrying a full `IncidentSignal` with `source: "newrelic"` |
+| Read | NerdGraph `entitySearch`, entity by GUID, one aggregate NRQL query, alert policy list |
 | Writes | None in scope (acknowledge/close issue is a later wave) |
 
-Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.2–§3.3 pattern; New Relic is not in the survey. Nothing below is implemented.
+Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.2–§3.3 pattern. The adapter, read context and relay tools exist in `packages/integrations/src/newrelic/` and `apps/device-daemon/src/vendors/newrelic.ts`. There is no New Relic intake mode in `apps/web`, so a workflow delivery cannot create a task directly; it must be re-signed onto the generic bridge. No live New Relic acceptance run has been recorded.
 
 ## 1. Role in the agent
 
 New Relic supplies APM and infrastructure evidence for a service that is already suspected: the entity that reports the problem, its alert severity, and a bounded NRQL aggregate over the incident window. The trigger is the primary value; the reader answers "how bad, since when, and which entity".
 
-It must not be used as a log-dump source, a dashboard clone, or a way to page through months of telemetry. New Relic Events API is **ingest-only** and is never a read path.
+It must not be used as a log-dump source, a dashboard clone, or a way to page through months of telemetry. New Relic Events API is **ingest-only** and is never a read path. New Relic documents no HMAC for workflow webhook destinations [S5], so a delivery must arrive through the generic signed bridge, which verifies its own HMAC over the exact bytes and then passes a strict `IncidentSignal`.
 
 ## 2. Free tier and quotas
 
@@ -40,91 +40,94 @@ Free is adequate for one small service and a single reader identity. The 8-day w
 | Access model | New Relic user keys do not expose per-query OAuth scopes; access follows the user's role and account grants — granular scope strings **UNVERIFIED** |
 | Least privilege | Create a dedicated full user with read-only role and access only to the accounts/entities in scope; do not use a personal admin key |
 | Lifetime | No documented expiry; rotate on a fixed schedule [S4] |
-| Storage | Server-only, encrypted at rest, keyed by `(organization, connector)` |
-| Rotation | Create a second dedicated user key, deploy, verify, then delete the first key; keep one active key per environment |
+| Storage | The user key is stored in the relay's encrypted local store under the paired credential; the server holds only `credential_ref` metadata |
+| Rotation | Pair the connector again with a second dedicated user key, verify a read, then delete the first key; keep one active key per environment |
 
 Do not use the license/ingest key (`Ingest - License`) for reads; it writes events to the Events API and cannot query NerdGraph [S8]. Account ID is configuration, never taken from the webhook body.
 
 ## 4. Inbound trigger
 
+**There is no native New Relic intake adapter.** The intake mode union in `apps/web/src/server/incident-intake.server.ts` contains `generic`, `github`, `sentry`, `grafana` and `pagerduty` only. A workflow delivery is therefore re-signed onto the generic bridge.
+
 | Property | Value |
 |---|---|
-| Endpoint | `POST https://<host>/api/webhooks/newrelic` |
-| Signature header | **None documented**; destinations support Basic auth, OAuth, or custom headers [S5] |
-| Signed timestamp | No signed timestamp; payload carries `createdAt` for freshness only |
-| Replay control | Reject `createdAt` older than 15 minutes; dedupe by issue id + state transition |
-| Dedupe key | `newrelic:<account-id>:<issue-id>:<state>`; delivery id is traceability only |
-| Body cap | 64 KiB (platform default) |
-| Retries | Not documented on the retrieved notification page — **UNVERIFIED**; reconcile by querying issue state, not by assuming delivery |
-| Response | `202` before any model work; no payload echo |
+| Supported path | `POST https://<host>/api/webhooks/<any-path>`, generic mode |
+| Authentication | HMAC-SHA256 over `<timestamp>.<raw body>` using `WEBHOOK_SIGNING_SECRET`; timestamp within 300 s, secret at least 32 characters |
+| Headers | `x-isolate-timestamp` (Unix seconds) and `x-isolate-signature: sha256=<64 hex>` |
+| Body | A strict `IncidentSignal`; unknown fields rejected; 64 KiB cap; `source` must be `newrelic` |
+| Fingerprint | `newrelic:<first32hex(sha256(accountId\|policyName\|conditionName\|entityIdentity))>`; state, issue id and delivery id are excluded so a redelivery dedupes |
+| Fingerprint bounds | Whole value <= 128 characters; each `:`-separated segment 1-64 characters; charset `[A-Za-z0-9._:@/-]` |
+| Dedupe | `(organization, source, fingerprint)` for 30 minutes; the delivery id is traceability only |
+| Response | `202 {taskId, jobId, deduped}` after task submission; no model work and no provider fetch in the request |
 
-Default workflow payload fields include `id`, `issueUrl`, `title`, `priority`, `state`, `createdAt` and `impactedEntities` [S5]. Require a pinned payload template and a strict schema; reject unknown fields.
+The repo normalizer (`normalizeNewRelicIncident`) accepts only an `ACTIVATED` state and rejects a `createdAt` older than 15 minutes or more than 5 minutes in the future. A bridge that reuses it inherits those rules; the platform receiver itself never inspects a New Relic payload. A custom header on the workflow destination is a shared secret, not a signature: verify it at the bridge's own edge, map the delivery to a signal, and sign the exact bytes forwarded.
 
-A custom header is a shared secret, not a signature: it proves the sender knows the value, not that the body was unmodified. Verify the header, then fetch the issue/entity state through NerdGraph before creating a task. If the platform requires a signed trigger, route the workflow webhook through the generic signed bridge (README §3) instead of accepting the body directly.
+Task provenance and evidence need one extra step. A bridge delivery records `incident_source`/`incident_fingerprint` on the task only when an enabled subscription for the connector id (`newrelic`) matches the delivery; that path calls `createTaskForSignal` with provenance. If no subscription matches, the legacy generic path creates the task without a fingerprint, so the worker loads no New Relic evidence. See [connector-onboarding.md](../connector-onboarding.md) §4.1.
 
 ## 5. Read-only context
 
 | Need | Query / endpoint | Fields / notes | Source |
 |---|---|---|---|
-| Entity search | NerdGraph `actor.entitySearch(query: "…")` | `guid`, `name`, `type`, `domain`, `alertSeverity`, `reporting`; strict query template | [S3] |
-| Entity detail | `actor.entity(guid: "…")` | Selected attributes only; no tags dump | [S3] |
-| NRQL aggregate | `actor.account(id: <n>) { nrql(query: "…") { results } }` | `SELECT count(*)`, percentiles or average over a ≤ 60-minute window; `SINCE`/`UNTIL` bounded | [S9] |
-| Alert/issue state | NerdGraph issue/alert fields or NRQL over alert events | Exact field/event names **UNVERIFIED**; confirm against the account's schema before coding | [S3] |
+| Entity search | NerdGraph `actor.entitySearch(query: "name LIKE '%…%'")` | `guid`, `accountId`, `name`, `type`, `domain`, `alertSeverity`, `reporting`, allowlisted tags; first result only, ordered by GUID then name | [S3] |
+| Entity detail | `actor.entity(guid: "…")` | The same selected attributes; a GUID from another account is treated as missing | [S3] |
+| NRQL aggregate | `actor.account(id: <n>) { nrql(query: "…") { results } }` | One templated query: `SELECT count(*) FROM Transaction WHERE appName = '…' AND error IS TRUE FACET error.class`, plus `SINCE`/`UNTIL` and `LIMIT 20` appended by the reader | [S9] |
+| Alert policies | `actor.account(id: <n>) { alerts { policies { id name } } }` | Policy id and name only; destinations are never requested | [S3] |
 | Events API | `POST https://insights-collector.newrelic.com/v1/accounts/{id}/events` | **Ingest only** — never used by the reader | [S8] |
 
-Fixed plan: entity search by name/service (1) → NRQL aggregate (≤2) → issue state (≤1). Total **≤ 4 GraphQL operations**, 10-second timeout each, no cursor page beyond the first 100 entities. The model cannot author NRQL; queries are templates with allowlisted entity names and a bounded window.
+Fixed context plan on the device path: entity search by service name (1) then one aggregate NRQL query (1). An entity lookup by GUID replaces the search only when the caller supplies a GUID, which the worker's `newrelic.context.fetch` call does not. The hard cap is **4 GraphQL operations**, 10-second timeout each, first result page only. The entity name is escaped to `[A-Za-z0-9 ._:-]` before it enters a query, so payload text is inert.
 
-Caps: at most **10 items** from this source, **4,000 characters** per excerpt, **256 KiB** total. NRQL results are summarized (one row per status/error class, ≤ 20 rows); raw `Transaction`/`Log` rows and full attribute maps are never returned. `truncated: true` on any omission, including a free-plan retention gap.
+Caps: at most **10 items** from this source, **4,000 characters** per excerpt, **2,000 characters** per aggregate summary, **20 NRQL rows**, **256 KiB** per response and per bundle. Only aggregate cells are read; raw `Transaction`/`Log` rows and full attribute maps are never returned. `truncated: true` on any omission, including a requested start older than the Free-plan 8-day retention (the window is clamped and flagged).
+
+### 5.1 Evidence loading
+
+The worker never holds the New Relic key. For a task carrying a `newrelic:` fingerprint it resolves an active device and an `active` credential, requires a stored signal row for `(organization, newrelic, fingerprint)`, and enqueues exactly one `newrelic.context.fetch` device call with `{incidentFingerprint, service, kind}` and a bounded TTL. The device parses `newrelic:<digest>`, requires a non-empty service, resolves the entity by service name, runs the aggregate query, and returns the bundle. Any failure - no device, offline relay, missing signal row, timeout, malformed or mismatched bundle - returns `null`: the task continues without New Relic evidence and is never failed by context loading.
 
 ## 6. Framework fit
 
-- Module: `packages/integrations/src/newrelic/` (`auth.ts`, `webhook.ts`, `incidents.ts`, `graphql.ts`, `context.ts`, tests).
-- Source enum: `newrelic` is **not** in `INCIDENT_SOURCES` today (`github`, `sentry`, `pagerduty`, `datadog`, `grafana`, `generic`). Extend the enum in a **contract commit before** the adapter; strict schemas reject the new value until then.
-- Proposed functions: `verifyNewRelicDelivery` (shared header + freshness + pinned template), `normalizeNewRelicIncident` (severity from `priority`, service from `impactedEntities`), `fetchNewRelicIncidentContext` (fixed GraphQL plan).
-- Agent tools: **none**. Context is injected by the worker; no model-authored GraphQL. If a query tool is later exposed it is `read_only` and audited as `tool.execute`; acknowledge/close is `sensitive` and out of scope.
-- Env names: `NEW_RELIC_USER_API_KEY`, `NEW_RELIC_ACCOUNT_ID`, `NEW_RELIC_REGION`, `NEW_RELIC_WEBHOOK_HEADER`, `NEW_RELIC_WEBHOOK_SECRET`.
-- Sandbox: reader is server-side in the worker; sandbox egress denied; no key in prompt/tool result/error/audit; bounded redacted excerpts; audit only for tools.
-- Tests: fake GraphQL transport; forged/unsigned payload causes re-fetch; `401` and `429` mapping; 25-concurrent limit respected by serial calls; retention gap produces `truncated`; tenant isolation by account id.
+- Module: `packages/integrations/src/newrelic/` (`webhook.ts`, `normalize.ts`, `context.ts`, `tools.ts`, `redact.ts`, `schemas.ts`, tests); device handlers in `apps/device-daemon/src/vendors/newrelic.ts`.
+- Source enum: `newrelic` exists in `INCIDENT_SOURCES` (`packages/shared/src/types/incident.ts`).
+- Implemented functions: `verifyNewRelicWebhook` (reports `unsigned` or `bridge_verified`, never a forged body as valid), `normalizeNewRelicIncident` (`ACTIVATED` only, priority to severity, policy/condition/entity fingerprint), `fetchNewRelicContext` (fixed plan above).
+- Device tools: `newrelic.run_nrql`, `newrelic.get_entity`, `newrelic.list_alert_policies`, plus `newrelic.context.fetch` for incident context. The context call is worker-enqueued; the three read tools are available to the model only when the registry finds an `active` credential and the tool is enabled. `run_nrql` accepts model-authored NRQL but only a single `SELECT` aggregate with no caller-supplied `SINCE`/`UNTIL`/`LIMIT`, no comment, statement separator, mutation keyword, `TIMESERIES`, `SELECT *` or `LOG`/`Logging` source.
+- Pairing fields: secret `apiKey`; required selector `accountId`; optional selector `endpoint` (`https://api.newrelic.com/graphql` or `https://api.eu.newrelic.com/graphql`). The pairing page stores them in the relay's encrypted local store; the server stores metadata only.
+- Sandbox: all reads execute on the user's device; sandbox egress stays denied; no New Relic key enters a prompt, tool result, error or audit detail; bounded redacted excerpts only.
+- Tests: fake GraphQL transport only; bridge-verified versus unsigned is distinguished; `401` and transport failures map to `INTEGRATION_UNAVAILABLE`; `429` maps to `RATE_LIMITED`; `403`/`404` on an optional resource drop it and set `truncated`; retention gap produces `truncated`; tenant isolation by account id.
 
 ## 7. Operator setup checklist
 
-1. Choose the US or EU region and record the matching GraphQL host; set `NEW_RELIC_REGION` and `NEW_RELIC_ACCOUNT_ID`.
+1. Choose the US or EU region and record the matching GraphQL host; this is the `endpoint` selector.
 2. Create a dedicated full user with read-only access to the in-scope accounts; issue one user API key for that identity.
-3. Store the key server-side; never in the repository or a fixture.
-4. Create a workflow with a Webhook destination: custom header `NEW_RELIC_WEBHOOK_HEADER` = random `NEW_RELIC_WEBHOOK_SECRET`, pinned JSON template, no Basic credentials in the URL.
-5. Point it at `https://<host>/api/webhooks/newrelic`; filter to the alert policies in scope.
-6. Set the server-side binding (organization, repository, workflow); the payload cannot select a tenant.
-7. Confirm the Free plan's 8-day retention is acceptable for the read window; otherwise use a paid plan.
-8. Add keys **last**, after offline gates pass.
+3. Pair the `newrelic` connector on the relay with the `apiKey` secret, the `accountId` selector and, when not US, the `endpoint` selector. The values stay in the relay's encrypted local store; never put them in the repository, a prompt or a fixture.
+4. Create a workflow with a Webhook destination: a pinned JSON template, a custom header if desired, and no Basic credentials in the URL.
+5. Configure the bridge sender to verify the custom header, map the delivery to a strict `IncidentSignal` with `source: "newrelic"` and the fingerprint shape in §4, and sign it with `WEBHOOK_SIGNING_SECRET`.
+6. Point the sender at `https://<host>/api/webhooks/<any-path>` and set the deployment binding (`WEBHOOK_ORGANIZATION_ID`, repository, workflow); the New Relic payload never selects a tenant.
+7. Create an enabled subscription for the `newrelic` connector if the task should carry provenance and load evidence (§4).
+8. Confirm the Free plan's 8-day retention is acceptable for the read window; otherwise use a paid plan.
+9. Add keys **last**, after offline gates pass.
 
 ```dotenv
-NEW_RELIC_USER_API_KEY=
-NEW_RELIC_ACCOUNT_ID=
-NEW_RELIC_REGION=
-NEW_RELIC_WEBHOOK_HEADER=
-NEW_RELIC_WEBHOOK_SECRET=
+WEBHOOK_SIGNING_SECRET=
+# Relay-local example only: the daemon reads the env var name configured in
+# `vendors.newrelic.secretEnv.apiKey`, so a deployment may name it differently.
+NEW_RELIC_API_KEY=
 ```
 
 ## 8. Acceptance checklist
 
-Offline (`INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`):
+Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`):
 
-- [ ] `verifyNewRelicDelivery`: valid header accepted; wrong/missing header `401`; stale `createdAt` rejected; oversize body `413`.
-- [ ] `normalizeNewRelicIncident`: priority→severity mapping; fingerprint stable; unknown payload fields rejected.
-- [ ] `fetchNewRelicIncidentContext`: ≤ 4 operations; NRQL bounded by window; ≤ 20 rows; no raw log rows; `truncated` on retention gap.
-- [ ] Redaction: user key, `API-Key`, emails, IPs and account ids outside the allowlist removed before truncation.
-- [ ] Tenant isolation: entity GUID from another account returns `NOT_FOUND`.
-- [ ] `biome check`, `tsc --noEmit`, `bun test` twice, providers disabled.
+- [x] `verifyNewRelicWebhook`: an unsigned body is never reported as `valid`; `bridgeVerified: true` reports `bridge_verified`; oversize body refused.
+- [x] `normalizeNewRelicIncident`: priority to severity mapping; non-`ACTIVATED` and stale/future `createdAt` rejected; policy/condition/entity fingerprint stable across redelivery; unknown payload fields rejected.
+- [x] `fetchNewRelicContext`: at most 4 operations; one aggregate NRQL bounded by window and `LIMIT 20`; no raw log rows; `truncated` on retention gap.
+- [x] Redaction: user key, `API-Key`, emails, IPs and account ids outside the allowlist removed before truncation.
+- [x] Tenant isolation: entity GUID from another account returns `NOT_FOUND`.
+- [x] Relay context: `newrelic.context.fetch` parses `newrelic:<digest>` and requires a service; a malformed fingerprint fails validation without a provider call.
+- [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live (explicit authorization, one bounded call, no retries):
-
-- [ ] One `entitySearch` for a named test entity, or one NRQL count over ≤ 15 minutes.
-- [ ] Record the GraphQL operation count, response size and latency; provider spend is `$0` (not credit-funded).
-- [ ] Do not send a test alert to a production policy.
+Live: **not run.** No New Relic acceptance has been recorded. When authorized, use one bounded read (one entity search or one NRQL count over at most 15 minutes), record the measured operation count and bytes, and do not send a test alert to a production policy.
 
 ## 9. Risks / never in model context
 
-- User API key, ingest license key, webhook shared secret, cookies.
+- User API key, ingest license key, bridge `WEBHOOK_SIGNING_SECRET`, cookies.
 - Raw log/event rows, `Transaction` attributes, request URLs with query strings, session ids.
 - User PII: emails, names, IPs, account/user ids beyond the allowlisted account id.
 - Full entity tag maps, deployment annotations with free text, dashboard definitions.

@@ -2,20 +2,20 @@
 
 | Field | Value |
 |---|---|
-| Status | **Design-only — no code in this repo** |
+| Status | **Adapter implemented (relay-bound read context and tools; fake-tested). No native intake adapter** |
 | Free tier verified | 2026-10-31 |
 | Auth | `X-Honeycomb-Team` configuration key [S5] |
-| Inbound | Webhook recipient with `X-Honeycomb-Webhook-Token`; **no HMAC** [S2] |
-| Read | Query Data API, SLO API |
+| Inbound | **No native intake adapter.** The supported trigger is the generic signed bridge carrying a full `IncidentSignal` with `source: "honeycomb"` |
+| Read | Query Data API (create, run, fetch result), SLO API, trigger snapshot from the signal |
 | Writes | None in scope (trigger create/update is a later wave) |
 
-Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §5.4 (metrics backend alternatives). Honeycomb is not in the survey. Nothing below is implemented.
+Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §5.4 (metrics backend alternatives). The adapter, read context and relay tools exist in `packages/integrations/src/honeycomb/` and `apps/device-daemon/src/vendors/honeycomb.ts`. There is no Honeycomb intake mode in `apps/web`, so a webhook delivery cannot create a task directly; it must be re-signed onto the generic bridge. No live Honeycomb acceptance run has been recorded.
 
 ## 1. Role in the agent
 
 Honeycomb is a high-cardinality event store: it answers "which field combination is anomalous" for a service that is already suspected. The trigger names the dataset and the breached threshold; the reader returns one bounded query result (a small group-by table or a time series summary) and the SLO state.
 
-It must not be used to explore arbitrary fields, to pull raw events, or to replace logs. The query plan is fixed and the model never authors a query specification.
+It must not be used to explore arbitrary fields, to pull raw events, or to replace logs. The query plan is fixed and the model never authors a query specification. Honeycomb's webhook token is authentication, not message signing [S2], so a delivery must arrive through the generic signed bridge, which verifies its own HMAC over the exact bytes and then passes a strict `IncidentSignal`.
 
 ## 2. Free tier and quotas
 
@@ -41,27 +41,30 @@ Free is viable for a design partner with one environment and two triggers. The 6
 | Scope | Environment-level keys access one environment and its datasets [S5] |
 | Management API | `Authorization: Bearer <management key>` is for account-level management; not needed for the reader [S5] |
 | Lifetime | No documented expiry; rotate on a fixed schedule |
-| Storage | Server-only, encrypted at rest, keyed by `(organization, connector)` |
-| Rotation | Create a second configuration key in the same environment, deploy, verify queries, delete the first |
+| Storage | The configuration key is stored in the relay's encrypted local store under the paired credential; the server holds only `credential_ref` metadata |
+| Rotation | Pair the connector again with a second configuration key in the same environment, verify queries, then delete the first |
 
 Use one environment-scoped configuration key per tenant. Do not use a management key; it reaches account configuration the reader does not need.
 
 ## 4. Inbound trigger
 
+**There is no native Honeycomb intake adapter.** The intake mode union in `apps/web/src/server/incident-intake.server.ts` contains `generic`, `github`, `sentry`, `grafana` and `pagerduty` only. A Honeycomb delivery is therefore re-signed onto the generic bridge.
+
 | Property | Value |
 |---|---|
-| Endpoint | `POST https://<host>/api/webhooks/honeycomb` |
-| Signature header | **None** [S2] |
-| Authentication header | `X-Honeycomb-Webhook-Token` — a per-recipient shared token [S2] |
-| Signed timestamp | No; payload timestamps are data, not freshness proof |
-| Replay control | Reject an alert older than 15 minutes by its trigger timestamp; dedupe by trigger id + dataset |
-| Dedupe key | `honeycomb:<dataset>:<trigger-id>:<alert-state>`; delivery id is traceability only |
-| Delivery header | `X-Honeycomb-Webhook-Delivery-ID` [S2] |
-| Body cap | 64 KiB (platform default) |
-| Retries | Up to **3** retries on 408/429/502/503 or timeout, honouring `Retry-After`; endpoint must answer within **15 seconds** [S2] |
-| Response | `202` before model work; no payload echo |
+| Supported path | `POST https://<host>/api/webhooks/<any-path>`, generic mode |
+| Authentication | HMAC-SHA256 over `<timestamp>.<raw body>` using `WEBHOOK_SIGNING_SECRET`; timestamp within 300 s, secret at least 32 characters |
+| Headers | `x-isolate-timestamp` (Unix seconds) and `x-isolate-signature: sha256=<64 hex>` |
+| Body | A strict `IncidentSignal`; unknown fields rejected; 64 KiB cap; `source` must be `honeycomb` |
+| Fingerprint | `honeycomb:<dataset>:<triggerId>:<state>`; over 128 characters it is rebuilt as `honeycomb:<34>:<34>:<16>~<12hex>` so two long prefixes cannot merge |
+| Fingerprint bounds | Whole value <= 128 characters; each `:`-separated segment 1-64 characters; parser charset `[A-Za-z0-9._:@/-]`. The builder's over-length form appends `~<12hex>`, which the parser rejects, so such a fingerprint yields no evidence |
+| States | `triggered`, `firing`, `critical`, `warning` are incidents; `ok`, `resolved` and `recovered` are lifecycle updates and do not create a task |
+| Dedupe | `(organization, source, fingerprint)` for 30 minutes; the delivery id is traceability only |
+| Response | `202 {taskId, jobId, deduped}` after task submission; no model work and no provider fetch in the request |
 
-Honeycomb's webhook token is authentication, not message signing. Verify the token in constant time, then re-fetch the trigger/SLO state through the API before creating a task. The payload JSON is the "result of the alert" [S2]; exact field names were not extracted — **UNVERIFIED**. Capture one fixture from the test recipient and pin a strict schema before coding.
+The repo normalizer (`normalizeHoneycombIncident`) rejects a delivery older than 15 minutes or more than 5 minutes in the future and maps state/threshold to severity. A bridge that reuses it inherits those rules; the platform receiver itself never inspects a Honeycomb payload. Verify `X-Honeycomb-Webhook-Token` at the bridge's own edge, map the delivery to a signal, and sign the exact bytes forwarded.
+
+Task provenance and evidence need one extra step. A bridge delivery records `incident_source`/`incident_fingerprint` on the task only when an enabled subscription for the connector id (`honeycomb`) matches the delivery; that path calls `createTaskForSignal` with provenance. If no subscription matches, the legacy generic path creates the task without a fingerprint, so the worker loads no Honeycomb evidence. See [connector-onboarding.md](../connector-onboarding.md) §4.1.
 
 ## 5. Read-only context
 
@@ -69,64 +72,65 @@ Base host: `https://api.honeycomb.io` (US); EU environments use the environment-
 
 | Need | Endpoint | Fields / notes | Source |
 |---|---|---|---|
-| Create query | `POST /1/queries/{datasetSlug}` | `calculations`, `breakdowns`, `filters`, `time_range` (≤ 3,600 s), `granularity`, `limit` ≤ 100 | [S3][S4] |
-| Run query | `POST /1/query_results/{datasetSlug}` | Body `{query_id}`; returns a result id | [S3] |
-| Fetch result | `GET /1/query_results/{datasetSlug}/{id}` | Summary rows and series; ≤ 10,000 rows, but the reader caps at 100 | [S3] |
-| SLO state | `GET /1/slos/{datasetSlug}` | SLO name, target, current status; Free returns none | [S6] |
-| Trigger detail | Webhook payload only | Do not fetch the full trigger definition (may embed recipients) | [S2] |
+| Create query | `POST /1/queries/{datasetSlug}` | One fixed template by `kind`: `calculations`, `breakdowns`, a `service.name` filter, `time_range` 60-3,600 s, `limit` 20 | [S3][S4] |
+| Run query | `POST /1/query_results/{datasetSlug}` | Body `{query_id}`; returns a result id; run once, no polling | [S3] |
+| Fetch result | `GET /1/query_results/{datasetSlug}/{id}` | The reader keeps the last point of each series and at most 20 rows; raw spans/events are never fetched | [S3] |
+| SLO state | `GET /1/slos/{datasetSlug}` | SLO name, target, current, status; Free returns an empty list, treated as `truncated` | [S6] |
+| Trigger detail | The normalized signal only | `honeycomb.get_trigger` performs no provider call; the full definition may embed recipients | [S2] |
 
-Fixed plan: trigger payload (0 calls) → create query (1) → run query (1) → fetch result (1) → SLO list (≤1). Total **≤ 4 calls**, 10-second timeout, one page. Query templates are selected by `kind` (`latency`, `error_rate`, `saturation`); the service/environment filter comes from validated identifiers, never from model output.
+Fixed plan on the device path: trigger snapshot rebuilt from the fingerprint (0 calls) → create query (1) → run query (1) → fetch result (1) → SLO list (1). Total **4 provider calls** (hard cap 4), 10-second timeout each, one page each. Query templates are selected by `kind` (`latency`, `error_rate`, `saturation`), defaulting to `latency`; the service filter comes from the validated signal, never from model output, and the window is 1-60 minutes (default 60).
 
-Caps: at most **8 items** from this source, **4,000 characters** per excerpt, **256 KiB** total. A query item carries ≤ 100 rows and ≤ 20 series points per group; raw events are never fetched. `truncated: true` when the 7-day window, row cap, rate limit or a missing SLO drops evidence.
+Caps: at most **8 items** from this source, **4,000 characters** per excerpt, **2,000 characters** per query or SLO summary, **20 query rows**, **20 SLO rows**, **256 KiB** per response and per bundle. `truncated: true` when a source is capped, a call is denied or malformed, the query is incomplete, or the SLO list is empty.
+
+### 5.1 Evidence loading
+
+The worker never holds the Honeycomb key. For a task carrying a `honeycomb:` fingerprint it resolves an active device and an `active` credential, requires a stored signal row for `(organization, honeycomb, fingerprint)`, and enqueues exactly one `honeycomb.context.fetch` device call with `{incidentFingerprint, service, kind}` and a bounded TTL. The device parses `dataset:triggerId:state`, requires a non-empty service, validates the trigger id against `^[a-z0-9][a-z0-9_-]{0,63}$` and the state against the known set, rebuilds the trigger snapshot as `{id, name: triggerId, state}`, then runs the query and SLO calls. Any failure - no device, offline relay, missing signal row, timeout, malformed or mismatched bundle - returns `null`: the task continues without Honeycomb evidence and is never failed by context loading.
 
 ## 6. Framework fit
 
-- Module: `packages/integrations/src/honeycomb/` (`auth.ts`, `webhook.ts`, `incidents.ts`, `queries.ts`, `context.ts`, tests).
-- Source enum: `honeycomb` is not in `INCIDENT_SOURCES`; extend it in a **contract commit before** the adapter. Strict schemas reject the value until the contract ships.
-- Proposed functions: `verifyHoneycombDelivery` (token + freshness + strict payload), `normalizeHoneycombIncident` (severity from trigger threshold/state), `fetchHoneycombIncidentContext` (fixed query plan).
-- Agent tools: **none**. The worker injects context; no model-authored query spec. A future query tool would be `read_only` and audited; trigger create/update is `sensitive` and out of scope.
-- Env names: `HONEYCOMB_API_KEY`, `HONEYCOMB_API_HOST`, `HONEYCOMB_DATASET`, `HONEYCOMB_WEBHOOK_TOKEN`.
-- Sandbox: server-side reader; sandbox egress denied; configuration key never in prompt/tool result/error/audit; bounded redacted rows; `tool.execute` audit only if a tool is added.
-- Tests: fake HTTP; wrong token `401`; stale alert rejected; retry header honoured at most once; `429` → `RATE_LIMITED`; 7-day window enforced in code; empty SLO on Free yields `truncated`, not an error; tenant isolation by environment key.
+- Module: `packages/integrations/src/honeycomb/` (`client.ts`, `webhook.ts`, `normalize.ts`, `context.ts`, `tools.ts`, `redact.ts`, `schemas.ts`, tests); device handlers in `apps/device-daemon/src/vendors/honeycomb.ts`.
+- Source enum: `honeycomb` exists in `INCIDENT_SOURCES` (`packages/shared/src/types/incident.ts`).
+- Implemented functions: `verifyHoneycombWebhookToken` (constant-time token comparison), `verifyHoneycombDelivery` (refuses a delivery unless `bridgeVerified` is true; never claims a vendor signature), `normalizeHoneycombIncident` (triggering states only, state/threshold severity, dataset/trigger/state fingerprint), `fetchHoneycombIncidentContext` (fixed plan above).
+- Device tools: `honeycomb.run_query`, `honeycomb.get_trigger`, `honeycomb.list_slos`, plus `honeycomb.context.fetch` for incident context. The context call is worker-enqueued; the three read tools are available to the model only when the registry finds an `active` credential and the tool is enabled. `get_trigger` makes no provider call: it reads the snapshot captured with the incident.
+- Pairing fields: secret `apiKey`; required selector `dataset`; optional selector `apiBaseUrl`. The pairing page stores them in the relay's encrypted local store; the server stores metadata only.
+- Sandbox: all reads execute on the user's device; sandbox egress stays denied; the configuration key never enters a prompt, tool result, error or audit detail; bounded redacted rows only.
+- Tests: fake HTTP only; a delivery without a bridge verdict is refused; wrong token fails the constant-time comparison; stale alert rejected; `401` and transport failures map to `INTEGRATION_UNAVAILABLE`; `429` maps to `RATE_LIMITED`; an empty SLO list on Free yields `truncated`, not an error; tenant isolation by environment key.
 
 ## 7. Operator setup checklist
 
-1. Choose the environment/dataset and record `HONEYCOMB_API_HOST` and `HONEYCOMB_DATASET`.
+1. Choose the environment/dataset; this is the `dataset` selector.
 2. Create an environment-scoped **configuration** key; do not use an ingest key.
-3. Store it server-side; never in the repository or a fixture.
-4. Create a webhook recipient with a random token; set `HONEYCOMB_WEBHOOK_TOKEN` to the same value.
-5. Point the recipient at `https://<host>/api/webhooks/honeycomb`; attach it to the two in-scope triggers.
-6. Set the server-side binding (organization, repository, workflow); the payload cannot select a tenant.
-7. Capture one test delivery and pin the payload schema; record the field names that were **UNVERIFIED** in this page.
+3. Pair the `honeycomb` connector on the relay with the `apiKey` secret, the `dataset` selector and, when not US, the `apiBaseUrl` selector. The values stay in the relay's encrypted local store; never put them in the repository, a prompt or a fixture.
+4. Create a webhook recipient with a random token; the bridge verifies that token in constant time.
+5. Configure the bridge sender to map the delivery to a strict `IncidentSignal` with `source: "honeycomb"` and the fingerprint shape in §4, and sign it with `WEBHOOK_SIGNING_SECRET`.
+6. Point the sender at `https://<host>/api/webhooks/<any-path>`; attach the recipient to the in-scope triggers and set the deployment binding (`WEBHOOK_ORGANIZATION_ID`, repository, workflow). The payload never selects a tenant.
+7. Create an enabled subscription for the `honeycomb` connector if the task should carry provenance and load evidence (§4).
 8. Add keys **last**, after offline gates pass.
 
 ```dotenv
+WEBHOOK_SIGNING_SECRET=
+# Relay-local example only: the daemon reads the env var name configured in
+# `vendors.honeycomb.secretEnv.apiKey`, so a deployment may name it differently.
 HONEYCOMB_API_KEY=
-HONEYCOMB_API_HOST=
-HONEYCOMB_DATASET=
-HONEYCOMB_WEBHOOK_TOKEN=
 ```
 
 ## 8. Acceptance checklist
 
-Offline (`INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`):
+Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`):
 
-- [ ] `verifyHoneycombDelivery`: correct token accepted; wrong/missing token `401`; stale trigger rejected; oversize body `413`.
-- [ ] `normalizeHoneycombIncident`: dataset + trigger id fingerprint stable; unknown payload fields rejected.
-- [ ] `fetchHoneycombIncidentContext`: ≤ 4 calls; query window ≤ 7 days; rows ≤ 100; `truncated` on free-plan SLO absence.
-- [ ] Redaction: configuration key, webhook token, email/IP/hostname fields removed before truncation.
-- [ ] Tenant isolation: key from environment A cannot query environment B.
-- [ ] `biome check`, `tsc --noEmit`, `bun test` twice, providers disabled.
+- [x] `verifyHoneycombDelivery`: a delivery without a bridge verdict is refused; an oversize body is refused; a valid bridge verdict plus a valid delivery id is accepted.
+- [x] `verifyHoneycombWebhookToken`: a short or missing expected token fails; comparison is constant-time.
+- [x] `normalizeHoneycombIncident`: triggering states only; dataset + trigger id + state fingerprint stable; stale/future alert rejected; unknown payload fields rejected.
+- [x] `fetchHoneycombIncidentContext`: exactly 4 calls (query create/run/fetch plus SLO list); rows <= 20; window <= 60 minutes; `truncated` on an empty SLO list.
+- [x] Redaction: configuration key, webhook token, email/IP/hostname fields removed before truncation.
+- [x] Relay context: `honeycomb.context.fetch` parses `dataset:triggerId:state`, validates the trigger id and state, and requires a service; a malformed fingerprint fails validation without a provider call.
+- [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live (explicit authorization, one bounded call, no retries):
-
-- [ ] One query-result round trip for a named dataset over ≤ 15 minutes; record response rows and bytes.
-- [ ] Provider spend is `$0`; Honeycomb is not credit-funded.
-- [ ] Do not create or edit a production trigger.
+Live: **not run.** No Honeycomb acceptance has been recorded. When authorized, use one bounded query-result round trip for a named dataset over at most 15 minutes, record the measured rows and bytes, and do not create or edit a production trigger.
 
 ## 9. Risks / never in model context
 
-- Configuration key, management key, ingest key, webhook token.
+- Configuration key, management key, ingest key, webhook token, bridge `WEBHOOK_SIGNING_SECRET`.
 - Raw events and full attribute maps (high-cardinality fields often carry user ids, emails, URLs).
 - Query specs that embed customer identifiers outside the validated filter.
 - Trigger definitions with recipient lists, webhook URLs or secrets.

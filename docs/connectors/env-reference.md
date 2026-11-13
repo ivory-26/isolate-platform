@@ -3,13 +3,24 @@
 | Field | Value |
 |---|---|
 | Purpose | Names only for every connector setting; no values |
-| Generated from | `docs/connectors/*.md` dotenv blocks, 2026-10-31; GitHub App section checked against code 2026-11-02 |
+| Generated from | `docs/connectors/*.md` dotenv blocks, 2026-10-31; the six bridge-only connector blocks and the GitHub App section checked against code 2026-11-13 |
 | Product model | Provider keys are held on the user's relay; the server stores only a device-token hash and connector metadata (`credential_ref`), never a secret. See [`docs/connector-onboarding.md`](../connector-onboarding.md) |
 | When to use env | Deployment-level webhook verification secrets and the GitHub App identity only; vendor read keys belong on the relay |
 
-**Platform-level (deployment env):** `DATABASE_URL`, `DEVICE_GATEWAY_ENABLED`, the GitHub App identity below, and the inbound webhook secrets (`WEBHOOK_SENTRY_SECRET`, `WEBHOOK_GRAFANA_SECRET`, `WEBHOOK_PAGERDUTY_SECRET`). There is no server-side credential encryption key.
+**Platform-level (deployment env):** `DATABASE_URL`, `DEVICE_GATEWAY_ENABLED`, the GitHub App identity below, the generic signed-bridge secret `WEBHOOK_SIGNING_SECRET`, and the per-connector intake secrets (`WEBHOOK_SENTRY_SECRET`, `WEBHOOK_GRAFANA_SECRET`, `WEBHOOK_PAGERDUTY_SECRET`). There is no server-side credential encryption key.
 
 Never commit values. A relay-held credential takes precedence over an env fallback.
+
+`WEBHOOK_SIGNING_SECRET` is the only platform-held secret for Datadog, New
+Relic, Honeycomb, Axiom, SigNoz and Kubernetes. None of the six has a native
+intake adapter: each trigger arrives as a full `IncidentSignal` over
+`POST /api/webhooks/<any-path>`, signed as HMAC-SHA256 over
+`<timestamp>.<body>` with that secret (headers `x-isolate-timestamp` and
+`x-isolate-signature: sha256=<64 hex>`). The vendor names in those six blocks
+are **relay-local examples**: the daemon reads whatever env var name the
+deployment configures in `vendors.<connector>.secretEnv`, and a paired
+credential in the relay's encrypted local store takes precedence. Only
+`KUBERNETES_API_URL` and `KUBERNETES_NAMESPACE` are fixed env fallbacks.
 
 ## GitHub App (operator, deployment-level)
 
@@ -58,11 +69,8 @@ ARGOCD_WEBHOOK_SECRET=
 Guide: [axiom.md](axiom.md)
 
 ```dotenv
-AXIOM_API_TOKEN=
-AXIOM_API_URL=
-AXIOM_DATASET=
-AXIOM_WEBHOOK_HEADER=
-AXIOM_WEBHOOK_SECRET=
+WEBHOOK_SIGNING_SECRET=
+AXIOM_TOKEN=
 ```
 
 ## Azure Monitor connector
@@ -124,11 +132,9 @@ CROWDSEC_WEBHOOK_SECRET=
 Guide: [datadog.md](datadog.md)
 
 ```dotenv
-DATADOG_API_KEY=
-DATADOG_APP_KEY=
-DATADOG_SITE=
-DATADOG_WEBHOOK_HEADER=
-DATADOG_WEBHOOK_SECRET=
+WEBHOOK_SIGNING_SECRET=
+DD_API_KEY=
+DD_APP_KEY=
 ```
 
 ## DefectDojo connector
@@ -207,10 +213,8 @@ GRAFANA_WEBHOOK_TIMESTAMP_HEADER=
 Guide: [honeycomb.md](honeycomb.md)
 
 ```dotenv
-HONEYCOMB_API_HOST=
+WEBHOOK_SIGNING_SECRET=
 HONEYCOMB_API_KEY=
-HONEYCOMB_DATASET=
-HONEYCOMB_WEBHOOK_TOKEN=
 ```
 
 ## incident.io connector
@@ -228,12 +232,11 @@ INCIDENT_IO_WEBHOOK_SECRET=
 Guide: [kubernetes.md](kubernetes.md)
 
 ```dotenv
+WEBHOOK_SIGNING_SECRET=
 KUBERNETES_API_URL=
-KUBERNETES_CA_FILE=
-KUBERNETES_CLUSTER_ID=
 KUBERNETES_NAMESPACE=
 KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE=
-KUBERNETES_WEBHOOK_SECRET=
+KUBERNETES_CA_FILE=
 ```
 
 ## Loki and Tempo connector
@@ -255,11 +258,8 @@ TEMPO_TOKEN=
 Guide: [newrelic.md](newrelic.md)
 
 ```dotenv
-NEW_RELIC_ACCOUNT_ID=
-NEW_RELIC_REGION=
-NEW_RELIC_USER_API_KEY=
-NEW_RELIC_WEBHOOK_HEADER=
-NEW_RELIC_WEBHOOK_SECRET=
+WEBHOOK_SIGNING_SECRET=
+NEW_RELIC_API_KEY=
 ```
 
 ## OSV-Scanner connector
@@ -342,10 +342,8 @@ SENTRY_WEBHOOK_SECRET=
 Guide: [signoz.md](signoz.md)
 
 ```dotenv
+WEBHOOK_SIGNING_SECRET=
 SIGNOZ_API_KEY=
-SIGNOZ_API_URL=
-SIGNOZ_WEBHOOK_PASSWORD=
-SIGNOZ_WEBHOOK_USER=
 ```
 
 ## Splunk connector

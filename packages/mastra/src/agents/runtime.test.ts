@@ -277,6 +277,24 @@ describe("createMastraAgentRuntime bounds", () => {
 				maxTaskTokens: 100,
 				maxSteps: 2,
 			},
+			{
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+				priorTaskTokens: -1,
+			},
+			{
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+				priorTaskTokens: 1.5,
+			},
+			{
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+				priorTaskTokens: Number.NaN,
+			},
 		];
 		for (const caps of invalidCaps) {
 			expect(() => runtimeWith(fake.agent, { caps })).toThrow(PlatformError);
@@ -305,6 +323,145 @@ describe("createMastraAgentRuntime bounds", () => {
 		expect(caught).toBe(abortError);
 		expect(runtime.turns[0].status).toBe("failed");
 		expect(runtime.turns[0].usage).toBeNull();
+	});
+});
+
+describe("createMastraAgentRuntime transport retry", () => {
+	test("retries one stalled generate and emits exactly one finished record", async () => {
+		let attempts = 0;
+		const fake = fakeAgent(() => {
+			attempts += 1;
+			if (attempts === 1) {
+				throw new DOMException("The operation timed out.", "TimeoutError");
+			}
+			return {
+				text: "recovered",
+				totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+			};
+		});
+		const runtime = runtimeWith(fake.agent);
+
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).resolves.toBe("recovered");
+		expect(fake.calls).toHaveLength(2);
+		expect(runtime.turns).toHaveLength(1);
+		expect(runtime.turns[0]).toMatchObject({
+			turn: 1,
+			status: "finished",
+			summary: "recovered",
+		});
+		expect(runtime.totalTokensUsed).toBe(15);
+	});
+
+	test("gives up after exactly one retry and records the failure once", async () => {
+		const fake = fakeAgent(() => {
+			throw new DOMException("The operation timed out.", "TimeoutError");
+		});
+		const runtime = runtimeWith(fake.agent);
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toMatchObject({ name: "TimeoutError" });
+		expect(fake.calls).toHaveLength(2);
+		expect(runtime.turns).toHaveLength(1);
+		expect(runtime.turns[0].status).toBe("failed");
+		expect(runtime.turns[0].summary).toBe("The operation timed out.");
+	});
+
+	test("retries a transport signature found in the cause chain", async () => {
+		let attempts = 0;
+		const fake = fakeAgent(() => {
+			attempts += 1;
+			if (attempts === 1) {
+				throw Object.assign(new Error("provider stream failed"), {
+					cause: Object.assign(new Error("socket hang up"), {
+						code: "ECONNRESET",
+					}),
+				});
+			}
+			return { text: "ok" };
+		});
+		const runtime = runtimeWith(fake.agent);
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).resolves.toBe("ok");
+		expect(fake.calls).toHaveLength(2);
+	});
+
+	test("does not retry a non-transport error", async () => {
+		const fake = fakeAgent(() => {
+			throw new Error("invalid prompt");
+		});
+		const runtime = runtimeWith(fake.agent);
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toThrow("invalid prompt");
+		expect(fake.calls).toHaveLength(1);
+		expect(runtime.turns).toHaveLength(1);
+		expect(runtime.turns[0].status).toBe("failed");
+	});
+
+	test("does not retry once the caller's signal is aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fake = fakeAgent(() => {
+			throw new DOMException("The operation timed out.", "TimeoutError");
+		});
+		const runtime = runtimeWith(fake.agent);
+		await expect(
+			runtime.runTurn({
+				prompt: "go",
+				context: CONTEXT,
+				signal: controller.signal,
+			}),
+		).rejects.toMatchObject({ name: "TimeoutError" });
+		expect(fake.calls).toHaveLength(1);
+		expect(runtime.turns).toHaveLength(1);
+		expect(runtime.turns[0].status).toBe("failed");
+	});
+});
+
+describe("createMastraAgentRuntime task-wide tokens", () => {
+	test("seeds totalTokensUsed from priorTaskTokens and reserves the previous turn", async () => {
+		const fake = fakeAgent(() => ({
+			text: "ok",
+			totalUsage: { inputTokens: 6, outputTokens: 4, totalTokens: 10 },
+		}));
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+				priorTaskTokens: 85,
+			},
+		});
+		expect(runtime.totalTokensUsed).toBe(85);
+
+		await runtime.runTurn({ prompt: "first", context: CONTEXT, signal });
+		expect(runtime.totalTokensUsed).toBe(95);
+
+		// 95 used + 10 reserved for a turn of the previous size > 100.
+		await expect(
+			runtime.runTurn({ prompt: "second", context: CONTEXT, signal }),
+		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("blocks before the first turn when prior spend exhausts the task", async () => {
+		const fake = fakeAgent(() => ({ text: "never" }));
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 100,
+				maxSteps: 2,
+				priorTaskTokens: 100,
+			},
+		});
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
+		expect(fake.calls).toHaveLength(0);
+		expect(runtime.turns).toHaveLength(0);
 	});
 });
 

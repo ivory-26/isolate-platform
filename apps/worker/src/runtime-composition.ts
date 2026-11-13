@@ -214,6 +214,40 @@ export function createRunSummaryReader(deps: {
 	};
 }
 
+/**
+ * Wave 26: task-wide spend for the executor's cumulative caps. The task read is
+ * the tenant gate; `sumByTask` is keyed by task id alone, so a foreign task
+ * must never be read. Both model and sandbox rows are included by the existing
+ * aggregate. The USD total is converted only for comparison against the cap;
+ * the exact-decimal source is never rewritten or re-summed here.
+ */
+export function createTaskUsageLoader(deps: {
+	tasks: Pick<TaskRepository, "get">;
+	usage: Pick<UsageRepository, "sumByTask">;
+}): NonNullable<WorkerCompositionOverrides["loadTaskUsage"]> {
+	return async (input) => {
+		const task = await deps.tasks.get(input.taskId);
+		if (task === null || task.organization_id !== input.organizationId) {
+			return null;
+		}
+		const totals = await deps.usage.sumByTask(input.taskId);
+		return {
+			tokens: totals.totalTokens,
+			costUsd: usageCostUsdToNumber(totals.costUsd),
+		};
+	};
+}
+
+/**
+ * Exact decimal string → JS number for cap comparison only. `null`, malformed
+ * and non-positive values count as zero; spend is never invented or rounded up.
+ */
+export function usageCostUsdToNumber(value: string | null): number {
+	if (value === null) return 0;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function readProviderName(env: Record<string, string | undefined>): string {
 	return env.SANDBOX_PROVIDER?.trim() || "null";
 }
@@ -914,6 +948,13 @@ export async function createConfiguredWorkerComposition(
 	const overrides: WorkerCompositionOverrides = {
 		...traceOverrides,
 		usageSink,
+		// Wave 26: cumulative caps need spend persisted by earlier attempts
+		// (model + sandbox rows). Tenant-gated and read from the same aggregate
+		// the run summary uses.
+		loadTaskUsage: createTaskUsageLoader({
+			tasks: taskRepository,
+			usage: usageRepository,
+		}),
 		// Wave 13: the task-context projection predates the incident columns, so
 		// the task row is consulted once to carry the fingerprint into the
 		// context. Only an incident task pays for that second read.

@@ -162,6 +162,17 @@ describe("worker composition — offline defaults", () => {
 		expect(unbound.taskExecution.loadContextBundle).toBeUndefined();
 	});
 
+	test("forwards the wave 26 task-usage loader and leaves it absent offline", () => {
+		const loadTaskUsage = async () => ({ tokens: 42, costUsd: 0.005 });
+		const bound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]), {
+			loadTaskUsage,
+		});
+		// Dropping this seam makes every cap per-attempt again.
+		expect(bound.taskExecution.loadTaskUsage).toBe(loadTaskUsage);
+		const unbound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]));
+		expect(unbound.taskExecution.loadTaskUsage).toBeUndefined();
+	});
+
 	test("unconfigured runtime factory fails closed with MISSING_CONFIG", () => {
 		const { taskExecution } = createOfflineWorkerDeps(
 			CONFIG,
@@ -500,6 +511,9 @@ describe("worker composition — adapter overrides", () => {
 				maxOutputTokensPerTurn: CONFIG.maxOutputTokensPerTurn,
 				maxTaskTokens: CONFIG.maxTokensPerTask,
 				maxSteps: CONFIG.maxAgentSteps,
+				// Wave 26: the handler always seeds the task-wide accumulator; the
+				// offline composition has no usage loader, so it starts at zero.
+				priorTaskTokens: 0,
 			},
 		]);
 		expect(sinkRows).toHaveLength(2); // one model row + one sandbox row

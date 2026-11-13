@@ -496,6 +496,8 @@ type HarnessOptions = {
 	acquireBranchLock?: TaskExecutionDeps["acquireBranchLock"];
 	/** Wave 13: incident context seam. */
 	loadContextBundle?: TaskExecutionDeps["loadContextBundle"];
+	/** Wave 26: persisted task-wide usage; `undefined` = no prior spend. */
+	loadTaskUsage?: TaskExecutionDeps["loadTaskUsage"];
 	/** Wave 11: blob store for full large payloads; `undefined` = inline only. */
 	blobStore?: FakeBlobStore;
 	/** Trusted policy used for the PR head-SHA read (`git rev-parse HEAD`). */
@@ -581,6 +583,9 @@ function makeHarness(options: HarnessOptions = {}) {
 		...(options.loadContextBundle === undefined
 			? {}
 			: { loadContextBundle: options.loadContextBundle }),
+		...(options.loadTaskUsage === undefined
+			? {}
+			: { loadTaskUsage: options.loadTaskUsage }),
 		...(options.blobStore === undefined
 			? {}
 			: { blobStore: options.blobStore }),
@@ -1081,6 +1086,165 @@ describe("task execution handler — budgets", () => {
 		});
 		expect(harness.runtime.runTurns).toEqual([1, 2, 3]);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+});
+
+/* ------------------------------ task-wide caps ------------------------------ */
+
+describe("task execution handler — task-wide caps", () => {
+	test("prior tokens count toward the task token cap", async () => {
+		const harness = makeHarness({
+			caps: { maxTaskTokens: 100 },
+			loadTaskUsage: async () => ({ tokens: 100, costUsd: 0 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "agent token budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("seeds the runtime token accumulator with prior task tokens", async () => {
+		const seenCaps: Array<AgentTurnCaps | undefined> = [];
+		const runtime: RuntimeScript = {
+			runTurns: [],
+			prompts: [],
+			factory: (options) => {
+				seenCaps.push(options.caps);
+				return {
+					id: "caps-runtime",
+					name: "Caps Runtime",
+					async runTurn() {
+						runtime.runTurns.push(1);
+						return "";
+					},
+				};
+			},
+		};
+		const harness = makeHarness({
+			runtime,
+			loadTaskUsage: async () => ({ tokens: 42, costUsd: 0 }),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(seenCaps).toHaveLength(1);
+		expect(seenCaps[0]).toMatchObject({
+			maxTaskTokens: 200_000,
+			priorTaskTokens: 42,
+		});
+	});
+
+	test("a usage read failure degrades to zero and warns once", async () => {
+		const harness = makeHarness({
+			loadTaskUsage: async () => {
+				throw new Error("usage store down");
+			},
+			script: [{ output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(
+			harness.logs.filter((record) =>
+				record.message.includes("task usage read failed"),
+			),
+		).toHaveLength(1);
+	});
+
+	test("prior USD spend counts toward the task cost cap", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 1,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 2 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toHaveLength(0);
+	});
+
+	test("earlier sandbox rows count toward the cap via the usage loader", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 1,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 0.85 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "more", costUsd: 0.2 }, { output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+	});
+
+	test("a zero cost cap disables USD gating even with prior spend", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 0,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 99 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "more", costUsd: 0.9 }, { output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+	});
+
+	test("no price table warns once and the job still completes", async () => {
+		const harness = makeHarness({
+			priceTable: null,
+			maxCostUsdPerTask: 1,
+			script: [{ output: "", costUsd: null }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+
+		const cannotBind = harness.logs.filter((record) =>
+			record.message.includes("USD cap cannot bind without COST_PRICE_TABLE"),
+		);
+		expect(cannotBind).toHaveLength(1);
+		const unmetered = harness.logs.filter((record) =>
+			record.message.includes("usage has no trusted price"),
+		);
+		expect(unmetered).toHaveLength(1);
+		// Ids only: no token counts or provider payloads in the warning fields.
+		expect(unmetered[0]?.fields).toEqual({ modelId: "test-model" });
+	});
+
+	test("a priced table still stops at the cumulative cap", async () => {
+		const harness = makeHarness({
+			priceTable: {
+				models: [
+					{
+						modelId: "test-model",
+						promptTokenUsdPerMillion: 1000,
+						completionTokenUsdPerMillion: 1000,
+					},
+				],
+				sandbox: { cpuSecondUsd: 0, gibSecondUsd: 0 },
+			},
+			maxCostUsdPerTask: 0.01,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			// 10 prompt + 5 completion tokens at $1000/M = $0.015 per turn.
+			script: [{ output: "more" }, { output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(modelRows(harness.sink.rows)[0]?.costUsd).toBe(0.015);
 	});
 });
 

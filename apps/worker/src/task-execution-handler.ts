@@ -272,8 +272,24 @@ export type TaskExecutionDeps = {
 	};
 	/** Config-derived sandbox-seconds cap; the handler never imports config. */
 	maxSandboxSeconds: number;
-	/** Config-derived per-task USD cap (usage without a price cannot be capped). */
+	/**
+	 * Config-derived USD cap over the **whole task**, including spend persisted
+	 * by earlier attempts. `0` disables cost gating exactly as before (token,
+	 * step and time caps still apply). Usage without a trusted price cannot be
+	 * metered; the handler warns instead of pretending the cap binds.
+	 */
 	maxCostUsdPerTask: number;
+	/**
+	 * Wave 26: task-wide spend already persisted by earlier attempts of this
+	 * task (model rows and sandbox rows). Seeded into the cumulative token and
+	 * USD counters so both caps bind across the task, not per attempt. A read
+	 * failure is logged with a bounded code and treated as zero; it never fails
+	 * a job that could still complete. Absent (offline composition) = zero.
+	 */
+	loadTaskUsage?: (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+	}) => Promise<{ tokens: number; costUsd: number } | null>;
 	/**
 	 * Wave 11 trusted price table, loaded by the composition root from
 	 * `COST_PRICE_TABLE` (the handler never reads env). `null`/absent means no
@@ -682,6 +698,16 @@ function budgetVerdict(note: string): HandlerVerdict {
 	return { outcome: "dead_letter", code: "BUDGET_EXCEEDED", note };
 }
 
+/** Normalizes a persisted token total for cap arithmetic; junk counts as zero. */
+function persistedTokenTotal(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** Normalizes a persisted USD total; junk and negatives count as zero. */
+function persistedCostUsd(value: number): number {
+	return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /**
  * Cost for one model call from the worker's trusted price table.
  *
@@ -882,6 +908,49 @@ function createHandler(
 			let promptTokens = 0;
 			let completionTokens = 0;
 			let spentUsd = 0;
+			// Wave 26: both caps are task-wide. Seed the cumulative counters from
+			// spend persisted by earlier attempts (model and sandbox rows) before
+			// any turn can run. A read failure degrades to zero with a bounded
+			// warning; it must not fail a job that could still complete.
+			let priorTaskTokens = 0;
+			if (deps.loadTaskUsage !== undefined) {
+				try {
+					const prior = await deps.loadTaskUsage({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+					});
+					if (prior !== null) {
+						priorTaskTokens = persistedTokenTotal(prior.tokens);
+						promptTokens = priorTaskTokens;
+						spentUsd = persistedCostUsd(prior.costUsd);
+					}
+				} catch (error) {
+					ctx.logger.warn(
+						"task usage read failed; starting this attempt from zero",
+						{ code: clampErrorCode(errorCodeOf(error)) },
+					);
+				}
+			}
+			// A USD cap with no trusted price can never bind. Say so once per job
+			// instead of looking enforced while metering nothing.
+			if (
+				maxCostUsd > 0 &&
+				(deps.priceTable === undefined || deps.priceTable === null)
+			) {
+				ctx.logger.warn(
+					"USD cap cannot bind without COST_PRICE_TABLE; spend stays unmetered",
+				);
+			}
+			// Once per job: a usage row with no trusted price is spend the cap
+			// cannot see. Ids only; never token counts or provider payloads.
+			let unmeteredUsageWarned = false;
+			const warnUnmeteredUsage = (modelId: string): void => {
+				if (maxCostUsd <= 0 || unmeteredUsageWarned) return;
+				unmeteredUsageWarned = true;
+				ctx.logger.warn("usage has no trusted price; USD cap cannot meter it", {
+					modelId: sanitizeMessage(modelId),
+				});
+			};
 
 			let attemptId: string | null = null;
 			let branchLock: BranchLockLease | null = null;
@@ -1088,7 +1157,9 @@ function createHandler(
 									}
 								};
 					const runtime = deps.createRuntime({
-						caps: deps.caps,
+						// Task-wide token cap: the runtime seeds its accumulator with
+						// spend from earlier attempts and reserves the prior turn size.
+						caps: { ...deps.caps, priorTaskTokens },
 						...(recordToolDecision === undefined
 							? {}
 							: { onToolDecision: recordToolDecision }),
@@ -1100,6 +1171,9 @@ function createHandler(
 							// caps and accounting see the real provider numbers. The cost
 							// comes from the trusted table, never from model output.
 							const costUsd = trustedModelCostUsd(deps.priceTable, usage);
+							if (costUsd === null) {
+								warnUnmeteredUsage(usage.modelId);
+							}
 							await deps.usageSink.record({
 								organizationId: job.organizationId,
 								taskId: job.taskId,
@@ -1196,7 +1270,9 @@ function createHandler(
 							stop = { kind: "budget", note: "agent token budget exhausted" };
 							break;
 						}
-						if (spentUsd > 0 && spentUsd >= maxCostUsd) {
+						// Cumulative task-wide spend, including earlier attempts and
+						// sandbox rows. `0` disables cost gating exactly as before.
+						if (maxCostUsd > 0 && spentUsd >= maxCostUsd) {
 							stop = { kind: "budget", note: "task cost budget exhausted" };
 							break;
 						}
@@ -2024,6 +2100,11 @@ function createHandler(
 							},
 							deps.priceTable ?? null,
 						);
+						if (costUsd === null) {
+							warnUnmeteredUsage(
+								`sandbox:${deps.sandbox.cpuCount}x${deps.sandbox.memoryMb}`,
+							);
+						}
 						await deps.usageSink.record({
 							organizationId: job.organizationId,
 							taskId: job.taskId,

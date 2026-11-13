@@ -1,4 +1,4 @@
-import { PlatformError } from "@isolate/shared";
+import { isPlatformError, PlatformError } from "@isolate/shared";
 import type { Agent } from "@mastra/core/agent";
 import { estimateUsageCostUsd, type UsagePriceTable } from "./baseten";
 import type {
@@ -107,8 +107,12 @@ export function createFakeAgentRuntime(
  * Bounds are enforced here, in trusted code, not by model judgement:
  * - `maxSteps` and `modelSettings.maxOutputTokens` are sent on every call
  *   (verified against @mastra/core@1.79.0 `AgentExecutionOptionsBase`).
- * - A cumulative token accumulator blocks the next turn with
- *   `PlatformError("BUDGET_EXCEEDED")` once `caps.maxTaskTokens` is reached.
+ * - The token accumulator is **task-wide**: it starts at
+ *   `caps.priorTaskTokens` (spend persisted by earlier attempts) and blocks the
+ *   next turn with `PlatformError("BUDGET_EXCEEDED")` once `caps.maxTaskTokens`
+ *   is reached. It also reserves the size of the previous turn, so from turn 2
+ *   onward the cap is a true upper bound; turn 1 is the only unavoidable
+ *   overshoot because the next call's size cannot be known in advance.
  */
 export type MastraAgentRuntimeOptions = {
 	id: string;
@@ -126,9 +130,119 @@ export type MastraAgentRuntimeOptions = {
 
 export type MastraAgentRuntime = CodingAgentRuntime & {
 	turns: AgentTurnRecord[];
-	/** Cumulative provider-reported tokens across turns of this runtime. */
+	/**
+	 * Cumulative provider-reported tokens for the whole task, including
+	 * `caps.priorTaskTokens` from earlier attempts.
+	 */
 	readonly totalTokensUsed: number;
 };
+
+/**
+ * At most two `generate` calls for one turn: the original plus one bounded
+ * retry. A stale Meta stream can end a turn without any usable response; a
+ * second attempt is usually enough. The deliberate tradeoff is that a failure
+ * can happen after some sandbox tool calls already executed, so the retry may
+ * in principle re-run them. The observed failures completed zero tool calls,
+ * and one retry is the bound that keeps duplicate side effects small while
+ * still rescuing a stalled stream.
+ */
+export const MAX_GENERATE_ATTEMPTS_PER_TURN = 2;
+
+/**
+ * Bounded transport-failure signatures. Matched case-insensitively against the
+ * error name and message at each level of the `cause` chain. Anything not on
+ * this list (including every `PlatformError`) is not retried.
+ */
+const TRANSPORT_FAILURE_SIGNATURES = [
+	"timed out",
+	"timeout",
+	"econnreset",
+	"socket hang up",
+	"fetch failed",
+	"terminated",
+	"und_err_",
+] as const;
+
+const MAX_CAUSE_DEPTH = 4;
+
+function matchesTransportSignature(text: string): boolean {
+	const lower = text.toLowerCase();
+	return TRANSPORT_FAILURE_SIGNATURES.some((signature) =>
+		lower.includes(signature),
+	);
+}
+
+/**
+ * True only for provider/transport failures that a single retry may fix.
+ *
+ * - Never when the caller's signal is aborted: the caller asked to stop.
+ * - Never for `PlatformError` (budget, validation); those are terminal.
+ * - `TimeoutError` (DOMException) and code 23 are Bun's timeout forms.
+ * - `AbortError` without an aborted caller signal is a provider-side stall.
+ * - Otherwise a bounded `cause` walk looks for transport signatures.
+ */
+export function isRetryableGenerationFailure(
+	error: unknown,
+	signal: AbortSignal,
+): boolean {
+	if (signal.aborted) return false;
+	let current: unknown = error;
+	const seen = new Set<unknown>();
+	for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
+		if (current === null || current === undefined) return false;
+		if (isPlatformError(current)) return false;
+		if (typeof current !== "object") return false;
+		if (seen.has(current)) return false;
+		seen.add(current);
+		const candidate = current as {
+			name?: unknown;
+			message?: unknown;
+			code?: unknown;
+			cause?: unknown;
+		};
+		const name = typeof candidate.name === "string" ? candidate.name : "";
+		const message =
+			typeof candidate.message === "string" ? candidate.message : "";
+		if (name === "TimeoutError" || name === "AbortError") return true;
+		if (candidate.code === 23) return true;
+		if (matchesTransportSignature(name) || matchesTransportSignature(message)) {
+			return true;
+		}
+		current = candidate.cause;
+	}
+	return false;
+}
+
+/**
+ * Runs one model call with at most one transport retry. `produce` must contain
+ * only the provider call: usage recording, record emission and budget checks
+ * stay outside so a retry can never duplicate those side effects or produce a
+ * second turn record.
+ */
+async function generateWithRetry<T>(
+	produce: () => Promise<T>,
+	signal: AbortSignal,
+): Promise<T> {
+	let lastError: unknown;
+	for (
+		let attempt = 1;
+		attempt <= MAX_GENERATE_ATTEMPTS_PER_TURN;
+		attempt += 1
+	) {
+		try {
+			return await produce();
+		} catch (error) {
+			lastError = error;
+			if (
+				attempt >= MAX_GENERATE_ATTEMPTS_PER_TURN ||
+				!isRetryableGenerationFailure(error, signal)
+			) {
+				throw error;
+			}
+		}
+	}
+	throw lastError;
+}
 
 function assertValidCaps(caps: AgentTurnCaps): void {
 	const values = [
@@ -141,6 +255,15 @@ function assertValidCaps(caps: AgentTurnCaps): void {
 			"VALIDATION_FAILED",
 			"agent caps must be finite positive numbers",
 		);
+	}
+	if (caps.priorTaskTokens !== undefined) {
+		const prior = caps.priorTaskTokens;
+		if (!Number.isInteger(prior) || prior < 0) {
+			throw new PlatformError(
+				"VALIDATION_FAILED",
+				"priorTaskTokens must be a finite non-negative integer",
+			);
+		}
 	}
 }
 
@@ -224,7 +347,10 @@ export function createMastraAgentRuntime(
 	};
 	const turns: AgentTurnRecord[] = [];
 	let nextTurn = 0;
-	let totalTokensUsed = 0;
+	// Task-wide: earlier attempts of the same task already spent these tokens.
+	let totalTokensUsed = caps?.priorTaskTokens ?? 0;
+	// Size of the previous turn, reserved before the next one can start.
+	let lastTurnTokens = 0;
 	const onRecord = options.onRecord;
 	const onUsage = options.onUsage;
 
@@ -236,7 +362,11 @@ export function createMastraAgentRuntime(
 			return totalTokensUsed;
 		},
 		async runTurn(input) {
-			if (caps && totalTokensUsed >= caps.maxTaskTokens) {
+			if (
+				caps &&
+				(totalTokensUsed >= caps.maxTaskTokens ||
+					totalTokensUsed + lastTurnTokens > caps.maxTaskTokens)
+			) {
 				throw new PlatformError(
 					"BUDGET_EXCEEDED",
 					"task token budget exhausted",
@@ -253,17 +383,21 @@ export function createMastraAgentRuntime(
 			};
 			turns.push(record);
 			try {
-				const result = await agent.generate(input.prompt, {
-					abortSignal: input.signal,
-					...(caps === undefined
-						? {}
-						: {
-								maxSteps: caps.maxSteps,
-								modelSettings: {
-									maxOutputTokens: caps.maxOutputTokensPerTurn,
-								},
-							}),
-				});
+				const result = await generateWithRetry(
+					() =>
+						agent.generate(input.prompt, {
+							abortSignal: input.signal,
+							...(caps === undefined
+								? {}
+								: {
+										maxSteps: caps.maxSteps,
+										modelSettings: {
+											maxOutputTokens: caps.maxOutputTokensPerTurn,
+										},
+									}),
+						}),
+					input.signal,
+				);
 				const usage = mapUsage(
 					result.totalUsage ?? result.usage,
 					model,
@@ -271,9 +405,12 @@ export function createMastraAgentRuntime(
 				);
 				if (usage !== null) {
 					totalTokensUsed += usage.totalTokens;
+					lastTurnTokens = usage.totalTokens;
 					if (onUsage) {
 						await onUsage(usage);
 					}
+				} else {
+					lastTurnTokens = 0;
 				}
 				// Reasoning models can spend the whole output budget on reasoning and
 				// return empty text. That means "truncated", not "no further work":

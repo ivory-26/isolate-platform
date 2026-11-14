@@ -184,25 +184,78 @@ export function parseSignozWebhookPayload(
 }
 
 /**
- * `GET /api/v1/rules/{id}` and the `data.rules[]` rows of `GET /api/v1/rules`.
- * This is an allowlist: unknown provider keys are stripped. `alert` is the
- * rule's query/expression; it is only used when `ruleType` names PromQL.
+ * Accepts the v1 rule shape (`alert` holds the query/expression, `alertName`
+ * the display name) and the v2/v3 shape emitted by SigNoz ≥ v0.150, where
+ * `alert` is the display name and the window lives under
+ * `evaluation.spec.{evalWindow,frequency}`. Both are normalized onto the v1
+ * keys before the allowlist runs, so downstream evidence code is unchanged.
  */
-export const signozRuleSchema = z.object({
-	id: z.string().min(1).max(MAX_SIGNOZ_RULE_ID_CHARS),
-	alert: z.string().max(2000).nullable().optional(),
-	alertName: z.string().max(200).nullable().optional(),
-	ruleType: z.string().max(64).nullable().optional(),
-	evalWindow: z.string().max(32).nullable().optional(),
-	frequency: z.string().max(32).nullable().optional(),
-	state: z.string().max(64).nullable().optional(),
-	disabled: z.boolean().optional(),
-	description: z.string().max(1000).nullable().optional(),
-	labels: signozLabelsSchema.optional(),
-	annotations: signozAnnotationsSchema.optional(),
-	createdAt: z.string().max(64).optional(),
-	updatedAt: z.string().max(64).optional(),
-});
+function normalizeSignozRuleInput(value: unknown): unknown {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return value;
+	}
+	const row = value as Record<string, unknown>;
+	const out: Record<string, unknown> = { ...row };
+	const ruleType =
+		typeof row.ruleType === "string" ? row.ruleType.toLowerCase() : "";
+	const evaluation = row.evaluation;
+	if (typeof evaluation === "object" && evaluation !== null) {
+		const spec = (evaluation as Record<string, unknown>).spec;
+		if (typeof spec === "object" && spec !== null) {
+			const window = spec as Record<string, unknown>;
+			if (out.evalWindow === undefined) out.evalWindow = window.evalWindow;
+			if (out.frequency === undefined) out.frequency = window.frequency;
+		}
+	}
+	const annotations = row.annotations;
+	if (typeof annotations === "object" && annotations !== null) {
+		const description = (annotations as Record<string, unknown>).description;
+		if (out.description === undefined && typeof description === "string") {
+			out.description = description;
+		}
+	}
+	const alert = row.alert;
+	if (typeof alert === "string") {
+		const trimmed = alert.trim();
+		const isExpression =
+			trimmed.startsWith("{") ||
+			trimmed.startsWith("[") ||
+			ruleType.includes("promql");
+		if (row.alertName === undefined && !isExpression) {
+			out.alertName = alert;
+			out.alert = undefined;
+		}
+	} else if (alert !== undefined) {
+		out.alert = undefined;
+	}
+	return out;
+}
+
+/**
+ * `GET /api/v2/rules/{id}` (falls back to v1) and the `data.rules[]` rows of
+ * the v3 list (falls back to v1). This is an allowlist: unknown provider keys
+ * are stripped. `alert` is the rule's query/expression; it is only used when
+ * `ruleType` names PromQL.
+ */
+export const signozRuleSchema = z.preprocess(
+	normalizeSignozRuleInput,
+	z.object({
+		id: z.string().min(1).max(MAX_SIGNOZ_RULE_ID_CHARS),
+		alert: z.string().max(2000).nullable().optional(),
+		alertName: z.string().max(200).nullable().optional(),
+		alertType: z.string().max(64).nullable().optional(),
+		ruleType: z.string().max(64).nullable().optional(),
+		evalWindow: z.string().max(32).nullable().optional(),
+		frequency: z.string().max(32).nullable().optional(),
+		state: z.string().max(64).nullable().optional(),
+		disabled: z.boolean().optional(),
+		description: z.string().max(1000).nullable().optional(),
+		labels: signozLabelsSchema.optional(),
+		annotations: signozAnnotationsSchema.optional(),
+		createdAt: z.string().max(64).optional(),
+		updatedAt: z.string().max(64).optional(),
+	}),
+);
 
 export type SignozRule = z.output<typeof signozRuleSchema>;
 

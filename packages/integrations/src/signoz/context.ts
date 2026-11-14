@@ -481,11 +481,22 @@ async function loadRule(
 	client: HttpClient,
 	input: { ruleId: string; fetchedAt: string },
 ): Promise<RuleEvidence> {
-	const outcome = await client.request(
-		`/api/v1/rules/${encodeURIComponent(input.ruleId)}`,
+	// SigNoz ≥ v0.150 stores rules in a v2 API; the v1 read answers 404 for
+	// rules created there. Fall back to v1 only on 404 so a current instance
+	// costs one request.
+	const path = `/api/v2/rules/${encodeURIComponent(input.ruleId)}`;
+	let outcome = await client.request(
+		path,
 		{ method: "GET" },
 		"signoz alert rule",
 	);
+	if (outcome.kind === "missing") {
+		outcome = await client.request(
+			`/api/v1/rules/${encodeURIComponent(input.ruleId)}`,
+			{ method: "GET" },
+			"signoz alert rule",
+		);
+	}
 	if (outcome.kind !== "ok") {
 		return { item: null, truncated: true, promql: null };
 	}
@@ -506,7 +517,7 @@ async function loadRule(
 		item: buildContextItem({
 			kind: "alert_rule",
 			title: `Alert rule: ${rule.alertName ?? rule.id}`,
-			url: `${config.baseUrl}/alerts/rules/${encodeURIComponent(rule.id)}`,
+			url: `${config.baseUrl}/alerts/overview?ruleId=${encodeURIComponent(rule.id)}`,
 			excerpt: excerpt.text,
 			fetchedAt: input.fetchedAt,
 		}),
@@ -1003,11 +1014,20 @@ export async function fetchSignozRuleListEvidence(
 		Math.min(input.limit ?? MAX_SIGNOZ_RULES, MAX_SIGNOZ_RULES),
 	);
 	const client = createClient(config);
-	const outcome = await client.request(
-		"/api/v1/rules",
+	// `GET /api/v3/rules` is the list endpoint used by SigNoz ≥ v0.150; v1 is
+	// only tried when the instance does not serve v3 (404).
+	let outcome = await client.request(
+		`/api/v3/rules?limit=${encodeURIComponent(String(limit))}`,
 		{ method: "GET" },
 		"signoz rule list",
 	);
+	if (outcome.kind === "missing") {
+		outcome = await client.request(
+			"/api/v1/rules",
+			{ method: "GET" },
+			"signoz rule list",
+		);
+	}
 	if (outcome.kind !== "ok") return { item: null, truncated: true };
 	const parsed = signozRuleListResponseSchema.safeParse(outcome.body);
 	if (!parsed.success) return { item: null, truncated: true };
@@ -1053,7 +1073,7 @@ export async function fetchSignozRuleListEvidence(
 		item: buildContextItem({
 			kind: "rule_list",
 			title: `Alert rules (${selected.length} shown)`,
-			url: `${config.baseUrl}/alerts/rules`,
+			url: `${config.baseUrl}/alerts`,
 			excerpt: excerpt.text,
 			fetchedAt: new Date(config.now()).toISOString(),
 		}),

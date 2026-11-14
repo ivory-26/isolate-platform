@@ -490,8 +490,8 @@ export function buildIncidentGoalFor(
 	const target = fileOwnership[0];
 	if (target === undefined || target.length === 0) return base;
 	const deliverable = isReportTarget(target)
-		? `\n\nDeliverable: write a short incident report to ${target} and commit it with git.commit_local. Do not modify any other file.`
-		: "\n\nDeliverable: diagnose the cause of this incident and fix it, modifying only the owned paths above. Run the repository's tests to confirm the fix, then commit locally with git.commit_local.";
+		? `\n\nDeliverable: write a short incident report to ${target} and commit it with git.commit_local. Do not modify any other file. Once that commit succeeds, stop: end the turn with an empty response (no text, no further tool calls).`
+		: "\n\nDeliverable: diagnose the cause of this incident and fix it, modifying only the owned paths above. Run the repository's tests to confirm the fix, then commit locally with git.commit_local. Once that commit succeeds, stop: end the turn with an empty response (no text, no further tool calls).";
 	if (base.length + deliverable.length > MAX_INCIDENT_GOAL_CHARS) return base;
 	return `${base}${deliverable}`;
 }

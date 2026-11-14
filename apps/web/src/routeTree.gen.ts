@@ -30,6 +30,7 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as OrganizationsIndexRouteImport } from './routes/organizations/index'
 import { Route as OrganizationsNewRouteImport } from './routes/organizations/new'
 import { Route as AppIntegrationsConnectorIdRouteImport } from './routes/_app.integrations.$connectorId'
+import { Route as AppRunsIndexRouteImport } from './routes/_app.runs.index'
 import { Route as AppRunsTaskIdRouteImport } from './routes/_app.runs.$taskId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConnectorsConnectRouteImport } from './routes/api.connectors.connect'
@@ -160,6 +161,11 @@ const AppIntegrationsConnectorIdRoute =
     path: '/$connectorId',
     getParentRoute: () => AppIntegrationsRoute,
   } as any)
+const AppRunsIndexRoute = AppRunsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRunsRoute,
+} as any)
 const AppRunsTaskIdRoute = AppRunsTaskIdRouteImport.update({
   id: '/$taskId',
   path: '/$taskId',
@@ -322,6 +328,7 @@ export interface FileRoutesByFullPath {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/runs/': typeof AppRunsIndexRoute
   '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
   '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
   '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
@@ -339,7 +346,6 @@ export interface FileRoutesByTo {
   '/onboarding': typeof AppOnboardingRoute
   '/overview': typeof AppOverviewRoute
   '/repositories': typeof AppRepositoriesRoute
-  '/runs': typeof AppRunsRouteWithChildren
   '/settings': typeof AppSettingsRoute
   '/submit': typeof AppSubmitRoute
   '/usage': typeof AppUsageRoute
@@ -367,6 +373,7 @@ export interface FileRoutesByTo {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/runs': typeof AppRunsIndexRoute
   '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
   '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
   '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
@@ -415,6 +422,7 @@ export interface FileRoutesById {
   '/api/repositories/import': typeof ApiRepositoriesImportRoute
   '/api/traces/$taskId': typeof ApiTracesTaskIdRoute
   '/api/webhooks/$': typeof ApiWebhooksSplatRoute
+  '/_app/runs/': typeof AppRunsIndexRoute
   '/api/device/pairing/$id': typeof ApiDevicePairingIdRoute
   '/api/device/pairing/cancel': typeof ApiDevicePairingCancelRoute
   '/api/device/pairing/claim': typeof ApiDevicePairingClaimRoute
@@ -463,6 +471,7 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/runs/'
     | '/api/device/pairing/$id'
     | '/api/device/pairing/cancel'
     | '/api/device/pairing/claim'
@@ -480,7 +489,6 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/overview'
     | '/repositories'
-    | '/runs'
     | '/settings'
     | '/submit'
     | '/usage'
@@ -508,6 +516,7 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/runs'
     | '/api/device/pairing/$id'
     | '/api/device/pairing/cancel'
     | '/api/device/pairing/claim'
@@ -555,6 +564,7 @@ export interface FileRouteTypes {
     | '/api/repositories/import'
     | '/api/traces/$taskId'
     | '/api/webhooks/$'
+    | '/_app/runs/'
     | '/api/device/pairing/$id'
     | '/api/device/pairing/cancel'
     | '/api/device/pairing/claim'
@@ -742,6 +752,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/integrations/$connectorId'
       preLoaderRoute: typeof AppIntegrationsConnectorIdRouteImport
       parentRoute: typeof AppIntegrationsRoute
+    }
+    '/_app/runs/': {
+      id: '/_app/runs/'
+      path: '/'
+      fullPath: '/runs/'
+      preLoaderRoute: typeof AppRunsIndexRouteImport
+      parentRoute: typeof AppRunsRoute
     }
     '/_app/runs/$taskId': {
       id: '/_app/runs/$taskId'
@@ -941,10 +958,12 @@ const AppIntegrationsRouteWithChildren = AppIntegrationsRoute._addFileChildren(
 
 interface AppRunsRouteChildren {
   AppRunsTaskIdRoute: typeof AppRunsTaskIdRoute
+  AppRunsIndexRoute: typeof AppRunsIndexRoute
 }
 
 const AppRunsRouteChildren: AppRunsRouteChildren = {
   AppRunsTaskIdRoute: AppRunsTaskIdRoute,
+  AppRunsIndexRoute: AppRunsIndexRoute,
 }
 
 const AppRunsRouteWithChildren =

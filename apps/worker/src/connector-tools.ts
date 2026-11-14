@@ -16,6 +16,7 @@ import {
 	CONNECTOR_TOOL_NAMES,
 	CONNECTOR_TOOL_RISKS,
 	type ConnectorToolName,
+	connectorIdForToolName,
 	type ToolImplementation,
 	type ToolName,
 } from "@isolate/mastra";
@@ -71,44 +72,9 @@ const DEVICE_ERROR_CODES: Readonly<Record<string, ErrorCode>> = {
 	EXPIRED: "INTEGRATION_UNAVAILABLE",
 };
 
-const CONNECTOR_FOR_TOOL: Readonly<Record<ConnectorToolName, string>> = {
-	"sentry.list_issues": "sentry",
-	"sentry.get_issue": "sentry",
-	"sentry.latest_event": "sentry",
-	"grafana.query_metrics": "grafana",
-	"grafana.query_logs": "grafana",
-	"grafana.get_alert_rule": "grafana",
-	"pagerduty.list_incidents": "pagerduty",
-	"pagerduty.get_incident": "pagerduty",
-	"pagerduty.list_log_entries": "pagerduty",
-	"pagerduty.acknowledge": "pagerduty",
-	"pagerduty.resolve": "pagerduty",
-	"k8s.list_events": "kubernetes",
-	"k8s.get_pod": "kubernetes",
-	"k8s.get_deployment": "kubernetes",
-	"k8s.logs_tail": "kubernetes",
-	"datadog.query_metrics": "datadog",
-	"datadog.search_logs": "datadog",
-	"datadog.get_incident": "datadog",
-	"datadog.get_monitor": "datadog",
-	"axiom.query_apl": "axiom",
-	"axiom.get_monitor": "axiom",
-	"axiom.list_datasets": "axiom",
-	"signoz.query_range": "signoz",
-	"signoz.get_rule": "signoz",
-	"signoz.list_rules": "signoz",
-	"newrelic.run_nrql": "newrelic",
-	"newrelic.get_entity": "newrelic",
-	"newrelic.list_alert_policies": "newrelic",
-	"honeycomb.run_query": "honeycomb",
-	"honeycomb.get_trigger": "honeycomb",
-	"honeycomb.list_slos": "honeycomb",
-};
-
-/** Stable connector id for one exposed tool name. */
-export function connectorIdForToolName(name: ConnectorToolName): string {
-	return CONNECTOR_FOR_TOOL[name];
-}
+// The tool-name → connector-id table lives in `@isolate/mastra` so the registry
+// and these implementations scope exposure with the same data.
+export { connectorIdForToolName };
 
 export type ConnectorToolDependencies = {
 	/** Resolves the active device and credential; never returns a secret. */
@@ -243,6 +209,15 @@ export function createConnectorToolImplementations(
 	for (const toolName of CONNECTOR_TOOL_NAMES) {
 		const connectorId = connectorIdForToolName(toolName);
 		implementations[toolName] = async (args, context) => {
+			// Second gate for the same rule the registry applies: a connector tool
+			// may only run for a task whose incident source is that connector.
+			// Absent source means no connector tool may run at all.
+			if (context.incidentSource !== connectorId) {
+				throw new PlatformError(
+					"POLICY_DENIED",
+					`connector "${connectorId}" tool is not available for this incident source`,
+				);
+			}
 			const params = validateConnectorToolArguments(toolName, args);
 			const organizationId: OrganizationId = asOrganizationId(
 				context.organizationId,

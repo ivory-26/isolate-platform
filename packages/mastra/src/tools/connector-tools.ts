@@ -52,3 +52,61 @@ export type ConnectorToolName = keyof typeof CONNECTOR_TOOL_RISKS;
 export const CONNECTOR_TOOL_NAMES = Object.keys(
 	CONNECTOR_TOOL_RISKS,
 ) as ConnectorToolName[];
+
+/**
+ * Fixed connector id per exposed tool name. The worker uses the same table to
+ * bind implementations and the registry uses it to scope exposure to an
+ * incident's source connector.
+ */
+const CONNECTOR_FOR_TOOL: Readonly<Record<ConnectorToolName, string>> = {
+	"sentry.list_issues": "sentry",
+	"sentry.get_issue": "sentry",
+	"sentry.latest_event": "sentry",
+	"grafana.query_metrics": "grafana",
+	"grafana.query_logs": "grafana",
+	"grafana.get_alert_rule": "grafana",
+	"pagerduty.list_incidents": "pagerduty",
+	"pagerduty.get_incident": "pagerduty",
+	"pagerduty.list_log_entries": "pagerduty",
+	"pagerduty.acknowledge": "pagerduty",
+	"pagerduty.resolve": "pagerduty",
+	"k8s.list_events": "kubernetes",
+	"k8s.get_pod": "kubernetes",
+	"k8s.get_deployment": "kubernetes",
+	"k8s.logs_tail": "kubernetes",
+	"datadog.query_metrics": "datadog",
+	"datadog.search_logs": "datadog",
+	"datadog.get_incident": "datadog",
+	"datadog.get_monitor": "datadog",
+	"axiom.query_apl": "axiom",
+	"axiom.get_monitor": "axiom",
+	"axiom.list_datasets": "axiom",
+	"signoz.query_range": "signoz",
+	"signoz.get_rule": "signoz",
+	"signoz.list_rules": "signoz",
+	"newrelic.run_nrql": "newrelic",
+	"newrelic.get_entity": "newrelic",
+	"newrelic.list_alert_policies": "newrelic",
+	"honeycomb.run_query": "honeycomb",
+	"honeycomb.get_trigger": "honeycomb",
+	"honeycomb.list_slos": "honeycomb",
+};
+
+/** Stable connector id for one exposed tool name. */
+export function connectorIdForToolName(name: ConnectorToolName): string {
+	return CONNECTOR_FOR_TOOL[name];
+}
+
+/**
+ * Deny-by-default connector exposure: an ordinary task has no incident source
+ * and therefore sees no connector tools at all. An incident task sees exactly
+ * the tools of the connector that reported it.
+ */
+export function connectorToolNamesForSource(
+	incidentSource: string | undefined,
+): ConnectorToolName[] {
+	if (incidentSource === undefined) return [];
+	return CONNECTOR_TOOL_NAMES.filter(
+		(name) => connectorIdForToolName(name) === incidentSource,
+	);
+}

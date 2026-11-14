@@ -1209,6 +1209,11 @@ function createHandler(
 										...(mode === null
 											? {}
 											: { fileOwnership: [...context.fileOwnership] }),
+										// Incident provenance from the persisted task row scopes
+										// connector tool exposure to the reporting connector.
+										...(context.incidentSource === undefined
+											? {}
+											: { incidentSource: context.incidentSource }),
 									},
 								}),
 					});

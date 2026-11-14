@@ -1,6 +1,15 @@
-import { isPlatformError, PlatformError } from "@isolate/shared";
+import { PlatformError } from "@isolate/shared";
 import type { Agent } from "@mastra/core/agent";
 import { estimateUsageCostUsd, type UsagePriceTable } from "./baseten";
+import {
+	isAbortLikeError,
+	MAX_PROVIDER_RETRY_ATTEMPTS,
+	toProviderError,
+} from "./failure";
+import {
+	type ProviderCapabilities,
+	UNKNOWN_PROVIDER_CAPABILITIES,
+} from "./registry";
 import type {
 	AgentTurnCaps,
 	AgentTurnRecord,
@@ -24,6 +33,27 @@ export function limitSummary(text: string): string {
 		: text;
 }
 
+const UTF8 = new TextEncoder();
+
+/**
+ * Conservative prompt-size estimate from UTF-8 bytes (about four bytes per
+ * token). This is a lower bound on cost, not a tokenizer: it exists only to
+ * reject a call that cannot fit a configured window before the provider is
+ * contacted.
+ */
+export function estimatePromptTokens(prompt: string): number {
+	return Math.ceil(UTF8.encode(prompt).length / 4);
+}
+
+/** Fake agents script their output and advertise no provider feature. */
+const FAKE_AGENT_CAPABILITIES: ProviderCapabilities = Object.freeze({
+	streaming: false,
+	toolCalls: false,
+	approvals: false,
+	session: false,
+	context: false,
+});
+
 /**
  * Model-agnostic fake runtime used by tests and by callers that script agent
  * behaviour. Never touches a provider or the network; the script itself is the
@@ -43,6 +73,8 @@ export type FakeAgentRuntimeOptions = {
 		context: TaskContext;
 	}) => Promise<string> | string;
 	onRecord?: (record: AgentTurnRecord) => Promise<void>;
+	/** Test-only override; defaults to the conservative fake record. */
+	capabilities?: ProviderCapabilities;
 };
 
 export function createFakeAgentRuntime(
@@ -53,6 +85,7 @@ export function createFakeAgentRuntime(
 	return {
 		id: options.id ?? "fake-coding-agent",
 		name: options.name ?? "Fake Coding Agent",
+		capabilities: options.capabilities ?? FAKE_AGENT_CAPABILITIES,
 		turns,
 		onRecord: options.onRecord,
 		async runTurn(input) {
@@ -127,6 +160,8 @@ export type MastraAgentRuntimeOptions = {
 	model?: { providerId: string; modelId: string };
 	/** Injected USD price table; absence yields `costUsd: null`, never a guess. */
 	priceTable?: UsagePriceTable;
+	/** Honest capabilities from the descriptor; defaults to none advertised. */
+	capabilities?: ProviderCapabilities;
 };
 
 export type MastraAgentRuntime = CodingAgentRuntime & {
@@ -137,113 +172,6 @@ export type MastraAgentRuntime = CodingAgentRuntime & {
 	 */
 	readonly totalTokensUsed: number;
 };
-
-/**
- * At most two `generate` calls for one turn: the original plus one bounded
- * retry. A stale Meta stream can end a turn without any usable response; a
- * second attempt is usually enough. The deliberate tradeoff is that a failure
- * can happen after some sandbox tool calls already executed, so the retry may
- * in principle re-run them. The observed failures completed zero tool calls,
- * and one retry is the bound that keeps duplicate side effects small while
- * still rescuing a stalled stream.
- */
-export const MAX_GENERATE_ATTEMPTS_PER_TURN = 2;
-
-/**
- * Bounded transport-failure signatures. Matched case-insensitively against the
- * error name and message at each level of the `cause` chain. Anything not on
- * this list (including every `PlatformError`) is not retried.
- */
-const TRANSPORT_FAILURE_SIGNATURES = [
-	"timed out",
-	"timeout",
-	"econnreset",
-	"socket hang up",
-	"fetch failed",
-	"terminated",
-	"und_err_",
-] as const;
-
-const MAX_CAUSE_DEPTH = 4;
-
-function matchesTransportSignature(text: string): boolean {
-	const lower = text.toLowerCase();
-	return TRANSPORT_FAILURE_SIGNATURES.some((signature) =>
-		lower.includes(signature),
-	);
-}
-
-/**
- * True only for provider/transport failures that a single retry may fix.
- *
- * - Never when the caller's signal is aborted: the caller asked to stop.
- * - Never for `PlatformError` (budget, validation); those are terminal.
- * - `TimeoutError` (DOMException) and code 23 are Bun's timeout forms.
- * - `AbortError` without an aborted caller signal is a provider-side stall.
- * - Otherwise a bounded `cause` walk looks for transport signatures.
- */
-export function isRetryableGenerationFailure(
-	error: unknown,
-	signal: AbortSignal,
-): boolean {
-	if (signal.aborted) return false;
-	let current: unknown = error;
-	const seen = new Set<unknown>();
-	for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
-		if (current === null || current === undefined) return false;
-		if (isPlatformError(current)) return false;
-		if (typeof current !== "object") return false;
-		if (seen.has(current)) return false;
-		seen.add(current);
-		const candidate = current as {
-			name?: unknown;
-			message?: unknown;
-			code?: unknown;
-			cause?: unknown;
-		};
-		const name = typeof candidate.name === "string" ? candidate.name : "";
-		const message =
-			typeof candidate.message === "string" ? candidate.message : "";
-		if (name === "TimeoutError" || name === "AbortError") return true;
-		if (candidate.code === 23) return true;
-		if (matchesTransportSignature(name) || matchesTransportSignature(message)) {
-			return true;
-		}
-		current = candidate.cause;
-	}
-	return false;
-}
-
-/**
- * Runs one model call with at most one transport retry. `produce` must contain
- * only the provider call: usage recording, record emission and budget checks
- * stay outside so a retry can never duplicate those side effects or produce a
- * second turn record.
- */
-async function generateWithRetry<T>(
-	produce: () => Promise<T>,
-	signal: AbortSignal,
-): Promise<T> {
-	let lastError: unknown;
-	for (
-		let attempt = 1;
-		attempt <= MAX_GENERATE_ATTEMPTS_PER_TURN;
-		attempt += 1
-	) {
-		try {
-			return await produce();
-		} catch (error) {
-			lastError = error;
-			if (
-				attempt >= MAX_GENERATE_ATTEMPTS_PER_TURN ||
-				!isRetryableGenerationFailure(error, signal)
-			) {
-				throw error;
-			}
-		}
-	}
-	throw lastError;
-}
 
 function assertValidCaps(caps: AgentTurnCaps): void {
 	const values = [
@@ -264,6 +192,61 @@ function assertValidCaps(caps: AgentTurnCaps): void {
 				"VALIDATION_FAILED",
 				"priorTaskTokens must be a finite non-negative integer",
 			);
+		}
+	}
+	if (
+		caps.contextWindowTokens !== undefined &&
+		(!Number.isInteger(caps.contextWindowTokens) ||
+			caps.contextWindowTokens <= 0)
+	) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			"contextWindowTokens must be a positive integer",
+		);
+	}
+	if (
+		caps.providerRetryAttempts !== undefined &&
+		(!Number.isInteger(caps.providerRetryAttempts) ||
+			caps.providerRetryAttempts < 0 ||
+			caps.providerRetryAttempts > MAX_PROVIDER_RETRY_ATTEMPTS)
+	) {
+		throw new PlatformError(
+			"VALIDATION_FAILED",
+			`providerRetryAttempts must be an integer between 0 and ${MAX_PROVIDER_RETRY_ATTEMPTS}`,
+		);
+	}
+}
+
+/** Honours an already-aborted signal before any provider work. */
+function throwIfAborted(signal: AbortSignal): void {
+	if (!signal.aborted) return;
+	const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+	throw reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
+}
+
+/**
+ * One bounded call to `generate()` with an explicit retry decision.
+ *
+ * Only classified retryable failures (rate limit, timeout, unavailable) are
+ * retried, only before any usage is recorded, and only while the signal is
+ * live. A partially produced turn is never retried: this runtime does not
+ * stream, so a thrown call produced no usable output.
+ */
+async function withProviderRetry<T>(
+	invoke: () => Promise<T>,
+	signal: AbortSignal,
+	providerRetryAttempts: number,
+): Promise<T> {
+	const attempts = 1 + providerRetryAttempts;
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await invoke();
+		} catch (error) {
+			if (signal.aborted || isAbortLikeError(error)) throw error;
+			const providerError = toProviderError(error);
+			if (attempt >= attempts || !providerError.retryable || signal.aborted) {
+				throw providerError;
+			}
 		}
 	}
 }
@@ -370,11 +353,13 @@ export function createMastraAgentRuntime(
 	return {
 		id: options.id,
 		name: options.name,
+		capabilities: options.capabilities ?? UNKNOWN_PROVIDER_CAPABILITIES,
 		turns,
 		get totalTokensUsed() {
 			return totalTokensUsed;
 		},
 		async runTurn(input) {
+			throwIfAborted(input.signal);
 			if (
 				caps &&
 				(totalTokensUsed >= caps.maxTaskTokens ||
@@ -396,7 +381,21 @@ export function createMastraAgentRuntime(
 			};
 			turns.push(record);
 			try {
-				const result = await generateWithRetry(
+				// Prompt/context preflight (study P0-2): reject a call that cannot
+				// fit the configured window before the provider is contacted.
+				if (caps?.contextWindowTokens !== undefined) {
+					const estimatedPromptTokens = estimatePromptTokens(input.prompt);
+					if (
+						estimatedPromptTokens + caps.maxOutputTokensPerTurn >
+						caps.contextWindowTokens
+					) {
+						throw new PlatformError(
+							"BUDGET_EXCEEDED",
+							"prompt exceeds configured context window",
+						);
+					}
+				}
+				const result = await withProviderRetry(
 					() =>
 						agent.generate(input.prompt, {
 							abortSignal: input.signal,
@@ -410,6 +409,7 @@ export function createMastraAgentRuntime(
 									}),
 						}),
 					input.signal,
+					caps?.providerRetryAttempts ?? 0,
 				);
 				const usage = mapUsage(
 					result.totalUsage ?? result.usage,

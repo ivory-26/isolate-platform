@@ -123,6 +123,13 @@ export function createOfflineWorkerDeps(
 			maxOutputTokensPerTurn: config.maxOutputTokensPerTurn,
 			maxTaskTokens: config.maxTokensPerTask,
 			maxSteps: config.maxAgentSteps,
+			// Absent keeps the exact pre-P0 caps shape (no preflight/retry).
+			...(config.modelContextWindow === undefined
+				? {}
+				: { contextWindowTokens: config.modelContextWindow }),
+			...(config.providerRetryAttempts > 0
+				? { providerRetryAttempts: config.providerRetryAttempts }
+				: {}),
 			...overrides.caps,
 		},
 		sandboxPolicy: overrides.sandboxPolicy ?? createDefaultSandboxPolicy(),

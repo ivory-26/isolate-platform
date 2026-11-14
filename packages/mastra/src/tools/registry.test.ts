@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Result } from "@isolate/shared";
 import { PlatformError } from "@isolate/shared";
+import { CONNECTOR_TOOL_NAMES } from "./connector-tools";
 import { denyByDefault, type PolicyDecision, type ToolPolicy } from "./policy";
 import {
 	type ToolCallContext,
@@ -228,6 +229,24 @@ describe("platform tool registry (policy gate wired over createTool)", () => {
 			"sandbox.exec",
 		);
 		expect(output).toEqual({ state: "failed", code: "INTERNAL" });
+	});
+
+	test("connector tools are exposed only for the matching incident source", () => {
+		const registry = wirePlatformTools({
+			policy: allowEverything(),
+			implementations: {},
+		});
+		const signoz = registry.forTask({
+			...taskContext,
+			incidentSource: "signoz",
+		});
+		expect(signoz["signoz.query_range"]).toBeDefined();
+		expect(signoz["datadog.search_logs"]).toBeUndefined();
+		// Ordinary tasks carry no source: no connector tool is exposed at all.
+		const ordinary = registry.forTask(taskContext);
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			expect(ordinary[name]).toBeUndefined();
+		}
 	});
 
 	test("a failing audit sink never changes the gate outcome", async () => {

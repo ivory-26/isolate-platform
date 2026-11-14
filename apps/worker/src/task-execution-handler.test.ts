@@ -9,6 +9,7 @@ import type {
 	TaskContext,
 	ToolDecisionRecord,
 } from "@isolate/mastra";
+import { toProviderError } from "@isolate/mastra";
 import type {
 	CommandPolicy,
 	CommandResult,
@@ -407,6 +408,13 @@ function makeRuntimeScript(script: ScriptTurn[]): RuntimeScript {
 	const factory: CodingAgentRuntimeFactory = (options) => ({
 		id: "fake-runtime",
 		name: "Fake Runtime",
+		capabilities: {
+			streaming: false,
+			toolCalls: false,
+			approvals: false,
+			session: false,
+			context: false,
+		},
 		async runTurn(input) {
 			cursor += 1;
 			runTurns.push(cursor);
@@ -791,39 +799,42 @@ describe("task execution handler — failure mapping", () => {
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
-	test("provider 4xx → dead_letter without another sandbox", async () => {
+	test("classified non-retryable provider failure → dead_letter", async () => {
 		const harness = makeHarness({
 			script: [
 				{
-					output: "deactivated",
-					throwError: Object.assign(new Error("Model version deactivated"), {
-						statusCode: 400,
-					}),
+					output: "",
+					throwError: toProviderError(
+						Object.assign(new Error("raw upstream detail"), { status: 401 }),
+					),
 				},
 			],
 		});
 		const verdict = await harness.handler.handle(harness.job, harness.ctx);
-		expect(verdict).toEqual({
+		expect(verdict).toMatchObject({
 			outcome: "dead_letter",
 			code: "AGENT_EXECUTION_FAILED",
-			note: "inference provider rejected the request",
+			note: "provider rejected the credentials",
 		});
-		expect(JSON.stringify(verdict)).not.toContain("deactivated");
+		expect(JSON.stringify(verdict)).not.toContain("raw upstream detail");
+		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
-	test("provider 429 stays retryable", async () => {
+	test("classified retryable provider failure → bounded retry", async () => {
 		const harness = makeHarness({
 			script: [
 				{
-					output: "slow down",
-					throwError: Object.assign(new Error("rate limited"), {
-						statusCode: 429,
-					}),
+					output: "",
+					throwError: toProviderError(
+						Object.assign(new Error("raw upstream detail"), { status: 429 }),
+					),
 				},
 			],
 		});
 		const verdict = await harness.handler.handle(harness.job, harness.ctx);
-		expect(verdict).toEqual({ outcome: "retry", code: "INTERNAL" });
+		expect(verdict).toEqual({ outcome: "retry", code: "RATE_LIMITED" });
+		expect(JSON.stringify(verdict)).not.toContain("raw upstream detail");
+		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
 	test("unknown throw → bounded INTERNAL retry with no raw message", async () => {
@@ -1119,6 +1130,13 @@ describe("task execution handler — task-wide caps", () => {
 				return {
 					id: "caps-runtime",
 					name: "Caps Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
 					async runTurn() {
 						runtime.runTurns.push(1);
 						return "";
@@ -3143,6 +3161,13 @@ describe("task execution handler — wave 9 tool invocation audit", () => {
 				factory: (options) => ({
 					id: "audit-runtime",
 					name: "Audit Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
 					async runTurn() {
 						const hook = (
 							options as {
@@ -3215,6 +3240,13 @@ describe("task execution handler — wave 9 tool invocation audit", () => {
 				factory: (options) => ({
 					id: "audit-runtime",
 					name: "Audit Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
 					async runTurn() {
 						const hook = (
 							options as {

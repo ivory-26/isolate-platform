@@ -8,7 +8,10 @@ import {
 import type { ToolAction } from "@mastra/core/tools";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { CONNECTOR_TOOL_NAMES } from "./connector-tools";
+import {
+	CONNECTOR_TOOL_NAMES,
+	connectorToolNamesForSource,
+} from "./connector-tools";
 import type {
 	PolicyDecision,
 	ToolName,
@@ -67,6 +70,12 @@ export type ToolCallContext = {
 	fileOwnership?: readonly string[];
 	/** W3C traceparent of the run, stamped on connector calls for correlation. */
 	traceparent?: string;
+	/**
+	 * Connector that reported this task's incident (`tasks.incident_source`).
+	 * Only that connector's tools are exposed; absent means no connector tools.
+	 * Supplied by the worker from the persisted task row, never by the model.
+	 */
+	incidentSource?: string;
 };
 
 /**
@@ -145,6 +154,10 @@ export type WiredToolRegistry = {
 	forTask(context: ToolCallContext): WiredToolCollection;
 };
 
+const CONNECTOR_NAME_SET: ReadonlySet<string> = new Set<string>(
+	CONNECTOR_TOOL_NAMES,
+);
+
 function describeTool(name: ToolName): string {
 	return `Platform tool ${name}. Execution is gated by the trusted policy resolver; denied or approval-required calls return a structured denial instead of executing.`;
 }
@@ -208,7 +221,19 @@ export function wirePlatformTools(
 	return {
 		forTask(context: ToolCallContext): WiredToolCollection {
 			const collection = {} as WiredToolCollection;
+			/**
+			 * Connector tools are scoped to the incident's source connector.
+			 * Ordinary tasks carry no source and see none; an incident task sees
+			 * only the tools whose connector id matches it. Sandbox/repo/git tools
+			 * are unaffected.
+			 */
+			const exposedConnectorNames: ReadonlySet<string> = new Set(
+				connectorToolNamesForSource(context.incidentSource),
+			);
 			for (const name of toolNames) {
+				if (CONNECTOR_NAME_SET.has(name) && !exposedConnectorNames.has(name)) {
+					continue;
+				}
 				collection[name] = createTool({
 					id: name,
 					title: name,

@@ -2,6 +2,7 @@ import { type ContextItem, PlatformError } from "@isolate/shared";
 import { Agent, type ToolsInput } from "@mastra/core/agent";
 import type { ToolDecisionRecord } from "../tools/registry";
 import type { SandboxToolBackend } from "../tools/sandbox-backend";
+import type { ProviderCapabilities } from "./registry";
 
 /**
  * Task execution context handed to agents and workflow steps.
@@ -35,6 +36,11 @@ export type TaskContext = {
 	repositoryId?: string;
 	/** Wave 13: set for incident-triggered tasks; enables context loading. */
 	incidentFingerprint?: string;
+	/**
+	 * Connector that reported the incident (`tasks.incident_source`). Scopes
+	 * connector tool exposure to that connector; absent exposes none.
+	 */
+	incidentSource?: string;
 	/**
 	 * Wave 13: bounded, cited, untrusted incident evidence appended to the
 	 * prompt. Every item is data, never an instruction or an authorization.
@@ -106,12 +112,29 @@ export type AgentTurnCaps = {
 	 * Model-agnostic: only the count matters, never the provider or model.
 	 */
 	priorTaskTokens?: number;
+	/**
+	 * Verified model context window. When set, a turn whose estimated prompt
+	 * plus `maxOutputTokensPerTurn` cannot fit fails before the provider call.
+	 * Unset means no prompt preflight; a window is never guessed.
+	 */
+	contextWindowTokens?: number;
+	/**
+	 * Automatic retries for retryable provider failures (rate limit, timeout,
+	 * unavailable). Default/absent is 0: classify once and fail the turn. Only
+	 * retried before any usage is recorded; never after a partial turn.
+	 */
+	providerRetryAttempts?: number;
 };
 
 /** Minimal agent-facing surface driven by the worker's imperative handler. */
 export type CodingAgentRuntime = {
 	id: string;
 	name: string;
+	/**
+	 * Honest, typed capabilities for this runtime. Callers read these instead of
+	 * checking a provider name; a capability left on must work at runtime.
+	 */
+	capabilities: ProviderCapabilities;
 	/**
 	 * Runs one bounded turn. Implementations must throw
 	 * `PlatformError("BUDGET_EXCEEDED")` when `caps` are exhausted and honour
@@ -149,6 +172,8 @@ export type CodingAgentRuntimeFactoryOptions = {
 		fileOwnership?: readonly string[];
 		/** W3C traceparent propagated onto connector calls for correlation. */
 		traceparent?: string;
+		/** Incident source connector; scopes connector tool exposure. */
+		incidentSource?: string;
 	};
 	/**
 	 * Wave 9: audit hook for every gated tool call (executed, denied or

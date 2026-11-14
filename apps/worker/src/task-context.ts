@@ -31,6 +31,8 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
 /** GitHub `owner/name`; the full name becomes part of a public URL. */
 const GITHUB_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MAX_FULL_NAME_LENGTH = 200;
+/** Matches the `tasks.incident_source` length constraint (migration 0009). */
+const MAX_INCIDENT_SOURCE_CHARS = 32;
 
 function safeFullName(value: string): string | null {
 	if (value.length > MAX_FULL_NAME_LENGTH || !GITHUB_FULL_NAME.test(value)) {
@@ -91,6 +93,9 @@ export function toTaskContext(
 			"task branch must differ from the repository default branch",
 		);
 	}
+	// Incident provenance scopes connector tool exposure. Unknown values match
+	// no connector and therefore expose no connector tools.
+	const incidentSource = row.incidentSource;
 	return {
 		taskId: row.taskId,
 		organizationId: row.organizationId,
@@ -109,6 +114,13 @@ export function toTaskContext(
 					incidentFingerprint: incidentFingerprint
 						.trim()
 						.slice(0, MAX_INCIDENT_FINGERPRINT_CHARS),
+				}
+			: {}),
+		...(typeof incidentSource === "string" && incidentSource.trim().length > 0
+			? {
+					incidentSource: incidentSource
+						.trim()
+						.slice(0, MAX_INCIDENT_SOURCE_CHARS),
 				}
 			: {}),
 		limits: {

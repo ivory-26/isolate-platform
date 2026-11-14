@@ -327,101 +327,6 @@ describe("createMastraAgentRuntime bounds", () => {
 	});
 });
 
-describe("createMastraAgentRuntime transport retry", () => {
-	test("retries one stalled generate and emits exactly one finished record", async () => {
-		let attempts = 0;
-		const fake = fakeAgent(() => {
-			attempts += 1;
-			if (attempts === 1) {
-				throw new DOMException("The operation timed out.", "TimeoutError");
-			}
-			return {
-				text: "recovered",
-				totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-			};
-		});
-		const runtime = runtimeWith(fake.agent);
-
-		await expect(
-			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
-		).resolves.toBe("recovered");
-		expect(fake.calls).toHaveLength(2);
-		expect(runtime.turns).toHaveLength(1);
-		expect(runtime.turns[0]).toMatchObject({
-			turn: 1,
-			status: "finished",
-			summary: "recovered",
-		});
-		expect(runtime.totalTokensUsed).toBe(15);
-	});
-
-	test("gives up after exactly one retry and records the failure once", async () => {
-		const fake = fakeAgent(() => {
-			throw new DOMException("The operation timed out.", "TimeoutError");
-		});
-		const runtime = runtimeWith(fake.agent);
-		await expect(
-			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
-		).rejects.toMatchObject({ name: "TimeoutError" });
-		expect(fake.calls).toHaveLength(2);
-		expect(runtime.turns).toHaveLength(1);
-		expect(runtime.turns[0].status).toBe("failed");
-		expect(runtime.turns[0].summary).toBe("The operation timed out.");
-	});
-
-	test("retries a transport signature found in the cause chain", async () => {
-		let attempts = 0;
-		const fake = fakeAgent(() => {
-			attempts += 1;
-			if (attempts === 1) {
-				throw Object.assign(new Error("provider stream failed"), {
-					cause: Object.assign(new Error("socket hang up"), {
-						code: "ECONNRESET",
-					}),
-				});
-			}
-			return { text: "ok" };
-		});
-		const runtime = runtimeWith(fake.agent);
-		await expect(
-			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
-		).resolves.toBe("ok");
-		expect(fake.calls).toHaveLength(2);
-	});
-
-	test("does not retry a non-transport error", async () => {
-		const fake = fakeAgent(() => {
-			throw new Error("invalid prompt");
-		});
-		const runtime = runtimeWith(fake.agent);
-		await expect(
-			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
-		).rejects.toThrow("invalid prompt");
-		expect(fake.calls).toHaveLength(1);
-		expect(runtime.turns).toHaveLength(1);
-		expect(runtime.turns[0].status).toBe("failed");
-	});
-
-	test("does not retry once the caller's signal is aborted", async () => {
-		const controller = new AbortController();
-		controller.abort();
-		const fake = fakeAgent(() => {
-			throw new DOMException("The operation timed out.", "TimeoutError");
-		});
-		const runtime = runtimeWith(fake.agent);
-		await expect(
-			runtime.runTurn({
-				prompt: "go",
-				context: CONTEXT,
-				signal: controller.signal,
-			}),
-		).rejects.toMatchObject({ name: "TimeoutError" });
-		expect(fake.calls).toHaveLength(1);
-		expect(runtime.turns).toHaveLength(1);
-		expect(runtime.turns[0].status).toBe("failed");
-	});
-});
-
 describe("createMastraAgentRuntime task-wide tokens", () => {
 	test("seeds totalTokensUsed from priorTaskTokens and reserves the previous turn", async () => {
 		const fake = fakeAgent(() => ({
@@ -521,11 +426,261 @@ describe("createMastraAgentRuntime task-wide tokens", () => {
 	});
 });
 
+describe("createMastraAgentRuntime prompt/context preflight", () => {
+	const baseCaps = {
+		maxOutputTokensPerTurn: 16,
+		maxTaskTokens: 1000,
+		maxSteps: 2,
+	};
+
+	test("a prompt that fits the configured window reaches the model", async () => {
+		const fake = fakeAgent(() => ({ text: "ok" }));
+		const runtime = runtimeWith(fake.agent, {
+			caps: { ...baseCaps, contextWindowTokens: 40 },
+		});
+		await runtime.runTurn({ prompt: "hello", context: CONTEXT, signal });
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("an oversized prompt is rejected before generate and recorded", async () => {
+		const fake = fakeAgent(() => ({ text: "unreachable" }));
+		const runtime = runtimeWith(fake.agent, {
+			caps: { ...baseCaps, contextWindowTokens: 40 },
+		});
+		let caught: unknown;
+		try {
+			await runtime.runTurn({
+				prompt: "x".repeat(100),
+				context: CONTEXT,
+				signal,
+			});
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(PlatformError);
+		expect((caught as PlatformError).code).toBe("BUDGET_EXCEEDED");
+		expect((caught as PlatformError).message).toBe(
+			"prompt exceeds configured context window",
+		);
+		expect(fake.calls).toHaveLength(0);
+		expect(runtime.turns[0]).toMatchObject({
+			status: "failed",
+			summary: "prompt exceeds configured context window",
+			usage: null,
+		});
+		expect(runtime.totalTokensUsed).toBe(0);
+	});
+
+	test("counts multibyte prompts by UTF-8 bytes", async () => {
+		const multibyte = fakeAgent(() => ({ text: "unreachable" }));
+		const multibyteRuntime = runtimeWith(multibyte.agent, {
+			caps: { ...baseCaps, contextWindowTokens: 34 },
+		});
+		await expect(
+			multibyteRuntime.runTurn({
+				prompt: "é".repeat(40),
+				context: CONTEXT,
+				signal,
+			}),
+		).rejects.toMatchObject({ code: "BUDGET_EXCEEDED" });
+		expect(multibyte.calls).toHaveLength(0);
+
+		const ascii = fakeAgent(() => ({ text: "ok" }));
+		const asciiRuntime = runtimeWith(ascii.agent, {
+			caps: { ...baseCaps, contextWindowTokens: 34 },
+		});
+		await asciiRuntime.runTurn({
+			prompt: "a".repeat(40),
+			context: CONTEXT,
+			signal,
+		});
+		expect(ascii.calls).toHaveLength(1);
+	});
+
+	test("an unset window keeps the preflight disabled", async () => {
+		const fake = fakeAgent(() => ({ text: "ok" }));
+		const runtime = runtimeWith(fake.agent, { caps: baseCaps });
+		await runtime.runTurn({
+			prompt: "x".repeat(100_000),
+			context: CONTEXT,
+			signal,
+		});
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("the abort signal wins over the preflight", async () => {
+		const fake = fakeAgent(() => ({ text: "unreachable" }));
+		const runtime = runtimeWith(fake.agent, {
+			caps: { ...baseCaps, contextWindowTokens: 40 },
+		});
+		const controller = new AbortController();
+		controller.abort(new Error("aborted"));
+		let caught: unknown;
+		try {
+			await runtime.runTurn({
+				prompt: "x".repeat(100),
+				context: CONTEXT,
+				signal: controller.signal,
+			});
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).not.toBeInstanceOf(PlatformError);
+		expect((caught as Error).message).toBe("aborted");
+		expect(fake.calls).toHaveLength(0);
+	});
+
+	test("invalid context windows and retry attempts fail at construction", () => {
+		const fake = fakeAgent(() => ({ text: "ok" }));
+		const invalid = [
+			{ ...baseCaps, contextWindowTokens: 0 },
+			{ ...baseCaps, contextWindowTokens: -1 },
+			{ ...baseCaps, contextWindowTokens: 1.5 },
+			{ ...baseCaps, contextWindowTokens: Number.NaN },
+			{ ...baseCaps, providerRetryAttempts: -1 },
+			{ ...baseCaps, providerRetryAttempts: 1.5 },
+			{ ...baseCaps, providerRetryAttempts: 4 },
+		];
+		for (const caps of invalid) {
+			expect(() => runtimeWith(fake.agent, { caps })).toThrow(PlatformError);
+		}
+	});
+});
+
+describe("createMastraAgentRuntime provider failure classification", () => {
+	test("a provider failure becomes a classified PlatformError", async () => {
+		const raw = Object.assign(new Error("too many requests"), { status: 429 });
+		const fake = fakeAgent(() => {
+			throw raw;
+		});
+		const runtime = runtimeWith(fake.agent);
+		let caught: unknown;
+		try {
+			await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(PlatformError);
+		const providerError = caught as PlatformError;
+		expect(providerError.code).toBe("RATE_LIMITED");
+		expect(providerError.retryable).toBe(true);
+		expect(providerError.message).toBe("provider rate limited the request");
+		expect(providerError.cause).toBe(raw);
+		expect(fake.calls).toHaveLength(1); // default: classify once, no retry
+		expect(runtime.turns[0]).toMatchObject({
+			status: "failed",
+			summary: "provider rate limited the request",
+			usage: null,
+		});
+		expect(runtime.totalTokensUsed).toBe(0);
+	});
+
+	test("auth failures are not retried even when retries are enabled", async () => {
+		const fake = fakeAgent(() => {
+			throw Object.assign(new Error("nope"), { status: 401 });
+		});
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 1000,
+				maxSteps: 2,
+				providerRetryAttempts: 2,
+			},
+		});
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toMatchObject({
+			code: "AGENT_EXECUTION_FAILED",
+			retryable: false,
+		});
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("unknown failures are non-retryable", async () => {
+		const fake = fakeAgent(() => {
+			throw new TypeError("boom");
+		});
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 1000,
+				maxSteps: 2,
+				providerRetryAttempts: 3,
+			},
+		});
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toMatchObject({
+			code: "AGENT_EXECUTION_FAILED",
+			retryable: false,
+		});
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("retryable failures use the configured bounded attempt budget", async () => {
+		let calls = 0;
+		const fake = fakeAgent(() => {
+			calls += 1;
+			if (calls <= 2) {
+				throw Object.assign(new Error("overloaded"), { status: 503 });
+			}
+			return {
+				text: "recovered",
+				totalUsage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+			};
+		});
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 1000,
+				maxSteps: 2,
+				providerRetryAttempts: 2,
+			},
+		});
+		const text = await runtime.runTurn({
+			prompt: "go",
+			context: CONTEXT,
+			signal,
+		});
+		expect(text).toBe("recovered");
+		expect(fake.calls).toHaveLength(3);
+		expect(runtime.turns[0]).toMatchObject({
+			status: "finished",
+			usage: { totalTokens: 7 },
+		});
+	});
+});
+
 describe("createFakeAgentRuntime", () => {
 	test("records usage null for every turn", async () => {
 		const runtime = createFakeAgentRuntime({ script: () => "hi" });
 		await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
 		expect(runtime.turns[0].usage).toBeNull();
 		expect(runtime.turns[0].summary).toBe(limitSummary("hi"));
+	});
+
+	test("reports an explicit conservative capability record", () => {
+		const runtime = createFakeAgentRuntime({ script: () => "" });
+		expect(runtime.capabilities).toEqual({
+			streaming: false,
+			toolCalls: false,
+			approvals: false,
+			session: false,
+			context: false,
+		});
+	});
+
+	test("honours a test-only capability override", () => {
+		const runtime = createFakeAgentRuntime({
+			script: () => "",
+			capabilities: {
+				streaming: false,
+				toolCalls: true,
+				approvals: true,
+				session: false,
+				context: true,
+			},
+		});
+		expect(runtime.capabilities.toolCalls).toBe(true);
 	});
 });

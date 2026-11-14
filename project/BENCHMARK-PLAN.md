@@ -163,14 +163,13 @@ Honest limits:
 
 ## Where live measurements are recorded
 
-`docs/connectors/live-verification.md` does **not** exist in this repository.
-The measured live results are recorded in the wave records of
-`project/TASKS.md` (for example the wave 15 incident run: 170,818 prompt /
-13,101 completion tokens, one 244-second Modal sandbox, a one-file/26-line
-diff) and in the connector docs under `docs/devsecops-connectors.md`,
-`docs/connector-usage.md` and `docs/connectors/`. A dedicated verification log
-should be created only when a keyed wave is approved; this plan does not invent
-contents for it.
+`docs/connectors/live-verification.md` exists and is the authoritative log:
+thirteen measured live runs (New Relic, Axiom, Kubernetes ×2, Datadog ×3,
+Honeycomb ×4, SigNoz ×2) with the task id, evidence call, PR number and
+`usage_records` token spend for each, plus the residual gaps. Earlier wave
+records remain in `project/TASKS.md` (for example the wave 15 run: 170,818
+prompt / 13,101 completion tokens, one 244-second Modal sandbox). A benchmark
+result that contradicts the live log is wrong; the live log wins.
 
 ## Recommended adoption
 
@@ -181,7 +180,8 @@ contents for it.
 3. **Adopt for external comparability (keyed):** SWE-bench-Live Lite (300
    instances) and terminal-bench for sandbox/tool-use regressions.
 4. **Evaluate later (cluster-backed):** AIOpsLab or ITBench for end-to-end
-   incident lifecycle, and OpenRCA for evidence/root-cause quality.
+   incident lifecycle, and OpenRCA for evidence/root-cause quality. **First
+   offline alternative (below): ITBench-AA**, which needs no cluster.
 5. **Reject:** OSWorld, AgentBench and Aider polyglot as primary benchmarks for
    this product; they measure different surfaces.
 
@@ -202,6 +202,48 @@ Every connector in the product registry is exercised through the same
 the real signed-delivery path against in-memory repositories. The run refuses to
 start while `BASETEN_*`/`MODAL_*` are present (verified: invoking it from the
 repo root aborts with `REFUSED: provider environment variables are set`).
+
+## Verified additions (2026-11-15)
+
+A Firecrawl-backed survey (search + page fetch) re-checked every repository
+named above and looked for newer ones. Changes to the table above:
+
+- **ITBench-AA is the one runnable, labelled, offline benchmark that matches a
+  connector we ship.** [Hugging Face dataset](https://huggingface.co/datasets/ArtificialAnalysis/ITBench-AA)
+  publishes per-scenario Kubernetes snapshots plus `ground_truth.yaml`; the
+  `sre/Scenario-16` files are a 44.2 MB `k8s_objects_raw.tsv`, a 1.45 MB
+  `k8s_events_raw.tsv` and a 1.32 kB `ground_truth.yaml`. No cluster is
+  needed, so the "ITBench: No — Kubernetes environments" row above is
+  superseded for this variant.
+- **`terminal-bench-1` is stale.** Current: [harbor-framework/terminal-bench](https://github.com/harbor-framework/terminal-bench),
+  with [Terminal-Bench 3](https://github.com/scaleapi/terminal-bench-3-public)
+  and [Terminal-Bench 4](https://artificialanalysis.ai/evaluations/terminalbench-4-0)
+  as later generations.
+- **Three dedicated SRE/incident benchmarks were missing from this plan**:
+  [SREGym](https://github.com/SREGym/SREGym),
+  [Incident-Arena](https://github.com/abundant-ai/incident-arena) and
+  [ORCA-bench](https://arxiv.org/html/2607.28545v2) (paper only — no
+  authoritative code repository was found, so treat it as unreproducible until
+  one is confirmed). [OpenRCA 2.0](https://arxiv.org/abs/2606.27154) now has
+  500 step-annotated instances.
+- **Nothing new measures the nine SaaS connectors** (GitHub, Sentry, Grafana,
+  PagerDuty, Datadog, New Relic, Honeycomb, Axiom, SigNoz). That gap is real
+  and remains the argument for the contract-replay harness described above.
+
+**Next move (not implemented).** A reader-only ITBench-AA pilot:
+`scripts/bench-itbench-k8s.ts --scenario 16 --data <cache>` parses the two TSVs
+into an index, implements `KubernetesHttpClient` over that index (the interface
+in `packages/integrations/src/kubernetes/types.ts` unchanged), calls the real
+`fetchKubernetesContext`, and scores two numbers separately — root-cause
+**entity recall** and ground-truth **condition token recall** — alongside bytes,
+`truncated` and a content digest, run twice for byte equality. Scenario-16's
+ground truth (`Deployment/shipping-deployment-1`, condition
+`QUOTE_ADDR` set to port `0000`) should expose a real gap: the deployment
+excerpt renders replicas, generation and conditions but not container `env`
+(`packages/integrations/src/kubernetes/context.ts:657`), so entity recall can
+pass while condition recall fails — which is exactly the measurement worth
+having. No model and no provider key is involved; cache the dataset outside the
+repo and commit only a namespace-pruned fixture.
 
 ## Security and cost posture
 

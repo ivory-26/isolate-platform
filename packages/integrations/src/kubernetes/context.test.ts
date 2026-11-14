@@ -479,6 +479,47 @@ describe("fetchKubernetesContext", () => {
 		}
 	});
 
+	test("renders literal container env but never a credential-shaped value", async () => {
+		const { client } = fakeClient({
+			deployment: json(200, {
+				metadata: { name: DEPLOYMENT, namespace: NAMESPACE, generation: 1 },
+				spec: {
+					replicas: 1,
+					selector: { matchLabels: { app: "api" } },
+					template: {
+						spec: {
+							containers: [
+								{
+									name: "api",
+									env: [
+										{ name: "QUOTE_ADDR", value: "quote:0000" },
+										{ name: "API_TOKEN", value: "sk-live-abc123" },
+										{ name: "FROM_SECRET", valueFrom: { secretKeyRef: {} } },
+										{
+											name: "DATABASE_URL",
+											value: "postgres://user:pw@db.internal/app",
+										},
+										{ name: "GREETING", value: "hello" },
+									],
+								},
+							],
+						},
+					},
+				},
+			}),
+		});
+		const bundle = await fetchKubernetesContext(dependencies(client), INPUT);
+		const deployment = itemByKind(bundle.items, "kubernetes_deployment");
+		expect(deployment?.excerpt).toContain("Container api env:");
+		expect(deployment?.excerpt).toContain("QUOTE_ADDR=quote:0000");
+		expect(deployment?.excerpt).toContain("API_TOKEN=[redacted]");
+		expect(deployment?.excerpt).toContain("FROM_SECRET=<ref>");
+		expect(deployment?.excerpt).toContain("DATABASE_URL=<hidden>");
+		expect(deployment?.excerpt).toContain("GREETING=<hidden>");
+		expect(deployment?.excerpt).not.toContain("sk-live-abc123");
+		expect(deployment?.excerpt).not.toContain("user:pw");
+	});
+
 	test("rejects malformed input before calling the API", async () => {
 		const { client, calls } = fakeClient();
 		for (const input of [

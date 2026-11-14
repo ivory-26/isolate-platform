@@ -230,19 +230,37 @@ named above and looked for newer ones. Changes to the table above:
   PagerDuty, Datadog, New Relic, Honeycomb, Axiom, SigNoz). That gap is real
   and remains the argument for the contract-replay harness described above.
 
-**Next move (not implemented).** A reader-only ITBench-AA pilot:
-`scripts/bench-itbench-k8s.ts --scenario 16 --data <cache>` parses the two TSVs
+**Implemented and measured (2026-11-15).** `scripts/bench-itbench-k8s.ts --data <scenario-dir>`
+runs the ITBench-AA pilot against the real `fetchKubernetesContext`. Scenario 16
+(`otel-demo`, group `shipping-deployment-1` → real `Deployment/shipping`) scores:
+
+| Run | Items | Bytes | `truncated` | Entity recall | Decisive condition token recall | Digest |
+|---|---|---|---|---|---|---|
+| before the env fix | 3 (pod, deployment, replicasets) | 834 | false | 1.00 | **0.00** | `b0e34180…` |
+| after the env fix | 3 (same) | 1,077 | false | 1.00 | **1.00** | `6e05b5e4…` |
+
+Both runs are byte-deterministic across two executions, use no cluster, no
+network and no model. The ground-truth condition is `QUOTE_ADDR` set to port
+`0000`; the reader rendered replicas, generation and conditions but not the
+container env, so the deciding tokens were invisible. `schemas.ts` now models
+`spec.template.spec.containers[].env` (literal `value` only — `valueFrom` is
+dropped, so a Secret ref can never be resolved) and the deployment excerpt
+renders a bounded env line under the rule documented in
+[`docs/connectors/kubernetes.md`](../docs/connectors/kubernetes.md) §9.
+`packages/integrations/src/kubernetes/context.test.ts` pins the rendering and
+the credential suppression.
+
+Original design of the pilot (kept for reference):
+`scripts/bench-itbench-k8s.ts --data <cache>` parses the two TSVs
 into an index, implements `KubernetesHttpClient` over that index (the interface
 in `packages/integrations/src/kubernetes/types.ts` unchanged), calls the real
 `fetchKubernetesContext`, and scores two numbers separately — root-cause
 **entity recall** and ground-truth **condition token recall** — alongside bytes,
-`truncated` and a content digest, run twice for byte equality. Scenario-16's
-ground truth (`Deployment/shipping-deployment-1`, condition
-`QUOTE_ADDR` set to port `0000`) should expose a real gap: the deployment
-excerpt renders replicas, generation and conditions but not container `env`
-(`packages/integrations/src/kubernetes/context.ts:657`), so entity recall can
-pass while condition recall fails — which is exactly the measurement worth
-having. No model and no provider key is involved; cache the dataset outside the
+`truncated` and a content digest, run twice for byte equality. One correction
+found while implementing: ITBench-AA group ids (`shipping-deployment-1`) are
+synthetic labels, and the API name is `shipping`; the pilot resolves a group's
+regex filter against the snapshot instead of passing the id to the API. No
+model and no provider key is involved; cache the dataset outside the
 repo and commit only a namespace-pruned fixture.
 
 ## Security and cost posture

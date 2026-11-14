@@ -14,6 +14,7 @@ import {
 import { z } from "zod";
 import { redactKubernetesLine, redactKubernetesText } from "./redact";
 import {
+	KUBERNETES_MAX_ENV_VARS,
 	type KubernetesDeployment,
 	type KubernetesEvent,
 	kubernetesDeploymentSchema,
@@ -52,6 +53,21 @@ export const KUBERNETES_CONTEXT_MAX_REPLICASETS = 5;
 export const KUBERNETES_CONTEXT_LOG_TAIL_LINES = 200;
 export const KUBERNETES_CONTEXT_LOG_TAIL_CHARS = 2000;
 export const KUBERNETES_CONTEXT_MAX_RESPONSE_BYTES = 256 * 1024;
+
+/**
+ * Env names whose literal value is never rendered. A value that names or looks
+ * like a credential stays out of evidence even when it is a plain `value`.
+ */
+const SECRET_LIKE_ENV_NAME =
+	/(SECRET|TOKEN|PASSWORD|PASSWD|PASS|APIKEY|API_KEY|_KEY$|^KEY$|CREDENTIAL|AUTH|DSN|CONN|CERT|PRIVATE)/i;
+
+/**
+ * Config-shaped names whose *literal* value is worth rendering. Anything else
+ * is shown as `NAME=<hidden>`: the excerpt explains a bad port or endpoint,
+ * never an arbitrary environment value.
+ */
+const CONFIG_LIKE_ENV_NAME =
+	/(PORT|ADDR|HOST|ENDPOINT|URL|TIMEOUT|INTERVAL|MODE|LEVEL|REGION|REPLICAS|THRESHOLD|LIMIT)/i;
 /** Log text is cut here before parsing so one response cannot exhaust memory. */
 const MAX_LOG_RESPONSE_CHARS = 64 * 1024;
 
@@ -675,6 +691,28 @@ async function readDeploymentForContext(
 		const message = redactKubernetesLine(condition.message ?? "", 240);
 		lines.push(
 			`Condition ${condition.type}=${condition.status}${reason === null ? "" : ` (${reason})`}${message.length === 0 ? "" : `: ${message}`}`,
+		);
+	}
+	// Misconfiguration is the most common rollout fault and it lives in literal
+	// env values, not in status. Names are always shown; a literal value is
+	// shown only for a config-shaped name, never for a credential-shaped one,
+	// and never when the value itself carries userinfo (`@`).
+	for (const container of deployment.spec?.template?.spec?.containers ?? []) {
+		const rendered = (container.env ?? [])
+			.slice(0, KUBERNETES_MAX_ENV_VARS)
+			.map((entry) => {
+				const name = entry.name;
+				if (entry.value === undefined) return `${name}=<ref>`;
+				if (SECRET_LIKE_ENV_NAME.test(name)) return `${name}=[redacted]`;
+				if (!CONFIG_LIKE_ENV_NAME.test(name) || entry.value.includes("@")) {
+					return `${name}=<hidden>`;
+				}
+				const value = redactKubernetesLine(entry.value, 120);
+				return value.length === 0 ? `${name}=<empty>` : `${name}=${value}`;
+			});
+		if (rendered.length === 0) continue;
+		lines.push(
+			`Container ${container.name} env: ${redactKubernetesLine(rendered.join(", "), 480)}`,
 		);
 	}
 	const built = makeContextItem({

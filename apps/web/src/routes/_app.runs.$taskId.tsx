@@ -29,10 +29,13 @@ import {
 import { activeRole, requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
 import { ApprovalActions } from "@/features/runs/components/approval-actions";
+import { ArtifactDownloadLink } from "@/features/runs/components/artifact-download-link";
 import { RetryRunButton } from "@/features/runs/components/retry-run-button";
+import { RunAttempts } from "@/features/runs/components/run-attempts";
 import { RunExecutionMap } from "@/features/runs/components/run-execution-map";
 import { RunLogViewer } from "@/features/runs/components/run-log-viewer";
 import { RunTimeline } from "@/features/runs/components/run-timeline";
+import { RunValidation } from "@/features/runs/components/run-validation";
 import { RunSourceBadge } from "@/features/runs/components/source-badge";
 import { ToolDecisionBadge } from "@/features/runs/components/tool-decision-badge";
 import type {
@@ -46,6 +49,7 @@ import {
 	approvalActionLabel,
 	autonomyLevelLabel,
 	canRetryTask,
+	durationBetween,
 	effectiveApprovalStatus,
 	formatBytes,
 	formatCostUsd,
@@ -416,10 +420,38 @@ function RunDetailPage() {
 
 					<Section
 						variant="plain"
+						title="Attempts"
+						description="Durable task_attempts rows, oldest first. An open row is still running."
+					>
+						<RunAttempts
+							attempts={detail.attempts}
+							truncated={detail.attemptsTruncated}
+						/>
+					</Section>
+
+					<Section
+						variant="plain"
+						title="Validation"
+						description="Outcome fields parsed from recorded validation.finished events. The raw event below remains the source of record."
+					>
+						<RunValidation
+							events={detail.events}
+							eventsTruncated={detail.eventsTruncated}
+						/>
+					</Section>
+
+					<Section
+						variant="plain"
 						title="Lifecycle"
 						description="Durable run events in occurrence order. Event metadata is redacted before it is stored."
 					>
-						<RunTimeline events={detail.events} traceId={detail.traceId} />
+						<RunTimeline
+							events={detail.events}
+							traceId={detail.traceId}
+							taskId={task.id}
+							eventsTotal={detail.eventsTotal}
+							eventsTruncated={detail.eventsTruncated}
+						/>
 					</Section>
 
 					<Section
@@ -444,14 +476,22 @@ function RunDetailPage() {
 								<Table>
 									<TableHeader>
 										<TableRow className="border-line-subtle hover:bg-transparent">
-											<TableHead>Tool</TableHead>
-											<TableHead className="w-[180px]">Decision</TableHead>
-											<TableHead className="w-[200px]">Denial</TableHead>
-											<TableHead className="w-[90px]">Duration</TableHead>
-											<TableHead className="w-[190px]">
+											<TableHead scope="col">Tool</TableHead>
+											<TableHead scope="col" className="w-[180px]">
+												Decision
+											</TableHead>
+											<TableHead scope="col" className="w-[200px]">
+												Denial
+											</TableHead>
+											<TableHead scope="col" className="w-[90px]">
+												Duration
+											</TableHead>
+											<TableHead scope="col" className="w-[190px]">
 												Arguments sha256
 											</TableHead>
-											<TableHead className="w-[140px]">When</TableHead>
+											<TableHead scope="col" className="w-[140px]">
+												When
+											</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -508,12 +548,37 @@ function RunDetailPage() {
 								<Table>
 									<TableHeader>
 										<TableRow className="border-line-subtle hover:bg-transparent">
-											<TableHead>Tool</TableHead>
-											<TableHead className="w-[130px]">Connector</TableHead>
-											<TableHead className="w-[140px]">Status</TableHead>
-											<TableHead className="w-[170px]">Error</TableHead>
-											<TableHead className="w-[90px]">Attempts</TableHead>
-											<TableHead className="w-[140px]">Created</TableHead>
+											<TableHead scope="col">Tool</TableHead>
+											<TableHead scope="col" className="w-[120px]">
+												Connector
+											</TableHead>
+											<TableHead scope="col" className="w-[120px]">
+												Status
+											</TableHead>
+											<TableHead scope="col" className="w-[150px]">
+												Error
+											</TableHead>
+											<TableHead scope="col" className="w-[90px]">
+												Attempts
+											</TableHead>
+											<TableHead scope="col" className="w-[200px]">
+												Traceparent
+											</TableHead>
+											<TableHead scope="col" className="w-[130px]">
+												Created
+											</TableHead>
+											<TableHead scope="col" className="w-[130px]">
+												Claimed
+											</TableHead>
+											<TableHead scope="col" className="w-[130px]">
+												Completed
+											</TableHead>
+											<TableHead scope="col" className="w-[90px]">
+												Duration
+											</TableHead>
+											<TableHead scope="col" className="w-[130px]">
+												Expires
+											</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -522,7 +587,7 @@ function RunDetailPage() {
 												key={connectorKeys[index]}
 												className="border-line-subtle"
 											>
-												<TableCell className="max-w-[220px] truncate font-mono text-xs text-ink-secondary">
+												<TableCell className="max-w-[200px] truncate font-mono text-xs text-ink-secondary">
 													{call.toolName}
 												</TableCell>
 												<TableCell className="font-mono text-xs text-ink-secondary">
@@ -531,14 +596,54 @@ function RunDetailPage() {
 												<TableCell>
 													<StatusBadge status={call.status} />
 												</TableCell>
-												<TableCell className="max-w-[170px] truncate font-mono text-[11px] text-ink-muted">
+												<TableCell className="max-w-[150px] truncate font-mono text-[11px] text-ink-muted">
 													{call.errorCode ?? "—"}
 												</TableCell>
 												<TableCell className="font-mono text-xs tabular-nums text-ink-secondary">
 													{call.attempts}
 												</TableCell>
+												<TableCell className="max-w-[200px]">
+													{call.traceparent ? (
+														<span className="flex items-center gap-1 font-mono text-[11px] text-ink-muted">
+															<span
+																title={call.traceparent}
+																className="truncate"
+															>
+																{shortId(call.traceparent, 22)}
+															</span>
+															<CopyButton
+																value={call.traceparent}
+																label="Copy traceparent"
+															/>
+														</span>
+													) : (
+														<span className="text-xs text-ink-muted">—</span>
+													)}
+												</TableCell>
 												<TableCell className="text-xs text-ink-muted">
 													<RelativeTime value={call.createdAt} />
+												</TableCell>
+												<TableCell className="text-xs text-ink-muted">
+													{call.claimedAt ? (
+														<RelativeTime value={call.claimedAt} />
+													) : (
+														"—"
+													)}
+												</TableCell>
+												<TableCell className="text-xs text-ink-muted">
+													{call.completedAt ? (
+														<RelativeTime value={call.completedAt} />
+													) : (
+														"—"
+													)}
+												</TableCell>
+												<TableCell className="font-mono text-xs tabular-nums text-ink-secondary">
+													{formatDurationMs(
+														durationBetween(call.claimedAt, call.completedAt),
+													)}
+												</TableCell>
+												<TableCell className="text-xs text-ink-muted">
+													<RelativeTime value={call.expiresAt} />
 												</TableCell>
 											</TableRow>
 										))}
@@ -638,7 +743,7 @@ function RunDetailPage() {
 					<Section
 						variant="plain"
 						title="Artifacts"
-						description="Bounded previews. Blob references point at object storage and are not fetched here."
+						description="Bounded previews. A stored blob payload can be downloaded by an authenticated member of this organization."
 					>
 						<ArtifactsSection artifacts={detail.artifacts} />
 					</Section>
@@ -680,6 +785,47 @@ function RunDetailPage() {
 								))}
 							</ul>
 						)}
+					</Section>
+
+					<Section
+						variant="plain"
+						title="Retries"
+						description="Later tasks created from this run by the retry action; each is an independent task."
+					>
+						{detail.retryChildren.length === 0 ? (
+							<p className="text-sm text-ink-muted">
+								No retry children were recorded for this task.
+							</p>
+						) : (
+							<ul className="divide-y divide-line-subtle">
+								{detail.retryChildren.map((child) => (
+									<li
+										key={child.taskId}
+										className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+									>
+										<div className="flex items-center gap-2">
+											<StatusBadge status={child.status} />
+											<Link
+												to="/runs/$taskId"
+												params={{ taskId: child.taskId }}
+												className="rounded-sm font-mono text-[11px] text-brand underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+											>
+												{shortId(child.taskId, 12)}
+											</Link>
+										</div>
+										<p className="text-[11px] text-ink-muted">
+											depth {child.retryDepth} ·{" "}
+											<RelativeTime value={child.createdAt} />
+										</p>
+									</li>
+								))}
+							</ul>
+						)}
+						{detail.retryChildrenTruncated ? (
+							<p className="mt-2 text-[11px] text-warning">
+								Showing the first {detail.retryChildren.length} retries.
+							</p>
+						) : null}
 					</Section>
 				</div>
 			</div>
@@ -769,11 +915,19 @@ function UsageSection({ usage }: { usage: RunUsageRecord[] }) {
 				<Table>
 					<TableHeader>
 						<TableRow className="border-line-subtle hover:bg-transparent">
-							<TableHead>Provider / model</TableHead>
-							<TableHead className="w-[90px]">Prompt</TableHead>
-							<TableHead className="w-[100px]">Completion</TableHead>
-							<TableHead className="w-[100px]">Cost</TableHead>
-							<TableHead className="w-[130px]">Recorded</TableHead>
+							<TableHead scope="col">Provider / model</TableHead>
+							<TableHead scope="col" className="w-[90px]">
+								Prompt
+							</TableHead>
+							<TableHead scope="col" className="w-[100px]">
+								Completion
+							</TableHead>
+							<TableHead scope="col" className="w-[100px]">
+								Cost
+							</TableHead>
+							<TableHead scope="col" className="w-[130px]">
+								Recorded
+							</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
@@ -834,6 +988,7 @@ function ArtifactsSection({ artifacts }: { artifacts: RunArtifact[] }) {
 						<span className="font-mono text-[11px] tabular-nums text-ink-muted">
 							{formatBytes(artifact.byteSize)}
 						</span>
+						<ArtifactDownloadLink artifact={artifact} />
 						<span className="ml-auto text-[11px] text-ink-muted">
 							<RelativeTime value={artifact.createdAt} />
 						</span>
@@ -859,8 +1014,9 @@ function ArtifactsSection({ artifacts }: { artifacts: RunArtifact[] }) {
 						</details>
 					) : (
 						<p className="text-[11px] text-ink-muted">
-							No inline preview was stored; retrieve the payload from object
-							storage using the reference above.
+							{artifact.isBlob
+								? "No inline preview was stored. Use the download link above for the stored payload."
+								: "No inline preview was stored for this artifact."}
 						</p>
 					)}
 				</li>

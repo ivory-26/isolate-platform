@@ -31,6 +31,7 @@ import {
 	type RunJsonValue,
 	type RunListRow,
 	type RunRepositoryOption,
+	type RunRetryChild,
 	type RunsListPage,
 	type RunTaskIdentity,
 	type RunToolDecision,
@@ -101,6 +102,15 @@ const STMT = {
 		JOIN tasks t ON t.id = a.task_id AND t.organization_id = $1
 		WHERE a.task_id = $2
 		ORDER BY a.attempt_index ASC
+		LIMIT $3`,
+	eventCount: `SELECT count(*)::int AS total
+		FROM run_events e
+		JOIN tasks t ON t.id = e.task_id AND t.organization_id = $1
+		WHERE e.task_id = $2`,
+	retryChildren: `SELECT t.id, t.status, t.retry_depth, t.created_at
+		FROM tasks t
+		WHERE t.organization_id = $1 AND t.retry_of = $2
+		ORDER BY t.created_at ASC, t.id ASC
 		LIMIT $3`,
 	approvals: `SELECT a.id, a.action, a.status, a.payload_sha256, a.requested_by,
 			a.decided_by, a.decided_at, a.expires_at, a.created_at
@@ -384,6 +394,15 @@ function mapAttempt(row: Record<string, unknown>): RunAttempt {
 	};
 }
 
+function mapRetryChild(row: Record<string, unknown>): RunRetryChild {
+	return {
+		taskId: text(row.id),
+		status: taskStatus(row.status),
+		retryDepth: count(row.retry_depth),
+		createdAt: timestamp(row.created_at),
+	};
+}
+
 function mapWorkflowRun(row: Record<string, unknown>): RunWorkflowRun {
 	return {
 		id: text(row.id),
@@ -610,10 +629,21 @@ export async function readRunDetail(
 		taskId,
 		RUN_DETAIL_RUN_LIMIT,
 	])) as unknown as Record<string, unknown>[];
+	// One row beyond each cap tells us the list was truncated without a second
+	// count query; the extra row is never mapped or returned.
 	const attemptRows = (await sql.unsafe(STMT.attempts, [
 		scope.organizationId,
 		taskId,
-		RUN_DETAIL_ATTEMPT_LIMIT,
+		RUN_DETAIL_ATTEMPT_LIMIT + 1,
+	])) as unknown as Record<string, unknown>[];
+	const eventCountRows = (await sql.unsafe(STMT.eventCount, [
+		scope.organizationId,
+		taskId,
+	])) as unknown as Record<string, unknown>[];
+	const retryRows = (await sql.unsafe(STMT.retryChildren, [
+		scope.organizationId,
+		taskId,
+		RUN_DETAIL_ATTEMPT_LIMIT + 1,
 	])) as unknown as Record<string, unknown>[];
 	const approvalRows = (await sql.unsafe(STMT.approvals, [
 		scope.organizationId,
@@ -627,12 +657,25 @@ export async function readRunDetail(
 		RUN_ARTIFACT_PREVIEW_CHARS,
 	])) as unknown as Record<string, unknown>[];
 
+	const attempts = attemptRows
+		.slice(0, RUN_DETAIL_ATTEMPT_LIMIT)
+		.map(mapAttempt);
+	const eventsTotal =
+		eventCountRows.length === 0 ? 0 : count(eventCountRows[0]?.total);
+
 	return {
 		task: mapTask(taskRow),
 		workflowRuns: runRows.map(mapWorkflowRun),
-		attempts: attemptRows.map(mapAttempt),
+		attempts,
+		attemptsTruncated: attemptRows.length > RUN_DETAIL_ATTEMPT_LIMIT,
+		retryChildren: retryRows
+			.slice(0, RUN_DETAIL_ATTEMPT_LIMIT)
+			.map(mapRetryChild),
+		retryChildrenTruncated: retryRows.length > RUN_DETAIL_ATTEMPT_LIMIT,
 		traceId: trace.traceId,
 		events: trace.events.map(mapEvent),
+		eventsTotal,
+		eventsTruncated: eventsTotal > trace.events.length,
 		toolInvocations: trace.toolInvocations.map(mapTool),
 		usage: trace.usage.map(mapUsage),
 		connectorCalls: trace.connectorCalls.map(mapConnectorCall),

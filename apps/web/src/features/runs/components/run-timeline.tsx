@@ -7,6 +7,7 @@ import {
 	BoltIcon,
 	BranchIcon,
 	ClockIcon,
+	ExternalIcon,
 	FolderOpenIcon,
 	LogsIcon,
 	PlayIcon,
@@ -137,10 +138,19 @@ export function RunStageItem({
 export function RunTimeline({
 	events,
 	traceId,
+	taskId,
+	eventsTotal = events.length,
+	eventsTruncated = false,
 	className,
 }: {
 	events: RunEventView[];
 	traceId: string | null;
+	/** Target of the tenant-scoped `/api/traces/{taskId}` deep link. */
+	taskId: string;
+	/** Exact durable event count when the server reports one. */
+	eventsTotal?: number;
+	/** True when the server's event window is shorter than the stored stream. */
+	eventsTruncated?: boolean;
 	className?: string;
 }) {
 	const eventKeys = stableKeys(
@@ -164,7 +174,23 @@ export function RunTimeline({
 						{traceId}
 					</code>
 					<CopyButton value={traceId} label="Copy trace id" />
+					<a
+						href={`/api/traces/${encodeURIComponent(taskId)}`}
+						target="_blank"
+						rel="noreferrer"
+						title={`Task ${taskId}`}
+						className="ml-auto inline-flex items-center gap-1 rounded-sm text-[11px] text-brand underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+					>
+						Open trace JSON
+						<ExternalIcon size={12} />
+					</a>
 				</div>
+			) : null}
+			{eventsTruncated ? (
+				<p className="border-y border-warning/30 bg-warning/5 px-3 py-2 text-[11px] text-warning">
+					Showing the first {events.length} of {eventsTotal} events, oldest
+					first. Later events are not included in this timeline.
+				</p>
 			) : null}
 			{events.length === 0 ? (
 				<p className="border-y border-line-subtle py-3 text-xs text-ink-muted">

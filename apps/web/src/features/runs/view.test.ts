@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { RunApproval } from "./contracts";
+import type { RunApproval, RunEventView } from "./contracts";
 import {
 	approvalActionLabel,
 	approveConsequence,
 	autonomyLevelLabel,
 	canRetryTask,
+	durationBetween,
 	effectiveApprovalStatus,
 	eventLabel,
 	eventTone,
@@ -23,6 +24,7 @@ import {
 	summarizeEventData,
 	summarizeStatusCounts,
 	sumPromptTokens,
+	validationEntries,
 } from "./view";
 
 const NOW = Date.parse("2026-11-20T12:00:00.000Z");
@@ -262,5 +264,135 @@ describe("autonomyLevelLabel", () => {
 		expect(autonomyLevelLabel(null)).toBeNull();
 		expect(autonomyLevelLabel("  ")).toBeNull();
 		expect(autonomyLevelLabel("A9")).toBe("A9");
+	});
+});
+
+function validationEvent(
+	type: string,
+	data: Record<string, unknown>,
+	createdAt = "2026-11-20T11:05:00.000Z",
+): RunEventView {
+	return {
+		type,
+		actor: "worker",
+		data: data as RunEventView["data"],
+		createdAt,
+	};
+}
+
+describe("validationEntries", () => {
+	test("only validation.finished events become rows", () => {
+		const entries = validationEntries([
+			validationEvent("validation.started", { stage: "command" }),
+			validationEvent("agent.turn_finished", { status: "passed" }),
+			validationEvent("validation.finished", {
+				stage: "command",
+				status: "passed",
+				exitCode: 0,
+				durationMs: 1234,
+				outputBytes: 2048,
+				truncated: false,
+			}),
+		]);
+
+		expect(entries).toEqual([
+			{
+				stage: "command",
+				status: "passed",
+				exitCode: 0,
+				durationMs: 1234,
+				outputBytes: 2048,
+				bytes: null,
+				truncated: false,
+				filesChanged: null,
+				insertions: null,
+				deletions: null,
+				createdAt: "2026-11-20T11:05:00.000Z",
+			},
+		]);
+	});
+
+	test("a diff stage keeps its own fields and leaves command fields null", () => {
+		const [entry] = validationEntries([
+			validationEvent("validation.finished", {
+				stage: "diff",
+				bytes: 8192,
+				filesChanged: 3,
+				insertions: 21,
+				deletions: 4,
+				truncated: true,
+			}),
+		]);
+
+		expect(entry).toMatchObject({
+			stage: "diff",
+			status: null,
+			exitCode: null,
+			durationMs: null,
+			outputBytes: null,
+			bytes: 8192,
+			truncated: true,
+			filesChanged: 3,
+			insertions: 21,
+			deletions: 4,
+		});
+	});
+
+	test("values with the wrong JSON type are rejected, not coerced", () => {
+		const [entry] = validationEntries([
+			validationEvent("validation.finished", {
+				stage: "command",
+				status: 1,
+				exitCode: "0",
+				durationMs: null,
+				outputBytes: Number.POSITIVE_INFINITY,
+				truncated: "no",
+				filesChanged: [],
+			}),
+		]);
+
+		expect(entry).toMatchObject({
+			stage: "command",
+			status: null,
+			exitCode: null,
+			durationMs: null,
+			outputBytes: null,
+			truncated: null,
+			filesChanged: null,
+		});
+	});
+
+	test("stage and status are bounded before they reach the table", () => {
+		const [entry] = validationEntries([
+			validationEvent("validation.finished", {
+				stage: "s".repeat(120),
+				status: "p".repeat(120),
+			}),
+		]);
+
+		expect(entry?.stage).toHaveLength(48);
+		expect(entry?.status).toHaveLength(48);
+	});
+});
+
+describe("durationBetween", () => {
+	test("returns elapsed milliseconds between two stored timestamps", () => {
+		expect(
+			durationBetween("2026-11-20T10:00:00.000Z", "2026-11-20T10:00:02.500Z"),
+		).toBe(2500);
+		expect(
+			durationBetween("2026-11-20T10:00:00.000Z", "2026-11-20T10:00:00.000Z"),
+		).toBe(0);
+	});
+
+	test("absent, unparseable or reversed timestamps yield null", () => {
+		expect(durationBetween(null, "2026-11-20T10:00:00.000Z")).toBeNull();
+		expect(durationBetween("2026-11-20T10:00:00.000Z", null)).toBeNull();
+		expect(
+			durationBetween("not-a-date", "2026-11-20T10:00:00.000Z"),
+		).toBeNull();
+		expect(
+			durationBetween("2026-11-20T10:00:05.000Z", "2026-11-20T10:00:00.000Z"),
+		).toBeNull();
 	});
 });

@@ -32,6 +32,7 @@ import { Route as OrganizationsNewRouteImport } from './routes/organizations/new
 import { Route as AppIntegrationsConnectorIdRouteImport } from './routes/_app.integrations.$connectorId'
 import { Route as AppRunsIndexRouteImport } from './routes/_app.runs.index'
 import { Route as AppRunsTaskIdRouteImport } from './routes/_app.runs.$taskId'
+import { Route as ApiArtifactsArtifactIdRouteImport } from './routes/api.artifacts.$artifactId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConnectorsConnectRouteImport } from './routes/api.connectors.connect'
 import { Route as ApiConnectorsListRouteImport } from './routes/api.connectors.list'
@@ -170,6 +171,11 @@ const AppRunsTaskIdRoute = AppRunsTaskIdRouteImport.update({
   id: '/$taskId',
   path: '/$taskId',
   getParentRoute: () => AppRunsRoute,
+} as any)
+const ApiArtifactsArtifactIdRoute = ApiArtifactsArtifactIdRouteImport.update({
+  id: '/api/artifacts/$artifactId',
+  path: '/api/artifacts/$artifactId',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -310,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/organizations/': typeof OrganizationsIndexRoute
   '/integrations/$connectorId': typeof AppIntegrationsConnectorIdRoute
   '/runs/$taskId': typeof AppRunsTaskIdRoute
+  '/api/artifacts/$artifactId': typeof ApiArtifactsArtifactIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -355,6 +362,7 @@ export interface FileRoutesByTo {
   '/organizations': typeof OrganizationsIndexRoute
   '/integrations/$connectorId': typeof AppIntegrationsConnectorIdRoute
   '/runs/$taskId': typeof AppRunsTaskIdRoute
+  '/api/artifacts/$artifactId': typeof ApiArtifactsArtifactIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -404,6 +412,7 @@ export interface FileRoutesById {
   '/organizations/': typeof OrganizationsIndexRoute
   '/_app/integrations/$connectorId': typeof AppIntegrationsConnectorIdRoute
   '/_app/runs/$taskId': typeof AppRunsTaskIdRoute
+  '/api/artifacts/$artifactId': typeof ApiArtifactsArtifactIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/connectors/connect': typeof ApiConnectorsConnectRoute
   '/api/connectors/list': typeof ApiConnectorsListRoute
@@ -453,6 +462,7 @@ export interface FileRouteTypes {
     | '/organizations/'
     | '/integrations/$connectorId'
     | '/runs/$taskId'
+    | '/api/artifacts/$artifactId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -498,6 +508,7 @@ export interface FileRouteTypes {
     | '/organizations'
     | '/integrations/$connectorId'
     | '/runs/$taskId'
+    | '/api/artifacts/$artifactId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -546,6 +557,7 @@ export interface FileRouteTypes {
     | '/organizations/'
     | '/_app/integrations/$connectorId'
     | '/_app/runs/$taskId'
+    | '/api/artifacts/$artifactId'
     | '/api/auth/$'
     | '/api/connectors/connect'
     | '/api/connectors/list'
@@ -579,6 +591,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
+  ApiArtifactsArtifactIdRoute: typeof ApiArtifactsArtifactIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConnectorsConnectRoute: typeof ApiConnectorsConnectRoute
   ApiConnectorsListRoute: typeof ApiConnectorsListRoute
@@ -766,6 +779,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/runs/$taskId'
       preLoaderRoute: typeof AppRunsTaskIdRouteImport
       parentRoute: typeof AppRunsRoute
+    }
+    '/api/artifacts/$artifactId': {
+      id: '/api/artifacts/$artifactId'
+      path: '/api/artifacts/$artifactId'
+      fullPath: '/api/artifacts/$artifactId'
+      preLoaderRoute: typeof ApiArtifactsArtifactIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -1008,6 +1028,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
   AuthCallbackRoute: AuthCallbackRoute,
+  ApiArtifactsArtifactIdRoute: ApiArtifactsArtifactIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConnectorsConnectRoute: ApiConnectorsConnectRoute,
   ApiConnectorsListRoute: ApiConnectorsListRoute,

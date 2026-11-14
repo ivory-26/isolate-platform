@@ -8,6 +8,7 @@ import {
 	defineCodingAgent,
 	metaModelConfig,
 	type OpenAICompatibleModelConfig,
+	resolveModelDescriptor,
 	SANDBOX_TOOL_RISKS,
 	type SandboxToolBackend,
 	type ToolDecisionRecord,
@@ -85,6 +86,11 @@ export function createTaskTools(input: {
 		// Wave 7: the tool gate rejects writes outside the authored ownership
 		// list; an empty list means "no writes".
 		fileOwnership: [...(input.toolContext.fileOwnership ?? [])],
+		// Incident source scopes connector exposure; absent means no connector
+		// tools, never all of them.
+		...(input.toolContext.incidentSource === undefined
+			? {}
+			: { incidentSource: input.toolContext.incidentSource }),
 	};
 	const onDecision = input.onToolDecision;
 	if (input.connectorTools === undefined) {
@@ -114,6 +120,9 @@ function createOpenAIRuntimeFactory(
 ): CodingAgentRuntimeFactory {
 	const agentId = options.agentId ?? AGENT_ID;
 	const agentName = options.agentName ?? AGENT_NAME;
+	// P0-1: capabilities come from the declared descriptor, never from an
+	// if/else on the provider name. An undeclared provider fails closed.
+	const descriptor = resolveModelDescriptor(model.providerId);
 	const modelIdentity = {
 		providerId: model.providerId,
 		modelId: model.modelId,
@@ -146,6 +155,7 @@ function createOpenAIRuntimeFactory(
 		return createMastraAgentRuntime(agent, {
 			id: agentId,
 			name: agentName,
+			capabilities: descriptor.capabilities,
 			model: modelIdentity,
 			...(factoryOptions.caps === undefined
 				? {}

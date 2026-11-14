@@ -47,6 +47,11 @@ const context: ToolCallContext = {
 	scopes: [],
 };
 
+/** Task context for one connector's incident: the implementation gate must match. */
+function contextFor(name: ConnectorToolName): ToolCallContext {
+	return { ...context, incidentSource: connectorIdForToolName(name) };
+}
+
 /**
  * One adapter-valid argument object per tool. These double as the strictness
  * fixture: `{ ...VALID_ARGS[name], unexpected: true }` must be rejected by
@@ -301,7 +306,7 @@ describe("connector tool surface", () => {
 				name,
 				{ outcome: { ok: true, data: { items: [] } } },
 			);
-			const value = await implementation(VALID_ARGS[name], context);
+			const value = await implementation(VALID_ARGS[name], contextFor(name));
 
 			expect(value).toEqual({ ok: true, data: { items: [] } });
 			expect(connectorIds).toEqual([expected[name]]);
@@ -326,7 +331,10 @@ describe("connector tool surface", () => {
 				{ outcome: { ok: true, data: {} } },
 			);
 			await expectPlatformCode(
-				implementation({ ...VALID_ARGS[name], unexpected: true }, context),
+				implementation(
+					{ ...VALID_ARGS[name], unexpected: true },
+					contextFor(name),
+				),
 				"VALIDATION_FAILED",
 			);
 			// No credential resolved, no call enqueued: the refusal is local.
@@ -345,7 +353,7 @@ describe("connector tool surface", () => {
 				{ outcome: { ok: true, data: {} } },
 			);
 			await expectPlatformCode(
-				implementation(MALFORMED_ARGS[name], context),
+				implementation(MALFORMED_ARGS[name], contextFor(name)),
 				"VALIDATION_FAILED",
 			);
 			expect(connectorIds).toHaveLength(0);
@@ -404,7 +412,7 @@ describe("connector tool surface", () => {
 		);
 		const value = await implementation(
 			{ orgSlug: "acme", issueId: "1" },
-			context,
+			contextFor("sentry.get_issue"),
 		);
 		expect(value).toEqual({ ok: true, data: { id: "1", title: "boom" } });
 		expect(enqueued[0]?.ttlMs).toBe(5_000);
@@ -421,7 +429,7 @@ describe("connector tool surface", () => {
 			ttlMs: 5_000,
 			awaitTimeoutMs: 60_000,
 		});
-		await implementation({ incidentId: "P1" }, context);
+		await implementation({ incidentId: "P1" }, contextFor("pagerduty.resolve"));
 		expect(awaited[0]?.timeoutMs).toBe(4_999);
 	});
 
@@ -432,7 +440,7 @@ describe("connector tool surface", () => {
 		);
 		const huge = "x".repeat(70_000);
 		const error = await expectPlatformCode(
-			implementation({ service: huge }, context),
+			implementation({ service: huge }, contextFor("grafana.query_metrics")),
 			"VALIDATION_FAILED",
 		);
 		expect(error.message).not.toContain(huge);
@@ -463,7 +471,7 @@ describe("connector tool surface", () => {
 		const keyError = await expectPlatformCode(
 			implementation(
 				{ orgSlug: "acme", apiKey: "sk-live-SECRET-VALUE" },
-				context,
+				contextFor("sentry.list_issues"),
 			),
 			"VALIDATION_FAILED",
 		);
@@ -486,7 +494,7 @@ describe("connector tool surface", () => {
 		const valueError = await expectPlatformCode(
 			realQueueImplementation(
 				{ orgSlug: "acme", query: "ghp_abcdefghijklmnopqrstuvwxyz012345" },
-				context,
+				contextFor("sentry.list_issues"),
 			),
 			"VALIDATION_FAILED",
 		);
@@ -507,7 +515,7 @@ describe("connector tool surface", () => {
 		];
 		for (const args of cases) {
 			const error = await expectPlatformCode(
-				implementation(args, context),
+				implementation(args, contextFor("sentry.list_issues")),
 				"VALIDATION_FAILED",
 			);
 			expect(error.message).not.toContain("Bearer");
@@ -519,12 +527,15 @@ describe("connector tool surface", () => {
 		// A credential-shaped *key* is refused by the strict schema instead;
 		// ordinary metadata such as `limit` still passes and is enqueued.
 		await expectPlatformCode(
-			implementation({ orgSlug: "acme", nested: { apiKey: "value" } }, context),
+			implementation(
+				{ orgSlug: "acme", nested: { apiKey: "value" } },
+				contextFor("sentry.list_issues"),
+			),
 			"VALIDATION_FAILED",
 		);
 		const allowed = await implementation(
 			VALID_ARGS["sentry.list_issues"],
-			context,
+			contextFor("sentry.list_issues"),
 		);
 		expect(allowed).toEqual({ ok: true, data: {} });
 		expect(enqueued).toHaveLength(1);
@@ -536,7 +547,10 @@ describe("connector tool surface", () => {
 			outcome: { ok: true, data: {} },
 		});
 		const error = await expectPlatformCode(
-			denied.implementation({ incidentId: "P1" }, context),
+			denied.implementation(
+				{ incidentId: "P1" },
+				contextFor("pagerduty.acknowledge"),
+			),
 			"POLICY_DENIED",
 		);
 		expect(error.message).not.toContain("incidents:read");
@@ -547,7 +561,10 @@ describe("connector tool surface", () => {
 				resolved: { scopes: [scope] },
 				outcome: { ok: true, data: {} },
 			});
-			await allowed.implementation({ incidentId: "P1" }, context);
+			await allowed.implementation(
+				{ incidentId: "P1" },
+				contextFor("pagerduty.resolve"),
+			);
 			expect(allowed.enqueued).toHaveLength(1);
 		}
 	});
@@ -557,7 +574,7 @@ describe("connector tool surface", () => {
 			resolved: { scopes: ["incidents:read"] },
 			outcome: { ok: true, data: { incidents: [] } },
 		});
-		await read.implementation({}, context);
+		await read.implementation({}, contextFor("pagerduty.list_incidents"));
 		expect(read.enqueued).toHaveLength(1);
 	});
 
@@ -566,7 +583,7 @@ describe("connector tool surface", () => {
 		const timeoutError = await expectPlatformCode(
 			timedOut.implementation(
 				{ namespace: "default", podName: "api" },
-				context,
+				contextFor("k8s.logs_tail"),
 			),
 			"INTEGRATION_UNAVAILABLE",
 		);
@@ -576,7 +593,10 @@ describe("connector tool surface", () => {
 			outcome: { ok: false, errorCode: "EXPIRED" },
 		});
 		await expectPlatformCode(
-			expired.implementation({ namespace: "default", podName: "api" }, context),
+			expired.implementation(
+				{ namespace: "default", podName: "api" },
+				contextFor("k8s.logs_tail"),
+			),
 			"INTEGRATION_UNAVAILABLE",
 		);
 	});
@@ -586,7 +606,10 @@ describe("connector tool surface", () => {
 			outcome: { ok: false, errorCode: "RATE_LIMITED" },
 		});
 		await expectPlatformCode(
-			rateLimited.implementation({ service: "checkout" }, context),
+			rateLimited.implementation(
+				{ service: "checkout" },
+				contextFor("datadog.search_logs"),
+			),
 			"RATE_LIMITED",
 		);
 
@@ -594,7 +617,10 @@ describe("connector tool surface", () => {
 			outcome: { ok: false, errorCode: "SOMETHING_NEW" },
 		});
 		const error = await expectPlatformCode(
-			unknown.implementation({ service: "checkout" }, context),
+			unknown.implementation(
+				{ service: "checkout" },
+				contextFor("datadog.search_logs"),
+			),
 			"INTERNAL",
 		);
 		expect(error.message).not.toContain("SOMETHING_NEW");
@@ -617,7 +643,10 @@ describe("connector tool surface", () => {
 		if (implementation === undefined) throw new Error("missing tool");
 
 		const error = await expectPlatformCode(
-			implementation({ orgSlug: "acme", issueId: "1" }, context),
+			implementation(
+				{ orgSlug: "acme", issueId: "1" },
+				contextFor("sentry.latest_event"),
+			),
 			"INTEGRATION_UNAVAILABLE",
 		);
 		expect(error.message).toContain("no active device credential");
@@ -633,7 +662,7 @@ describe("connector tool surface", () => {
 			},
 		);
 		const error = await expectPlatformCode(
-			implementation({ orgSlug: "acme" }, context),
+			implementation({ orgSlug: "acme" }, contextFor("sentry.list_issues")),
 			"INTEGRATION_UNAVAILABLE",
 		);
 		expect(error.message).toContain("has no device call queue");
@@ -642,7 +671,7 @@ describe("connector tool surface", () => {
 });
 
 describe("connector tool registry wiring", () => {
-	test("the registry exposes all 31 connector names", () => {
+	function registryForTask(incidentSource?: string) {
 		const registry = wirePlatformTools({
 			policy: createRiskTablePolicy({
 				...SANDBOX_TOOL_RISKS,
@@ -650,12 +679,52 @@ describe("connector tool registry wiring", () => {
 			}),
 			implementations: {},
 		});
-		const collection = registry.forTask(context);
-		for (const name of CONNECTOR_TOOL_NAMES) {
-			expect(collection[name]).toBeDefined();
-		}
-		// Existing sandbox names stay wired.
+		return registry.forTask(
+			incidentSource === undefined ? context : { ...context, incidentSource },
+		);
+	}
+
+	test("a SigNoz incident exposes only signoz connector tools", () => {
+		const collection = registryForTask("signoz");
+		// The model sees only the reporting connector's tools, never all 31.
+		const exposed = CONNECTOR_TOOL_NAMES.filter(
+			(name) => collection[name] !== undefined,
+		);
+		expect(exposed.sort()).toEqual([
+			"signoz.get_rule",
+			"signoz.list_rules",
+			"signoz.query_range",
+		]);
+		// Sandbox/repo/git tools are unchanged by connector scoping.
 		expect(collection["repo.read_file"]).toBeDefined();
+		expect(collection["sandbox.exec"]).toBeDefined();
+	});
+
+	test("an ordinary task with no incident source exposes no connector tools", () => {
+		const collection = registryForTask();
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			expect(collection[name]).toBeUndefined();
+		}
+		// Deny-by-default applies to connectors only; the coding surface remains.
+		expect(collection["repo.read_file"]).toBeDefined();
+		expect(collection["git.diff_summary"]).toBeDefined();
+	});
+
+	test("a connector tool from another source is denied before the device queue", async () => {
+		const { implementation, connectorIds, enqueued } = implementationFor(
+			"datadog.search_logs",
+			{ outcome: { ok: true, data: {} } },
+		);
+		const error = await expectPlatformCode(
+			implementation(
+				{ service: "checkout" },
+				{ ...context, incidentSource: "signoz" },
+			),
+			"POLICY_DENIED",
+		);
+		expect(error.message).toContain('connector "datadog"');
+		expect(connectorIds).toHaveLength(0);
+		expect(enqueued).toHaveLength(0);
 	});
 
 	test("the merged risk map admits reads and scoped writes", async () => {
@@ -704,7 +773,10 @@ describe("connector tool registry wiring", () => {
 			}),
 			implementations: {},
 		});
-		const execute = registry.forTask(context)["sentry.list_issues"].execute;
+		const execute = registry.forTask({
+			...context,
+			incidentSource: "sentry",
+		})["sentry.list_issues"].execute;
 		if (execute === undefined) throw new Error("tool has no execute");
 		const output = (await execute({}, {} as never)) as WiredToolOutput;
 		expect(output).toEqual({ state: "denied", reason: "POLICY_DENIED" });

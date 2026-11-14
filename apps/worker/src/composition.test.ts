@@ -96,6 +96,25 @@ describe("worker composition — offline defaults", () => {
 		).toBe(true);
 	});
 
+	test("maps the optional preflight and retry config into caps", () => {
+		const configured = workerConfigSchema.parse({
+			workerId: "test-worker",
+			modelContextWindow: 128_000,
+			providerRetryAttempts: 2,
+		});
+		const deps = createOfflineWorkerDeps(
+			configured,
+			makeFakeLogger([]),
+		).taskExecution;
+		expect(deps.caps).toEqual({
+			maxOutputTokensPerTurn: configured.maxOutputTokensPerTurn,
+			maxTaskTokens: configured.maxTokensPerTask,
+			maxSteps: configured.maxAgentSteps,
+			contextWindowTokens: 128_000,
+			providerRetryAttempts: 2,
+		});
+	});
+
 	test("forwards the sandbox backend and credential resolver from the real composition", () => {
 		const createSandboxBackend = (() => ({
 			readFile: async () => ({ content: "", truncated: false }),
@@ -228,6 +247,13 @@ describe("worker composition — adapter overrides", () => {
 		const runtime: CodingAgentRuntime = {
 			id: "fake",
 			name: "Fake",
+			capabilities: {
+				streaming: false,
+				toolCalls: false,
+				approvals: false,
+				session: false,
+				context: false,
+			},
 			async runTurn() {
 				return "";
 			},
@@ -442,6 +468,13 @@ describe("worker composition — adapter overrides", () => {
 			const runtime: CodingAgentRuntime = {
 				id: "fake",
 				name: "Fake",
+				capabilities: {
+					streaming: false,
+					toolCalls: false,
+					approvals: false,
+					session: false,
+					context: false,
+				},
 				async runTurn() {
 					const usage: AgentUsage = {
 						providerId: "baseten",

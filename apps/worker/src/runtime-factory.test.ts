@@ -60,6 +60,12 @@ describe("createBasetenRuntimeFactory", () => {
 		const plain = factory({ caps });
 		expect(plain.id).toBe("coding-agent");
 		expect(plain.name).toBe("Coding Agent");
+		expect(plain.capabilities).toMatchObject({
+			streaming: false,
+			toolCalls: true,
+			approvals: true,
+			session: false,
+		});
 
 		const bound = factory({
 			caps,
@@ -77,6 +83,8 @@ describe("createBasetenRuntimeFactory", () => {
 		const runtime = factory({ caps });
 		expect(runtime.id).toBe("coding-agent");
 		expect(runtime.name).toBe("Coding Agent");
+		expect(runtime.capabilities.toolCalls).toBe(true);
+		expect(runtime.capabilities.streaming).toBe(false);
 	});
 
 	test("Meta factory fails closed without its key or with another model", () => {
@@ -132,6 +140,7 @@ describe("createTaskTools", () => {
 			toolContext: {
 				organizationId: "11111111-1111-4111-8111-111111111111",
 				taskId: "22222222-2222-4222-8222-222222222222",
+				incidentSource: "sentry",
 			},
 			onToolDecision: (record) => {
 				decisions.push(record);
@@ -147,6 +156,8 @@ describe("createTaskTools", () => {
 			},
 		});
 
+		// Only the reporting connector's tools reach the model.
+		expect(tools["datadog.search_logs"]).toBeUndefined();
 		const connector = tools["sentry.list_issues"].execute;
 		const read = tools["repo.read_file"].execute;
 		if (connector === undefined || read === undefined) {
@@ -171,5 +182,23 @@ describe("createTaskTools", () => {
 			"sentry.list_issues",
 			"repo.read_file",
 		]);
+	});
+
+	test("ordinary tasks receive no connector tools at all", () => {
+		const tools = createTaskTools({
+			backend,
+			toolContext: {
+				organizationId: "11111111-1111-4111-8111-111111111111",
+				taskId: "22222222-2222-4222-8222-222222222222",
+			},
+			connectorTools: {
+				implementations: {
+					"sentry.list_issues": async () => ({ ok: true, data: {} }),
+				},
+				riskFor: CONNECTOR_TOOL_RISKS,
+			},
+		});
+		expect(tools["sentry.list_issues"]).toBeUndefined();
+		expect(tools["repo.read_file"]).toBeDefined();
 	});
 });

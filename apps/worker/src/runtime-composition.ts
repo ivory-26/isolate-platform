@@ -38,7 +38,13 @@ import {
 	fetchGitHubIncidentContext,
 	type GitHubTokenProvider,
 } from "@isolate/integrations";
-import { CONNECTOR_TOOL_RISKS, type SandboxToolBackend } from "@isolate/mastra";
+import {
+	BASETEN_PROVIDER_ID,
+	CONNECTOR_TOOL_RISKS,
+	type CodingAgentRuntimeFactory,
+	META_PROVIDER_ID,
+	type SandboxToolBackend,
+} from "@isolate/mastra";
 import {
 	createModalSandboxClient,
 	createTaskWorkspaceGit,
@@ -83,6 +89,7 @@ import {
 } from "./pull-request-approval";
 import { buildRunSummary } from "./run-summary";
 import {
+	type BasetenRuntimeFactoryOptions,
 	type ConnectorToolBinding,
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
@@ -328,19 +335,38 @@ export async function selectSandboxProvider(
 	return { provider: new ModalSandboxProvider({ client }), real: true };
 }
 
+type RuntimeFactoryBuilder = (
+	env: Record<string, string | undefined>,
+	options: BasetenRuntimeFactoryOptions,
+) => CodingAgentRuntimeFactory;
+
+/**
+ * Declarative provider seam (harness study P0-1): the registry is data, not an
+ * if/else. `none` remains the offline default and is handled before lookup so
+ * no key or config is read.
+ */
+const RUNTIME_FACTORY_BUILDERS: ReadonlyMap<string, RuntimeFactoryBuilder> =
+	new Map<string, RuntimeFactoryBuilder>([
+		[META_PROVIDER_ID, createMetaRuntimeFactory],
+		[BASETEN_PROVIDER_ID, createBasetenRuntimeFactory],
+	]);
+
 export function selectRuntimeFactory(
 	env: Record<string, string | undefined>,
 	connectorTools?: ConnectorToolBinding,
 ): WorkerCompositionOverrides["createRuntime"] {
 	const name = readInferenceProvider(env);
-	const options = connectorTools === undefined ? {} : { connectorTools };
 	if (name === "none") return undefined;
-	if (name === "meta") return createMetaRuntimeFactory(env, options);
-	if (name === "baseten") return createBasetenRuntimeFactory(env, options);
-	throw new PlatformError(
-		"MISSING_CONFIG",
-		"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
-	);
+	const builder = RUNTIME_FACTORY_BUILDERS.get(name);
+	if (builder === undefined) {
+		// Preserve the exact pre-registry failure message.
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
+		);
+	}
+	const options = connectorTools === undefined ? {} : { connectorTools };
+	return builder(env, options);
 }
 
 function sandboxBackendFactory(

@@ -17,6 +17,8 @@ export type TaskContextSourceRow = {
 	organizationId: OrganizationId;
 	/** Optional so fakes/older rows can omit it; the DB read always supplies it. */
 	repositoryId?: string;
+	/** `tasks.incident_source`; null for ordinary (non-incident) tasks. */
+	incidentSource?: string | null;
 	status: TaskStatusDb;
 	goal: string;
 	acceptanceCriteria: string[];
@@ -40,7 +42,7 @@ export interface TaskContextRepository {
 }
 
 const STMT = {
-	get: `SELECT t.id, t.organization_id, t.repository_id, t.status, t.goal, t.acceptance_criteria,
+	get: `SELECT t.id, t.organization_id, t.repository_id, t.incident_source, t.status, t.goal, t.acceptance_criteria,
 			t.file_ownership, t.branch, t.budget_limits,
 			r.provider AS repository_provider,
 			r.external_full_name AS repository_full_name,
@@ -99,6 +101,8 @@ function mapTaskContextRow(row: Record<string, unknown>): TaskContextSourceRow {
 		organizationId:
 			row.organization_id as TaskContextSourceRow["organizationId"],
 		repositoryId: row.repository_id as string,
+		incidentSource:
+			typeof row.incident_source === "string" ? row.incident_source : null,
 		status: row.status as TaskContextSourceRow["status"],
 		goal: typeof row.goal === "string" ? row.goal : "",
 		acceptanceCriteria: stringArray(

@@ -71,9 +71,9 @@ Task provenance and evidence need one extra step. A bridge delivery records `inc
 
 | Need | Endpoint | Fields / notes | Source |
 |---|---|---|---|
-| Alert rule | `GET /api/v1/rules/{id}` | Name, type, state, evaluation window, frequency, description, a bounded label subset and summary/description/runbook annotations; the expression is used only when `ruleType` contains `promql` | [S4] |
+| Alert rule | `GET /api/v2/rules/{id}`, falling back to `/api/v1/rules/{id}` on `404` | Name, type, state, evaluation window (`evaluation.spec` in the newer shape), frequency, description, a bounded label subset and summary/description/runbook annotations; the expression is used only when `ruleType` contains `promql` | [S4] |
 | Metric query | `POST /api/v5/query_range` | One PromQL query named `A`; `start`/`end` in epoch milliseconds; `stepInterval` 30-300 s chosen so a series never exceeds 20 points | [S3] |
-| Rule list | `GET /api/v1/rules` | Id, name, type and state only; never expressions or channel destinations | [S4] |
+| Rule list | `GET /api/v3/rules?limit=n`, falling back to `/api/v1/rules` on `404` | Id, name, type and state only; never expressions or channel destinations | [S4] |
 
 Fixed plan on the device path: rule detail (1) when the fingerprint names a rule id, then one `query_range` (1) only when that rule is explicitly a PromQL rule and its expression passes the bounded-PromQL check. Total **2 provider calls** (hard cap 2), 10-second timeout each (clamped to 30 s), window 15-60 minutes (default 30, starting 15 minutes before `startsAt`). No log aggregate and no trace summary are implemented: the response schema keeps time series only, and scalar/table payloads are dropped. A builder or threshold rule without PromQL skips the query and reports `truncated` rather than inventing one.
 
@@ -126,7 +126,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] Relay context: `signoz.context.fetch` parses `signoz:<ruleId>` and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
 
-Live: **run 2026-11-13.** A signed bridge delivery for `signoz:e2e-rule-0001` created a task and the relay executed `signoz.context.fetch` three times (3.9–4.1 s end-to-end), all completing with an **empty** bundle (`items: []`, `truncated: true`) because the workspace has no alert rules — `signoz.list_rules` returns `null` there. With no evidence to ground it, the agent spent its turns re-listing rules and the resume job hit the 900 s job execution budget (`BUDGET_EXCEEDED`), so no PR was opened; token spend was 305,406 prompt / 20,594 completion, far below the 800,000 token cap. No alert rule was created or edited. Full run log: [`live-verification.md`](live-verification.md).
+Live: **runs 2026-11-13/14.** The 2026-11-13 run sent `signoz:e2e-rule-0001`, a rule id that does not exist in the workspace, and the relay returned an empty bundle; the run spent its turns re-listing rules and died on the job budget. The 2026-11-14 rerun used the real rule `01a1da78-8f3d-705e-9dae-9211e3840e5b` (`Isolate E2E error spike`, service `checkout`) on a SigNoz Cloud instance at `frank-shad.in2.signoz.cloud`. The first attempt showed why the earlier runs were empty: **the adapter read the v1 rule API, which answers `404` for rules created in the current console**, so a workspace that does hold a firing rule still produced `items: []`. Reading `GET /api/v2/rules/{id}` and `GET /api/v3/rules` (with a v1 fallback only on `404`) returned the real rule and the 1-rule list (4-5 s per device call), and the task context then carried an `alert_rule` item. Full run log, task ids and spend: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

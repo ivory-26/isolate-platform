@@ -185,6 +185,24 @@ contents for it.
 5. **Reject:** OSWorld, AgentBench and Aider polyglot as primary benchmarks for
    this product; they measure different surfaces.
 
+## Measured baseline (2026-11-14)
+
+`bun scripts/bench-connectors.ts` run from a directory with no `.env`, so no
+provider variable is visible to the process:
+
+```
+scenarios=24 passed=24 failed=0 providerCalls=0
+evidence/{axiom,datadog,github,grafana,honeycomb,kubernetes,newrelic,pagerduty,sentry,signoz}
+intake/{generic-*,github-workflow-failure,grafana-firing-alert,pagerduty-triggered,
+        replay-deduped,sentry-issue-created,bad-signature-rejected,autonomy-a1-unsupported}
+```
+
+Every connector in the product registry is exercised through the same
+`createConnectorContextLoader` the worker binds, and every intake scenario runs
+the real signed-delivery path against in-memory repositories. The run refuses to
+start while `BASETEN_*`/`MODAL_*` are present (verified: invoking it from the
+repo root aborts with `REFUSED: provider environment variables are set`).
+
 ## Security and cost posture
 
 The harness refuses to run when `BASETEN_*` or `MODAL_*` variables are present,

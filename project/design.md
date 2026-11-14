@@ -273,17 +273,21 @@ Implementation constraints:
 
 Do **not** reuse the animated GradientASCII background behind dashboard tables, forms, logs, charts, or other operational content. Use a solid dark canvas so dense information remains legible.
 
-Use Modal-inspired isometric SVGs and technical illustrations selectively:
+Use orthographic line schematics for landing-page diagrams. Keep isometric
+SVGs only for dashboard setup and empty states:
 
 - Workflow builder empty state / getting started.
 - Sandbox topology, isolation boundaries, or execution-plane overview.
 - Integration setup and onboarding explanations.
-- Landing-page diagrams and feature explanations.
+- Landing-page diagrams use the Isolate schematics system: plan, elevation and
+  rail views with token-driven strokes. See
+  [`LANDING-REDESIGN.md`](LANDING-REDESIGN.md).
 
 Illustration rules:
 
 - Prefer crisp SVG with restrained colors, thin strokes, simple geometry, and limited gradients.
-- Isometric illustrations should explain a system relationship or topology, not serve as meaningless decoration.
+- Landing diagrams are orthographic only: no isometric or perspective projection, extrusion, shadows, or decorative gradients.
+- Isometric illustrations may explain a system relationship or topology in dashboard empty states, not serve as meaningless decoration.
 - Use Electric Blue for active/control-plane paths, Cantaloupe for attention/approval paths, and muted gray-blue for inactive infrastructure.
 - Keep illustrations out of dense tables and active run logs.
 - Prefer lightweight SVGs to large raster images for simple diagrams.
@@ -500,7 +504,7 @@ Use the motion skill during implementation to tune timing, easing, sequencing, a
 | Main job | Explain value and establish identity | Help operate, observe, and control runs |
 | Typography | Display-led; Fireworks-inspired | Inter-led, compact, highly readable |
 | Background | Existing GradientASCII shader | Solid dark canvas |
-| Illustration | Modal-style isometric storytelling | Contextual setup/empty-state diagrams only |
+| Illustration | Orthographic schematics (plan, elevation, rail) | Contextual setup/empty-state diagrams only |
 | Color | Full brand expression, restrained gradient accents | Neutral dark UI, blue actions, orange accents |
 | Motion | More expressive but restrained | Functional, short, low-distraction |
 | Density | Spacious | Information-dense and scannable |
@@ -655,3 +659,46 @@ must be updated rather than replaced when the implementation changes.
   pull-to-refresh.
 - The landing's scroll reveal arms after hydration; below-fold sections are
   hidden until scrolled (by design) and a full-page capture must scroll first.
+
+### Landing schematics (2026-11-14)
+
+The landing illustration set now follows
+[`LANDING-REDESIGN.md`](LANDING-REDESIGN.md): orthographic plan, elevation and
+rail views with 1-2.5 px token-driven strokes, no isometric projection, no
+gradients, no raster. All eight figures render as inline React SVG so theme
+tokens resolve at runtime and `vector-effect: non-scaling-stroke` keeps stroke
+weights at CSS pixels. Section order, copy, anchors and layout are unchanged.
+
+| Figure | Component | Source bytes |
+|---|---|---:|
+| A1 sandbox boundary + A2 validation gate | `illustrations/sandbox-boundary.tsx` | 5,718 |
+| A3 approval payload + A4 PR handoff | `illustrations/approval-payload.tsx` | 4,099 |
+| A5 audit record | `illustrations/audit-record.tsx` | 3,397 |
+| A6 lifecycle rail | `components/lifecycle-rail.tsx` | 6,519 |
+| A7 device boundary + A8 connector call | `illustrations/device-boundary.tsx` | 4,755 |
+| shared shell and labels | `illustrations/schematic.tsx` | 2,135 |
+| **Total inline source** | | **26,623** |
+
+The removed static set (`apps/web/public/iso/`) measured 91,877 B across four
+files; the public illustration payload is now zero. The inline source gzips to
+6,585 B before bundler minification.
+
+- **Deviations.** Assets are inline React components rather than static files,
+  per the implementation brief. A6 arms with a one-shot keyframe on
+  `stroke-dashoffset`/`opacity` after first intersection, because the
+  transition form in the spec cannot reliably re-arm when the final state is
+  already painted; reduced motion never adds the armed class. A6's event names
+  break over two lines at the dot (y=332/356, stage row at y=386):
+  `sandbox.provisioned` measures ~250 units at the specified 20 px and cannot
+  fit the 160-unit station pitch on a single row. A5's hash column sits at
+  x=560 instead of 600 so the right-aligned offsets
+  stay clear, and its blue spine ends 24 units above the orange pause ring so
+  the two accents never sit adjacent. A6's dashed pause bridge is split around the decision node for
+  the same legibility reason. A7's `key never leaves` label starts at x=220 so
+  the 20 px annotation ends before the orange terminal bar at x=424; A8's typed
+  call sits at y=124, not 108, to keep the mandated 24 units of clearance from
+  the orange key glyph.
+- **Accessibility.** Decorative figures are `aria-hidden`; A6 is `role="img"`
+  with `<title>`/`<desc>`; lifecycle and trust also carry `sr-only` captions.
+  Meaningful strokes use `--ink-secondary` or `--ink-muted`; `--line` and
+  `--line-strong` appear only in decorative ticks and the CSS grid field.

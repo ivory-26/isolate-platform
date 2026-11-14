@@ -6,8 +6,8 @@ import {
 	sectionPadding,
 	sectionTitle,
 } from "../styles";
-import { FeatureVisual } from "./feature-visual";
 import { FrameDots } from "./frame";
+import { LifecycleRail } from "./lifecycle-rail";
 import { Reveal } from "./reveal";
 
 export function LifecycleSection() {
@@ -27,7 +27,7 @@ export function LifecycleSection() {
 				</Reveal>
 
 				<Reveal className="mt-12 lg:mt-16">
-					<FeatureVisual feature="lifecycle" />
+					<LifecycleRail />
 				</Reveal>
 
 				<ol className="mt-12 grid gap-10 border-t border-line-subtle pt-10 md:grid-cols-4 md:gap-8">

@@ -96,6 +96,16 @@ function detailSql(
 		if (statement.includes("count(*)::int AS total")) {
 			return [{ total: 2 }];
 		}
+		if (statement.includes("t.retry_of = $2")) {
+			return [
+				{
+					id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+					status: "completed",
+					retry_depth: 2,
+					created_at: new Date("2026-11-20T11:00:00.000Z"),
+				},
+			];
+		}
 		if (statement.includes("SELECT t.status, count(*)")) {
 			return [
 				{ status: "failed", count: 2 },
@@ -453,6 +463,7 @@ describe("readRunDetail", () => {
 		expect(detail.traceId).toBe("a".repeat(32));
 		expect(detail.workflowRuns).toHaveLength(1);
 		expect(detail.attempts).toHaveLength(2);
+		expect(detail.attemptsTruncated).toBe(false);
 		expect(detail.attempts[0]).toEqual({
 			attemptIndex: 1,
 			status: "failed",
@@ -467,6 +478,18 @@ describe("readRunDetail", () => {
 			errorCode: null,
 		});
 		expect(detail.events).toHaveLength(1);
+		// The exact count comes from a separate query, so the cap is honest.
+		expect(detail.eventsTotal).toBe(2);
+		expect(detail.eventsTruncated).toBe(true);
+		expect(detail.retryChildren).toEqual([
+			{
+				taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+				status: "completed",
+				retryDepth: 2,
+				createdAt: "2026-11-20T11:00:00.000Z",
+			},
+		]);
+		expect(detail.retryChildrenTruncated).toBe(false);
 		// The trace read model drops credential-shaped keys before mapping.
 		expect(detail.events[0]?.data).toEqual({ turn: 1 });
 		expect(detail.events[0]?.data).not.toHaveProperty("apiKey");
@@ -523,10 +546,21 @@ describe("readRunDetail", () => {
 		const attemptCall = calls.find((call) =>
 			call.statement.includes("FROM task_attempts"),
 		);
-		expect(attemptCall?.params).toEqual([ORG, TASK_ID, 10]);
+		// One row past the cap detects truncation without a second query.
+		expect(attemptCall?.params).toEqual([ORG, TASK_ID, 11]);
 		expect(attemptCall?.statement).toContain(
 			"JOIN tasks t ON t.id = a.task_id AND t.organization_id = $1",
 		);
+		const eventCountCall = calls.find(
+			(call) =>
+				call.statement.includes("count(*)::int AS total") &&
+				call.statement.includes("FROM run_events"),
+		);
+		expect(eventCountCall?.params).toEqual([ORG, TASK_ID]);
+		const retryCall = calls.find((call) =>
+			call.statement.includes("t.retry_of = $2"),
+		);
+		expect(retryCall?.params).toEqual([ORG, TASK_ID, 11]);
 		const approvalCall = calls.find((call) =>
 			call.statement.includes("FROM approvals a"),
 		);

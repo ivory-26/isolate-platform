@@ -2,6 +2,7 @@ import type {
 	RunApproval,
 	RunApprovalStatus,
 	RunEventActor,
+	RunEventView,
 	RunJsonValue,
 	RunsSummary,
 	RunTaskIdentity,
@@ -315,6 +316,80 @@ export function summarizeEventData(data: Record<string, RunJsonValue>): string {
 	return joined.length > EVENT_SUMMARY_MAX_LENGTH
 		? `${joined.slice(0, EVENT_SUMMARY_MAX_LENGTH - 1)}…`
 		: joined;
+}
+
+/**
+ * One `validation.finished` event reduced to the bounded fields the worker
+ * records. The two stages carry different fields (`command` has exit/duration/
+ * output, `diff` has file counts and byte size), so absent fields stay null
+ * rather than being guessed.
+ */
+export type RunValidationEntry = {
+	stage: string | null;
+	status: string | null;
+	exitCode: number | null;
+	durationMs: number | null;
+	outputBytes: number | null;
+	bytes: number | null;
+	truncated: boolean | null;
+	filesChanged: number | null;
+	insertions: number | null;
+	deletions: number | null;
+	createdAt: string;
+};
+
+function dataString(value: RunJsonValue | undefined): string | null {
+	if (typeof value !== "string" || value.length === 0) return null;
+	return value.slice(0, 48);
+}
+
+function dataNumber(value: RunJsonValue | undefined): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function dataBoolean(value: RunJsonValue | undefined): boolean | null {
+	return typeof value === "boolean" ? value : null;
+}
+
+/** Parses the durable `validation.finished` events in occurrence order. */
+export function validationEntries(
+	events: readonly RunEventView[],
+): RunValidationEntry[] {
+	const entries: RunValidationEntry[] = [];
+	for (const event of events) {
+		if (event.type !== "validation.finished") continue;
+		const data = event.data;
+		entries.push({
+			stage: dataString(data.stage),
+			status: dataString(data.status),
+			exitCode: dataNumber(data.exitCode),
+			durationMs: dataNumber(data.durationMs),
+			outputBytes: dataNumber(data.outputBytes),
+			bytes: dataNumber(data.bytes),
+			truncated: dataBoolean(data.truncated),
+			filesChanged: dataNumber(data.filesChanged),
+			insertions: dataNumber(data.insertions),
+			deletions: dataNumber(data.deletions),
+			createdAt: event.createdAt,
+		});
+	}
+	return entries;
+}
+
+/**
+ * Elapsed milliseconds between two stored timestamps, or null when either is
+ * absent/unparseable or the end precedes the start. Never derives "now".
+ */
+export function durationBetween(
+	start: string | null,
+	end: string | null,
+): number | null {
+	if (start === null || end === null) return null;
+	const started = new Date(start).getTime();
+	const finished = new Date(end).getTime();
+	if (!Number.isFinite(started) || !Number.isFinite(finished)) return null;
+	if (finished < started) return null;
+	return finished - started;
 }
 
 /** UTC `HH:MM:SS.mmm` for the log viewer, independent of browser locale. */

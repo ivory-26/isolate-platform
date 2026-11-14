@@ -332,6 +332,17 @@ export type RunArtifact = {
 	createdAt: string;
 };
 
+/**
+ * A later task created by the retry action and linked to this one through
+ * `retry_of`. Bounded to a small list; the child is the authoritative task.
+ */
+export type RunRetryChild = {
+	taskId: string;
+	status: TaskStatus;
+	retryDepth: number;
+	createdAt: string;
+};
+
 export type RunTaskIdentity = {
 	id: string;
 	repository: RunRepositoryRef;
@@ -355,9 +366,18 @@ export type RunTaskIdentity = {
 export type RunDetailView = {
 	task: RunTaskIdentity;
 	workflowRuns: RunWorkflowRun[];
+	/** Bounded to `RUN_DETAIL_ATTEMPT_LIMIT`; see `attemptsTruncated`. */
 	attempts: RunAttempt[];
+	attemptsTruncated: boolean;
+	/** Later retry tasks linked by `retry_of`, oldest first. */
+	retryChildren: RunRetryChild[];
+	retryChildrenTruncated: boolean;
 	traceId: string | null;
+	/** Bounded to `RUN_DETAIL_EVENT_LIMIT`; see `eventsTruncated`. */
 	events: RunEventView[];
+	/** Exact count of durable events, so the cap can be stated honestly. */
+	eventsTotal: number;
+	eventsTruncated: boolean;
 	toolInvocations: RunToolInvocation[];
 	usage: RunUsageRecord[];
 	connectorCalls: RunConnectorCall[];

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-14 (wave 27: live end-to-end verification for six bridge connectors)
+Last updated: 2026-11-15 (wave 27 follow-up: SigNoz reaches a PR with evidence; Honeycomb sender invariants and credential blocker measured)
 
 ## Current: wave 27 — connector live E2E and honest run budgets (2026-11-14)
 
@@ -37,6 +37,39 @@ to the measured truth. Run log: [`docs/connectors/live-verification.md`](../docs
   (`90895a1`); connector docs aligned with the bridge-only paths (`4a8c76b`);
   **wave 25** connector-detail route, pairing-origin and dead-letter fixes
   (`5389565`, `d1881ae`, `3c6bc6a`, `d4f19b0`, `2f03087`).
+
+### Wave 27 follow-up (2026-11-14/15) — measured connector truth
+
+- **SigNoz now completes with evidence.** SigNoz ≥ 0.150 serves rule reads on
+  `/api/v2/rules/{id}` and `/api/v3/rules`; the v1 path answers `404`. After
+  `74385ef` and the `signoz-viewer` RBAC grant, run 7 (`f99a9b84`) carried one
+  `alert_rule` evidence item (8.3 s and 14.0 s calls), committed `413eb37` and
+  opened PR #8 — the first SigNoz delivery to finish the whole pipeline.
+- **A documentation-only diff no longer fails validation.** `1558483`: when every
+  changed path is prose, the repository's validation command is skipped with
+  `validation.finished {stage: "command", status: "skipped", reason:
+  "documentation-only diff"}`. Before this, PR-report deliverables always failed
+  on the fixture's pre-existing red suite. Run 7 recorded exactly that event.
+- **Honeycomb's missing vendor record is fixed; its credential is not.** Dataset
+  `checkout` now exists in environment `test` with three events (`service:
+  checkout`, status codes `500`, `502`, `200`). Three further deliveries exposed
+  two sender invariants and one credential blocker: a Honeycomb fingerprint must
+  be `dataset:triggerId:state` (a two-segment one silently yields no evidence
+  call — run 8, PR #9), the signal `kind` is forwarded as the query kind and must
+  be `latency`/`error_rate`/`saturation` (`alert` fails `VALIDATION_FAILED` — run
+  9, stopped at its gate), and the paired key answers `/1/auth` but `401`s the
+  query endpoint, so every read is `INTEGRATION_UNAVAILABLE` (run 10, PR #10).
+  Re-pairing with an environment **Configuration** API key is the remaining step;
+  verification cannot detect the difference because it only probes `/1/auth`.
+- **Datadog's real monitor is `344995520`** ("Isolate E2E CPU load",
+  `avg(last_5m):avg:system.load.1{*} > 90`, state `NO DATA`, no service tag); the
+  earlier run used the mistyped `344490966`. Run 11's context calls complete
+  without error but return zero items and `truncated: true`, i.e. the monitor
+  read failed as an optional item rather than as a typed failure.
+- **One active task per organization gates intake.** With a task parked at a
+  gate, the next delivery is recorded `ignored / THROTTLED` and no task is
+  created; the signal row is still stored, so a later delivery with the same
+  fingerprint dedupes.
 
 ### Verification semantics
 

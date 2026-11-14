@@ -22,6 +22,11 @@ Observed on 2026-11-13/14 against a local stack (web on `localhost:3000`, Postgr
 | Datadog (rerun) | `datadog:344490966` | `b85ae690` | `datadog.context.fetch` completed twice (6.5 s, 5.2 s), **0 items** (synthetic monitor id) | none | resume job hit the 900 s job budget (`BUDGET_EXCEEDED`) |
 | Datadog (legacy, pre-subscription) | — (NULL provenance) | `74dc905c` | none — fired before the subscription existed | #3 | PR created, **no evidence path** |
 | SigNoz | `signoz:e2e-rule-0001` | `654176d3` | `signoz.context.fetch` completed three times (3.9–4.1 s), **0 items** — workspace has no alert rules (`signoz.list_rules` returns `null`) | none | resume job hit the 900 s job budget (`BUDGET_EXCEEDED`) |
+| SigNoz (run 7, after the v2/v3 fix and RBAC grant) | `signoz:01a1da78-8f3d-705e-9dae-9211e3840e5b` | `f99a9b84` | `signoz.context.fetch` completed twice (8.3 s, 14.0 s), **1 item**, truncated | #8 | **complete** — evidence + branch + commit `413eb37` + PR |
+| Honeycomb (run 8) | `honeycomb:e2e-checkout-error-spike-r8` | `3a91e5cc` | none — a two-segment fingerprint fails `parseConnectorIncidentFingerprint`, so the loader returned no bundle and never enqueued a call; the agent's own `honeycomb.list_slos` failed `INTEGRATION_UNAVAILABLE` | #9 | **complete** intake → branch → PR, **no evidence** (malformed fingerprint) |
+| Honeycomb (run 9) | `honeycomb:checkout:checkout-error-rate:triggered` | `b1f2fc0d` | `honeycomb.context.fetch` failed `VALIDATION_FAILED` — the signal kind `alert` is forwarded as the Honeycomb *query kind*, which accepts only `latency`/`error_rate`/`saturation` | none | rejected at the push gate; no sandbox was created |
+| Honeycomb (run 10) | `honeycomb:checkout:checkout-error-rate-r10:triggered` | `0a6bf6e8` | `honeycomb.context.fetch` failed `INTEGRATION_UNAVAILABLE` — the paired key answers `/1/auth` but `401`s the query endpoint | #10 | **complete** intake → branch → commit `100a2cf` → PR, **no evidence** (credential cannot query) |
+| Datadog (run 11, real monitor id) | `datadog:344995520` | `97f9e8a7` | `datadog.context.fetch` completed twice, **0 items**, `truncated: true` — the monitor read failed as an optional item, not as a typed error | #11 | **complete** intake → branch → commit `8f681ac` → PR, **no evidence** |
 
 Every PR above is a real pull request on `ivory-26/isolate-e2e-fixture` created from the per-task `task/incident-*` branch after the fixture's failing tests were fixed.
 
@@ -33,6 +38,12 @@ Every PR above is a real pull request on `ivory-26/isolate-e2e-fixture` created 
 - **The job execution budget, not the token cap, is what binds.** Four runs dead-lettered with `BUDGET_EXCEEDED` while token spend stayed far below `WORKER_MAX_TOKENS_PER_TASK=800000`: New Relic run 1 and Datadog/SigNoz hit `WORKER_JOB_TIMEOUT_MS` (600 s, later 900 s) and Kubernetes run 2 exhausted the per-task **agent turn budget**. The wall-clock/turn budgets are the real limit for incident tasks that carry weak or empty evidence; the token cap only matters for large prompts.
 - **Empty evidence is what makes runs wander.** Runs with a non-empty bundle (New Relic, Axiom, Kubernetes run 2) reached a push in a few turns. Runs whose bundle was empty (Honeycomb, SigNoz, Datadog rerun) spent their turns re-querying the vendor — `signoz.list_rules` was called four times in one resume job — and ran out of budget. A task prompt that tells the model "evidence is empty, proceed" would bound this.
 - **Cost is unmetered without `COST_PRICE_TABLE`.** Every model row has `cost_usd = NULL`, the sandbox row too, and the worker logs one `USD cap cannot bind without COST_PRICE_TABLE` warning per job. The USD cap is structurally present but cannot bind until a price table is configured.
+- **A connector fingerprint is parsed per connector, and an unparseable one fails silently.** Honeycomb needs four segments — `honeycomb:<dataset>:<triggerId>:<state>` — and `signoz`/`datadog`/`newrelic`/`axiom` need two. Run 8 sent `honeycomb:e2e-…`, which parses to `null`; the loader then returns no bundle and never enqueues a call, and nothing in the task says evidence was skipped. The task still ran to a PR.
+- **The signal `kind` is forwarded to the vendor tool as a selector.** For Honeycomb the daemon maps it through `HONEYCOMB_QUERY_KINDS`, which accepts only `latency`, `error_rate` and `saturation`; a delivery whose kind is `alert` fails `VALIDATION_FAILED` in 4 ms with no provider call. Run 10 sent `error_rate` and got past validation.
+- **Honeycomb verification is weaker than capability.** The stored key answers `GET /1/auth` (so the integration page says Connected/verified) but `401`s the query endpoint, which `fetchHoneycombIncidentContext` maps to `INTEGRATION_UNAVAILABLE`. An ingest-only key cannot read data; a Configuration API key is required. No test in the current suite distinguishes the two, because verification only probes `/1/auth`.
+- **SigNoz was fixed by a rules-API change, not by data.** SigNoz ≥ 0.150 serves rule reads on `/api/v2/rules/{id}` and `/api/v3/rules`; the v1 path answers `404`. Commit `74385ef` moved the reader to the v2/v3 paths and the RBAC grant (`signoz-viewer`) let the service account enumerate rules, after which run 7 returned a real bundle and opened PR #8.
+- **A documentation-only diff skips the repository validation command.** Commit `1558483`: when every changed path is prose (`.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`, `.txt`), the gate records `validation.finished {stage: "command", status: "skipped", reason: "documentation-only diff"}` instead of running `bun test`. Before this, the report deliverable always failed on the fixture repo's pre-existing red suite; SigNoz run 7 is the first run to reach a PR through the new path (`awaiting pull request approval` at 18:07:35).
+- **One active task per organization gates new deliveries.** While `b1f2fc0d` (Honeycomb run 9) sat at its push gate, the next delivery was admitted as `ignored` with reason `THROTTLED`; the signal was still recorded, but no task was created. A task parked at an approval blocks the intake path for its organization.
 
 ## Spend (measured from `usage_records`, model rows only; every `cost_usd` is NULL)
 
@@ -47,11 +58,17 @@ Every PR above is a real pull request on `ivory-26/isolate-e2e-fixture` created 
 | `eadd9a37` | Kubernetes run 2 (turn budget) | 9 | 569,996 | 39,070 |
 | `b85ae690` | Datadog rerun (job budget) | 6 | 363,524 | 24,177 |
 | `654176d3` | SigNoz (job budget) | 6 | 305,406 | 20,594 |
+| `f99a9b84` | SigNoz run 7 (PR #8) | 13 | 310,302 | 29,318 |
+| `3a91e5cc` | Honeycomb run 8 (PR #9) | 13 | 229,224 | 29,967 |
+| `0a6bf6e8` | Honeycomb run 10 (PR #10) | 13 | 169,620 | 18,575 |
+| `97f9e8a7` | Datadog run 11 (PR #11) | 13 | 197,560 | 19,674 |
 
 No provider key was read or printed; no secret appears in any request, log or fixture. The only live vendors used here are the free-tier ones already paired to the relay; no paid provider (Baseten, Modal) was exercised beyond the sandboxes each approved agent run provisions, and every sandbox was terminated by the worker.
 
 ## Known residual gaps
 
-- SigNoz has no PR: its workspace has no alert rules, so there is no fingerprint an alert could name, and the run could not ground a fix in evidence.
-- The Honeycomb and Datadog bundles are empty for the same class of reason (no datasets / no such monitor). A future acceptance should create one fixture dataset or monitor so the bundle carries real rows.
+- SigNoz is complete: run 7 carried one evidence item and opened PR #8. The earlier "no alert rules" state was an API-version bug plus a missing RBAC grant, both fixed.
+- **Honeycomb has real vendor data now, but the paired credential cannot read it.** Dataset `checkout` exists in environment `test` with three events (`service: checkout`, status codes `500`, `502`, `200`, tag `incident: signoz-error-spike`). Every query call still fails `INTEGRATION_UNAVAILABLE` because the stored key is ingest-class. Re-pairing Honeycomb with an environment **Configuration** API key is the remaining step; no code change is needed.
+- Datadog still has no evidence row: the account's only monitor is `344995520` ("Isolate E2E CPU load", `avg(last_5m):avg:system.load.1{*} > 90`, state `NO DATA`, no service tag). Its id was previously mistyped as `344490966`.
 - Kubernetes run 2 proved the evidence path end to end but did not reach a PR; the earlier run's PR (#7) covers the intake → branch → PR path.
+- **No evidence is a silent state.** `createConnectorContextLoader` returns `null` for a malformed fingerprint, a missing device, a missing signal row or a failed call, and none of those produce a `run_events` row. A run page therefore cannot say "evidence was skipped, and why". Adding one bounded `connector.context.skipped {reason}` event at the handler call site is the smallest fix and is not implemented here.

@@ -698,6 +698,34 @@ function budgetVerdict(note: string): HandlerVerdict {
 	return { outcome: "dead_letter", code: "BUDGET_EXCEEDED", note };
 }
 
+/** Prose suffixes a documentation/report deliverables diff can touch. */
+const DOCUMENTATION_EXTENSIONS = [
+	".md",
+	".mdx",
+	".markdown",
+	".rst",
+	".adoc",
+	".txt",
+] as const;
+
+/**
+ * A diff that only touches prose cannot be graded by the repository's
+ * validation command: that command exercises code, and a red suite is often the
+ * incident under investigation rather than a regression this task introduced.
+ * A report or docs deliverable would therefore always fail the gate on a
+ * pre-existing failure. The command is skipped with an explicit reason; the
+ * diff, ownership and approval gates still decide what ships.
+ */
+export function isDocumentationOnlyDiff(files: readonly string[]): boolean {
+	if (files.length === 0) return false;
+	return files.every((file) => {
+		const lower = file.toLowerCase();
+		return DOCUMENTATION_EXTENSIONS.some((extension) =>
+			lower.endsWith(extension),
+		);
+	});
+}
+
 /** Normalizes a persisted token total for cap arithmetic; junk counts as zero. */
 function persistedTokenTotal(value: number): number {
 	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -1483,6 +1511,8 @@ function createHandler(
 						false,
 					);
 
+					const documentationOnlyDiff = isDocumentationOnlyDiff(stat.files);
+
 					// Wave 8 validation gate. It runs in THIS sandbox, after the
 					// diff exists and before anything is pushed. No configured
 					// command keeps the wave-7 meaning and is recorded as skipped.
@@ -1629,14 +1659,20 @@ function createHandler(
 						}
 					}
 					let validationReport: ValidationReport | null = null;
-					if (validationPolicy === null) {
+					if (validationPolicy === null || documentationOnlyDiff) {
 						await mode.lifecycle.event({
 							organizationId: job.organizationId,
 							taskId: job.taskId,
 							workflowRunId: null,
 							type: "validation.finished",
 							actor: "worker",
-							data: { stage: "command", status: "skipped" },
+							data: documentationOnlyDiff
+								? {
+										stage: "command",
+										status: "skipped",
+										reason: "documentation-only diff",
+									}
+								: { stage: "command", status: "skipped" },
 						});
 						emitMetric(ctx.logger, WORKER_METRICS.validationOutcome, {
 							outcome: "skipped",

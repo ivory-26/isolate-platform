@@ -55,6 +55,7 @@ import {
 	closeTaskAsFailed,
 	createResumeTaskHandler,
 	createTaskExecutionHandler,
+	isDocumentationOnlyDiff,
 	pushApprovalPayloadSha256,
 	type TaskExecutionDeps,
 } from "./task-execution-handler";
@@ -2606,6 +2607,26 @@ function artifactsOf(lifecycle: FakeLifecycle) {
 	);
 }
 
+describe("isDocumentationOnlyDiff", () => {
+	test("prose-only diffs are documentation", () => {
+		expect(isDocumentationOnlyDiff(["INCIDENT_REPORT.md"])).toBe(true);
+		expect(isDocumentationOnlyDiff(["docs/a.md", "docs/b.MDX"])).toBe(true);
+		expect(isDocumentationOnlyDiff(["notes/memory.txt"])).toBe(true);
+	});
+
+	test("any code path keeps the command gate", () => {
+		expect(isDocumentationOnlyDiff(["INCIDENT_REPORT.md", "src/x.ts"])).toBe(
+			false,
+		);
+		expect(isDocumentationOnlyDiff(["package.json"])).toBe(false);
+		expect(isDocumentationOnlyDiff(["README.md.bak"])).toBe(false);
+	});
+
+	test("an empty diff is not documentation", () => {
+		expect(isDocumentationOnlyDiff([])).toBe(false);
+	});
+});
+
 describe("task execution handler — wave 8 validation gate", () => {
 	test("a passing command runs in the same sandbox and stores a log artifact", async () => {
 		const lifecycle = new FakeLifecycle();
@@ -2696,6 +2717,77 @@ describe("task execution handler — wave 8 validation gate", () => {
 			"review_ready",
 		]);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a documentation-only diff skips the configured command with a reason", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 1,
+			insertions: 12,
+			deletions: 0,
+			files: ["INCIDENT_REPORT.md"],
+		};
+		workspace.patch =
+			"diff --git a/INCIDENT_REPORT.md b/INCIDENT_REPORT.md\n+x\n";
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			validationPolicy: VALIDATION_POLICY,
+			// A red suite left by the incident itself must not fail the attempt.
+			executeHandler: () =>
+				commandResult({ exitCode: 1, stdout: "1 test failed\n" }),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		// The command never ran: no execute call, no log_bundle artifact.
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(artifactsOf(lifecycle).map((artifact) => artifact.kind_)).toEqual([
+			"diff",
+		]);
+		const skipped = lifecycle.calls.find(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		);
+		expect(skipped).toMatchObject({
+			data: {
+				stage: "command",
+				status: "skipped",
+				reason: "documentation-only diff",
+			},
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+	});
+
+	test("a mixed diff still runs the configured command", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 2,
+			insertions: 4,
+			deletions: 1,
+			files: ["INCIDENT_REPORT.md", "src/widget.ts"],
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			validationPolicy: VALIDATION_POLICY,
+			executeHandler: () => commandResult(),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.provider.executeCalls).toHaveLength(1);
 	});
 
 	test("a failing command fails the task with no push and no diff artifact", async () => {

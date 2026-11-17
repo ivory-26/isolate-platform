@@ -306,6 +306,7 @@ function mapListRow(row: Record<string, unknown>): RunListRow {
 	return {
 		taskId: text(row.id),
 		branch: text(row.branch),
+		goal: typeof row.goal === "string" ? row.goal : "",
 		status: taskStatus(row.status),
 		retryDepth: count(row.retry_depth),
 		incidentSource: optionalText(row.incident_source),

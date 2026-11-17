@@ -50,12 +50,11 @@ const COLUMNS = [
 export function InboxFilters({
 	search,
 	count,
-	total,
 	onChange,
 }: {
 	search: InboxSearch;
+	/** Rows returned by the server for the active filters. */
 	count: number;
-	total: number;
 	onChange: (changes: Partial<InboxSearch>) => void;
 }) {
 	const filtered =
@@ -138,9 +137,6 @@ export function InboxFilters({
 			<div className="flex items-center gap-3 sm:ml-auto">
 				<p className="text-xs text-ink-muted tabular-nums">
 					{filtered ? `${count} matching` : `${count} delivered`}
-					{search.severity !== undefined
-						? " (severity applied to loaded window)"
-						: ""}
 				</p>
 				{filtered ? (
 					<Button
@@ -159,11 +155,6 @@ export function InboxFilters({
 					</Button>
 				) : null}
 			</div>
-			{total > count ? (
-				<span className="sr-only">
-					{total - count} deliveries are hidden by the active filters.
-				</span>
-			) : null}
 		</div>
 	);
 }

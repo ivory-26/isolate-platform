@@ -96,6 +96,25 @@ describe("worker composition — offline defaults", () => {
 		).toBe(true);
 	});
 
+	test("maps the optional preflight and retry config into caps", () => {
+		const configured = workerConfigSchema.parse({
+			workerId: "test-worker",
+			modelContextWindow: 128_000,
+			providerRetryAttempts: 2,
+		});
+		const deps = createOfflineWorkerDeps(
+			configured,
+			makeFakeLogger([]),
+		).taskExecution;
+		expect(deps.caps).toEqual({
+			maxOutputTokensPerTurn: configured.maxOutputTokensPerTurn,
+			maxTaskTokens: configured.maxTokensPerTask,
+			maxSteps: configured.maxAgentSteps,
+			contextWindowTokens: 128_000,
+			providerRetryAttempts: 2,
+		});
+	});
+
 	test("forwards the sandbox backend and credential resolver from the real composition", () => {
 		const createSandboxBackend = (() => ({
 			readFile: async () => ({ content: "", truncated: false }),
@@ -160,6 +179,17 @@ describe("worker composition — offline defaults", () => {
 		expect(taskExecution.loadContextBundle).toBe(loadContextBundle);
 		const unbound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]));
 		expect(unbound.taskExecution.loadContextBundle).toBeUndefined();
+	});
+
+	test("forwards the wave 26 task-usage loader and leaves it absent offline", () => {
+		const loadTaskUsage = async () => ({ tokens: 42, costUsd: 0.005 });
+		const bound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]), {
+			loadTaskUsage,
+		});
+		// Dropping this seam makes every cap per-attempt again.
+		expect(bound.taskExecution.loadTaskUsage).toBe(loadTaskUsage);
+		const unbound = createOfflineWorkerDeps(CONFIG, makeFakeLogger([]));
+		expect(unbound.taskExecution.loadTaskUsage).toBeUndefined();
 	});
 
 	test("unconfigured runtime factory fails closed with MISSING_CONFIG", () => {
@@ -228,6 +258,13 @@ describe("worker composition — adapter overrides", () => {
 		const runtime: CodingAgentRuntime = {
 			id: "fake",
 			name: "Fake",
+			capabilities: {
+				streaming: false,
+				toolCalls: false,
+				approvals: false,
+				session: false,
+				context: false,
+			},
 			async runTurn() {
 				return "";
 			},
@@ -442,6 +479,13 @@ describe("worker composition — adapter overrides", () => {
 			const runtime: CodingAgentRuntime = {
 				id: "fake",
 				name: "Fake",
+				capabilities: {
+					streaming: false,
+					toolCalls: false,
+					approvals: false,
+					session: false,
+					context: false,
+				},
 				async runTurn() {
 					const usage: AgentUsage = {
 						providerId: "baseten",
@@ -500,6 +544,9 @@ describe("worker composition — adapter overrides", () => {
 				maxOutputTokensPerTurn: CONFIG.maxOutputTokensPerTurn,
 				maxTaskTokens: CONFIG.maxTokensPerTask,
 				maxSteps: CONFIG.maxAgentSteps,
+				// Wave 26: the handler always seeds the task-wide accumulator; the
+				// offline composition has no usage loader, so it starts at zero.
+				priorTaskTokens: 0,
 			},
 		]);
 		expect(sinkRows).toHaveLength(2); // one model row + one sandbox row

@@ -11,7 +11,12 @@ export const inboxKeys = { all: ["current-caller", "inbox"] as const };
 export const inboxOptions = (search: InboxSearch) => {
 	const input = inboxQueryFor(search);
 	return queryOptions({
-		queryKey: [...inboxKeys.all, input.status ?? "all", input.source ?? "all"],
+		queryKey: [
+			...inboxKeys.all,
+			input.status ?? "all",
+			input.source ?? "all",
+			input.severity ?? "all",
+		],
 		queryFn: () => listInbox({ data: input }),
 		staleTime: 15_000,
 		retry: false,

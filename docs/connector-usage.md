@@ -137,7 +137,8 @@ Shared contracts are committed before any adapter. A connector PR that adds a
 source to a local union is rejected.
 
 1. `packages/shared/src/types/incident.ts` — add the source to `INCIDENT_SOURCES`
-   (currently `github`, `sentry`, `pagerduty`, `datadog`, `grafana`, `generic`),
+   (currently `github`, `sentry`, `pagerduty`, `datadog`, `grafana`,
+   `kubernetes`, `newrelic`, `honeycomb`, `axiom`, `signoz`, `generic`),
    keep both schemas strict and capped.
 2. `packages/mastra/src/tools/policy.ts` and `sandbox-tools.ts` (or a new
    `connector-tools.ts`) — add every `ToolName` and its band: reads `read_only`;
@@ -187,16 +188,20 @@ server-side key and no environment fallback for a tenant.
 
 ### 3.2 Tool names and risk bands
 
-The existing table is `SANDBOX_TOOL_RISKS` in
-`packages/mastra/src/tools/sandbox-tools.ts`. Connector tools extend the same
-bands; they do not get a private policy.
+Sandbox tools are in `SANDBOX_TOOL_RISKS`
+(`packages/mastra/src/tools/sandbox-tools.ts`); relay tools are in
+`CONNECTOR_TOOL_RISKS` (`packages/mastra/src/tools/connector-tools.ts`).
+Connector tools extend the same bands; they do not get a private policy. A name
+in the risk table is not callable until the worker binds an implementation for
+the organization's active device and credential.
 
 | Tool | Band | Behavior |
 |---|---|---|
 | `repo.read_file`, `repo.list_files`, `repo.search`, `git.read`, `sandbox.exec`, `git.diff_summary` | `read_only` | Sandbox-backed; audited |
 | `github.comment`, `github.rerun_workflow` | `scoped_write` | Implemented functions; **not registered as tools yet** |
-| `sentry.issue_context`, `pagerduty.incident_context`, `grafana.query`, `datadog.query`, `k8s.describe` | `read_only` (design) | Server-side provider read |
-| `pagerduty.ack`, `pagerduty.resolve`, `kafka.produce` | `scoped_write`/`sensitive` (design) | Provider mutation; audit + narrow credential |
+| `sentry.list_issues`, `sentry.get_issue`, `sentry.latest_event`, `grafana.query_metrics`, `grafana.query_logs`, `grafana.get_alert_rule`, `pagerduty.list_incidents`, `pagerduty.get_incident`, `pagerduty.list_log_entries`, `k8s.list_events`, `k8s.get_pod`, `k8s.get_deployment`, `k8s.logs_tail`, `datadog.query_metrics`, `datadog.search_logs`, `datadog.get_incident`, `datadog.get_monitor`, `axiom.query_apl`, `axiom.get_monitor`, `axiom.list_datasets`, `signoz.query_range`, `signoz.get_rule`, `signoz.list_rules`, `newrelic.run_nrql`, `newrelic.get_entity`, `newrelic.list_alert_policies`, `honeycomb.run_query`, `honeycomb.get_trigger`, `honeycomb.list_slos` | `read_only` | Relay-bound: the worker sends a typed call and the paired device performs the provider read |
+| `pagerduty.acknowledge`, `pagerduty.resolve` | `scoped_write` | Relay-bound provider mutation; audited with `details.risk` |
+| `k8s.rollout_restart`, `k8s.rollback`, `k8s.apply`, `k8s.scale`, `k8s.exec`, `k8s.delete` | Not bound | Out of scope in the Kubernetes module; an unlisted tool is `POLICY_DENIED` |
 | `git.push_branch`, `github.create_pull_request`, `github.deploy`, `github.rollback` | `sensitive` | Persisted approval, resume job |
 | `github.merge_pull_request`, `db.migrate`, `deploy.request` | `destructive` | Denied by `createRiskTablePolicy` |
 
@@ -396,9 +401,10 @@ change, and until then the application predicate is the control.
 **Current limitation.** The durable `connector_calls` queue (`0011`) and the
 claim/result/heartbeat transport are implemented; a worker restart does not lose
 a queued call. The relay must still be online before the call deadline. Request
-signing and per-request nonces remain design-only, and only Kubernetes has a
-local live proof among the relay connectors. See
-[`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
+signing and per-request nonces remain design-only. Every relay connector except
+Sentry now has a recorded live run; the measured results, timings and empty-bundle
+cases are in [`connectors/live-verification.md`](connectors/live-verification.md).
+See [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ## 5. Multi-connector routing
 
@@ -500,6 +506,25 @@ collapsed so evidence cannot pose as a new section; URLs are display-only,
 https, bounded and without userinfo. `(truncated)` renders when the bundle or
 the prompt cap dropped evidence.
 
+### 6.5 Incident evidence preload (implemented)
+
+For a task that carries `incident_source` and `incident_fingerprint`, the worker
+enqueues exactly one `<source>.context.fetch` device call before the first turn,
+after parsing the fingerprint, resolving an `active` device and `active`
+credential, and finding the stored signal row. Kubernetes uses the short prefix,
+`k8s.context.fetch`; `service` and `kind` come from that stored row. The device
+runs the fixed plan and returns a bundle that enters the same cap, redact and
+prompt path above.
+
+Any failure - no device, offline relay, missing row, unparsable fingerprint,
+timeout, malformed or mismatched bundle - returns `null`. **Evidence failure is
+non-fatal:** the task runs without that connector's evidence and is never
+failed, retried or delayed by the preload. Datadog, New Relic, Honeycomb, Axiom,
+SigNoz and Kubernetes have no native intake adapter; their signals arrive
+through the generic signed bridge (`POST /api/webhooks/<any-path>`, HMAC over
+`<timestamp>.<body>` with `WEBHOOK_SIGNING_SECRET`), and provenance is recorded
+only when an enabled subscription for the connector id matches the delivery.
+
 ## 7. Failure semantics
 
 | Provider result | Meaning | Action |
@@ -531,11 +556,11 @@ The order is evidence value per unit of new trust, not vendor popularity.
 |---|---|---|---|---|---|---|
 | P0 | Generic signed webhook | Self-hosted | `X-Isolate-Signature` | None | **Implemented** | Shared transport |
 | P1 | GitHub | Free for public/private within plan | `x-hub-signature-256` | Runs, jobs, checks, rules, ownership, commits | **Implemented** | Code location + owner |
-| P2 | Sentry | Free developer plan exists; verify current limits | `Sentry-Hook-Signature` | Issue, event, stack, release | Design-only | Error → frame → release |
-| P2 alt | PagerDuty | Free plan exists; verify current limits | `X-PagerDuty-Signature` | Incident lifecycle, service | Design-only | Paging system of record |
-| P3 | Grafana / Prometheus | Grafana Cloud free tier; self-host free | Alert webhook / HMAC | Metric/log query | Design-only | "What changed" |
-| P3 alt | Datadog / New Relic | Trial/credits, not free forever | Webhook, no standard HMAC for Datadog | Metrics, logs, incidents | Design-only | Only if it owns the data |
-| P4 | Kubernetes | No vendor tier; cluster RBAC | Event/alert webhook via bridge | Pods, events, deployments | Design-only | Runtime state |
+| P2 | Sentry | Free developer plan exists; verify current limits | `Sentry-Hook-Signature` | Issue, event, stack, release | **Implemented** (native intake, fake-tested) | Error → frame → release |
+| P2 alt | PagerDuty | Free plan exists; verify current limits | `X-PagerDuty-Signature` | Incident lifecycle, service | **Implemented** (native intake, fake-tested) | Paging system of record |
+| P3 | Grafana / Prometheus | Grafana Cloud free tier; self-host free | Alert webhook / HMAC | Metric/log query | **Implemented for Grafana** (native intake, fake-tested); Prometheus only as a Grafana datasource | "What changed" |
+| P3 alt | Datadog / New Relic | Trial/credits, not free forever | Generic signed bridge; no native intake adapter | Metrics, logs, incidents | **Read adapter implemented** (fake-tested); trigger via the generic bridge | Only if it owns the data |
+| P4 | Kubernetes | No vendor tier; cluster RBAC | Generic signed bridge; no native intake adapter | Pods, events, deployments | **Read adapter implemented** (live proof through the bridge: warning events + pod logs); trigger via the generic bridge | Runtime state |
 | P5 | Kafka bridge | Apache Kafka OSS is free; managed tiers vary | Bridge → generic HMAC | None (produce/consume) | Design-only | Existing event bus |
 | P5 | SCA scanners (Trivy/Grype/OSV) | OSS scanners are free | CI webhook / generic | Scan report | Design-only | Supply-chain evidence |
 

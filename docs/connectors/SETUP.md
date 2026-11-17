@@ -4,8 +4,8 @@
 |---|---|
 | Audience | Operators connecting their own free or self-hosted accounts |
 | Scope | Exactly ten connectors: GitHub, Sentry, Grafana, PagerDuty, Kubernetes, Datadog, New Relic, Honeycomb, Axiom, SigNoz |
-| Status | Living guide. Ten adapters; relay-held credentials, vendor pairing fields and bounded verification are implemented. Among the nine relay connectors only Kubernetes has a local live proof; SaaS live runs remain pending |
-| Date | 2026-11-02 |
+| Status | Living guide. Ten adapters; relay-held credentials, vendor pairing fields and bounded verification are implemented. Every relay connector except Sentry now has a recorded live run; see [`live-verification.md`](live-verification.md) |
+| Date | 2026-11-14 |
 | Architecture | [`../connector-usage.md`](../connector-usage.md); [`../connector-onboarding.md`](../connector-onboarding.md) |
 | Free-tier matrix | [`free-tier-catalog.md`](free-tier-catalog.md) |
 | Current limits | [`../KNOWN-LIMITS.md`](../KNOWN-LIMITS.md) |
@@ -35,7 +35,7 @@ Notes:
 - Sentry, Grafana and PagerDuty now have signed intake modes. Datadog, New Relic, Honeycomb, Axiom, SigNoz and Kubernetes have no native verifier and require the signed generic bridge.
 - Worker tool binding is merged: the 31 connector tools are registered only when `DEVICE_GATEWAY_ENABLED=true` and a relay is polling; otherwise they stay denied. The relay daemon is implemented and polls the device routes.
 - Pairing captures the connector's secret fields and selectors on the relay. **Verify connection** performs exactly one bounded `connector.verify` read; success sets `active` and `last_validated_at`, an auth rejection sets `invalid`, and a timeout leaves the status unchanged. This is not a full scope test of every tool.
-- No SaaS vendor except GitHub has been exercised live. Every SaaS adapter is fake-tested.
+- Every relay connector except Sentry has now been exercised live through the signed bridge (Grafana, PagerDuty, New Relic, Honeycomb, Axiom, Kubernetes, Datadog, SigNoz); the recorded runs and their empty-bundle cases are in [`live-verification.md`](live-verification.md).
 - **Kubernetes has a local live proof:** `kind` cluster `isolate-demo`, namespaced read-only ServiceAccount, failing demo pod; `bun run acceptance:k8s-local` returned 2 bounded items (warning events + pod) and `truncated: true`. No kubeconfig or token enters the sandbox.
 - **End-to-end device proof:** a seeded device + Kubernetes credential, the web gateway and `apps/device-daemon` ran together; `k8s.list_events` call `538a0a2a-…` was claimed, executed on the device and completed with a 903-byte result. The usage ledger recorded one request.
 

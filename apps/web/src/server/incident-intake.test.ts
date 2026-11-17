@@ -10,6 +10,7 @@ import { localDemo } from "./caller-scope.server";
 import {
 	acceptIncident,
 	buildIncidentGoal,
+	buildIncidentGoalFor,
 	createInMemoryIncidentDedupeStore,
 	detectIncidentIntakeMode,
 	evaluateIncidentTrigger,
@@ -159,6 +160,25 @@ describe("acceptIncident", () => {
 		);
 		expect(goal.length).toBeLessThanOrEqual(4000);
 		expect(goal.startsWith(UNTRUSTED_INCIDENT_NOTICE)).toBe(true);
+	});
+
+	test("asks for an incident report only when the owned path is markdown", () => {
+		const incident = incidentSignalSchema.parse(signal());
+		const report = buildIncidentGoalFor(incident, ["INCIDENT_REPORT.md"]);
+		expect(report).toContain(
+			"write a short incident report to INCIDENT_REPORT.md",
+		);
+		expect(report).not.toContain("diagnose the cause");
+
+		const fix = buildIncidentGoalFor(incident, ["src/**"]);
+		expect(fix).toContain("diagnose the cause of this incident and fix it");
+		expect(fix).not.toContain("incident report");
+		expect(fix.length).toBeLessThanOrEqual(4000);
+		expect(fix.startsWith(UNTRUSTED_INCIDENT_NOTICE)).toBe(true);
+
+		expect(buildIncidentGoalFor(incident, [])).toBe(
+			buildIncidentGoal(incident),
+		);
 	});
 
 	test("dedupes a replay inside 30 minutes and accepts after the window", async () => {

@@ -82,7 +82,7 @@ function router(options: RouterOptions = {}): {
 		if (options.transportFailure === true) {
 			throw new TypeError("connection refused");
 		}
-		if (url === `${BASE}/api/v1/rules/${RULE_ID}`) {
+		if (url === `${BASE}/api/v2/rules/${RULE_ID}`) {
 			if ((options.ruleStatus ?? 200) !== 200) {
 				return json(options.ruleStatus ?? 200, { status: "error" });
 			}
@@ -105,7 +105,7 @@ function router(options: RouterOptions = {}): {
 					: options.ruleData;
 			return json(200, { status: "success", data });
 		}
-		if (url === `${BASE}/api/v1/rules`) {
+		if (url.startsWith(`${BASE}/api/v3/rules?`)) {
 			return json(200, {
 				status: "success",
 				data: {
@@ -307,7 +307,8 @@ describe("fetchSignozContext", () => {
 			});
 			expect(bundle.items).toHaveLength(0);
 			expect(bundle.truncated).toBe(true);
-			expect(calls).toHaveLength(1);
+			// A 404 falls back from v2 to v1 (two calls); a 403 does not.
+			expect(calls).toHaveLength(ruleStatus === 404 ? 2 : 1);
 		}
 
 		const { impl } = router({ queryStatus: 404 });

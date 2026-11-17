@@ -42,7 +42,9 @@ import {
  *
  * Every failure (offline device, expired call, malformed or mismatched bundle,
  * broker/DB error) returns `null`: an incident task degrades to "no evidence"
- * and never fails because context could not be fetched.
+ * and never fails because context could not be fetched. When an optional
+ * observer is bound, the same failure also reports one bounded reason so the
+ * run timeline can explain the empty evidence instead of staying silent.
  */
 
 /** Device poll interval for `awaitResult` (the repository clamps 10–5000). */
@@ -89,6 +91,11 @@ export type ConnectorContextDependencies = {
 	ttlMs?: number;
 	/** Poll interval passed to `awaitResult`. */
 	pollMs?: number;
+	/**
+	 * Optional bounded skip observer. Absent means skips stay silent, exactly
+	 * as before this wave; a failure here never reaches the task.
+	 */
+	onSkip?: ConnectorContextSkipObserver;
 };
 
 export type ConnectorContextInput = {
@@ -99,6 +106,47 @@ export type ConnectorContextInput = {
 	/** W3C traceparent of the enqueuing run, when one exists. */
 	traceparent?: string;
 };
+
+/**
+ * Why a connector read produced no evidence. Closed and bounded: these tokens
+ * are the only thing recorded on the run timeline, so no provider text, URL,
+ * header or secret can ever travel through the skip path.
+ */
+export type ConnectorContextSkipReason =
+	| "unrecognized_fingerprint"
+	| "no_device_gateway"
+	| "no_device_credential"
+	| "no_signal"
+	| "broker_failed"
+	| "call_timeout"
+	| "call_failed"
+	| "contract_rejected";
+
+/**
+ * Source token for a skip. A recognized fingerprint yields its adapter source;
+ * anything unrecognized is `unknown`. Never a provider name, host or id.
+ */
+export type ConnectorContextSkipSource =
+	| ConnectorIncidentRef["source"]
+	| "unknown";
+
+/** One bounded, tenant-attributed evidence-skip observation. */
+export type ConnectorContextSkip = {
+	readonly organizationId: OrganizationId;
+	readonly taskId: TaskId;
+	readonly source: ConnectorContextSkipSource;
+	readonly reason: ConnectorContextSkipReason;
+};
+
+/**
+ * Observes a skipped evidence read. Optional: the loader keeps its original
+ * `ContextBundle | null` seam, so an unwired deployment behaves exactly as
+ * before. A throw or rejection here is swallowed — the timeline is
+ * observability, never a task-correctness input.
+ */
+export type ConnectorContextSkipObserver = (
+	input: ConnectorContextSkip,
+) => Promise<void> | void;
 
 export type ConnectorContextLoader = (
 	input: ConnectorContextInput,
@@ -156,11 +204,35 @@ export function createConnectorContextLoader(
 	const timings = resolveBoundedTimings(deps);
 
 	return async (input) => {
+		/**
+		 * Records why this read produced no evidence, then degrades. The
+		 * observer is observability only: a throw or rejection is swallowed so
+		 * a broken timeline can never turn evidence loss into a failed task.
+		 */
+		const reportSkip = async (reason: ConnectorContextSkipReason) => {
+			if (deps.onSkip === undefined) return;
+			try {
+				await deps.onSkip({
+					organizationId: input.organizationId,
+					taskId: input.taskId,
+					source:
+						parseConnectorIncidentFingerprint(input.incidentFingerprint)
+							?.source ?? "unknown",
+					reason,
+				});
+			} catch {
+				// Nothing here may fail the task.
+			}
+		};
+
 		try {
 			const ref = parseConnectorIncidentFingerprint(input.incidentFingerprint);
 			// GitHub is delegated to its server-side reader; an unknown or
 			// malformed fingerprint has no evidence path here.
-			if (ref === null) return null;
+			if (ref === null) {
+				await reportSkip("unrecognized_fingerprint");
+				return null;
+			}
 			const fingerprint = input.incidentFingerprint.trim();
 			const organizationId = input.organizationId;
 			const tool = CONNECTOR_CONTEXT_TOOLS[ref.source];
@@ -172,6 +244,7 @@ export function createConnectorContextLoader(
 			// The env-fallback credential has no device row and therefore no poll
 			// queue: a queue-backed context call must fail closed.
 			if (resolved.deviceId === null || resolved.credentialId === null) {
+				await reportSkip("no_device_credential");
 				return null;
 			}
 
@@ -182,7 +255,10 @@ export function createConnectorContextLoader(
 			});
 			// No normalized signal means no trusted selectors; never fabricate
 			// `service: "unknown"` evidence.
-			if (signal === null) return null;
+			if (signal === null) {
+				await reportSkip("no_signal");
+				return null;
+			}
 
 			const call = await deps.calls.enqueue({
 				organizationId,
@@ -204,24 +280,37 @@ export function createConnectorContextLoader(
 					: { traceparent: input.traceparent }),
 			});
 
-			let outcome: ConnectorCallOutcome | null;
-			try {
-				outcome = await deps.calls.awaitResult(
-					call.id,
-					timings.awaitTimeoutMs,
-					timings.pollMs,
-					// Tenant-scoped read: a leaked call id cannot return another
-					// organization's or device's result.
-					{ organizationId, deviceId: resolved.deviceId },
-				);
-			} catch {
+			// Tenant-scoped read: a leaked call id cannot return another
+			// organization's or device's result. A read failure is a queue
+			// failure and falls through to the outer `broker_failed` report.
+			const outcome: ConnectorCallOutcome | null = await deps.calls.awaitResult(
+				call.id,
+				timings.awaitTimeoutMs,
+				timings.pollMs,
+				{ organizationId, deviceId: resolved.deviceId },
+			);
+			// No result inside the bounded wait: the device never answered.
+			if (outcome === null) {
+				await reportSkip("call_timeout");
 				return null;
 			}
-			if (outcome === null || !outcome.ok) return null;
-			return parseBundle(outcome.data, fingerprint);
+			// The device answered with a provider/transport failure.
+			if (!outcome.ok) {
+				await reportSkip("call_failed");
+				return null;
+			}
+			const bundle = parseBundle(outcome.data, fingerprint);
+			// Malformed contract data and a mismatched fingerprint are both a
+			// refusal to trust evidence that is not attributable to this incident.
+			if (bundle === null) {
+				await reportSkip("contract_rejected");
+				return null;
+			}
+			return bundle;
 		} catch {
 			// Broker, signal store or queue failure: degrade to no context. The
 			// handler logs a bounded code; nothing here can carry provider text.
+			await reportSkip("broker_failed");
 			return null;
 		}
 	};
@@ -249,7 +338,36 @@ export type RoutedContextLoaderDependencies = {
 	github?: (input: ContextBundleRequest) => Promise<ContextBundle | null>;
 	/** Device-executed connector reader; present only with the device gateway. */
 	connector?: ConnectorContextLoader;
+	/**
+	 * Optional timeline sink for a routing-level skip. A connector read reports
+	 * its own reason through the loader's observer; this one covers the case
+	 * where no device gateway is bound at all. A throw never affects the task.
+	 */
+	onSkip?: ConnectorContextSkipObserver;
 };
+
+/**
+ * Records a skipped connector read on the run timeline. Evidence loss is never
+ * silent; a sink failure must not break the task, so it is swallowed here.
+ */
+async function reportSkipped(
+	deps: RoutedContextLoaderDependencies,
+	input: ContextBundleRequest,
+	source: ConnectorContextSkipSource,
+	reason: ConnectorContextSkipReason,
+): Promise<void> {
+	if (deps.onSkip === undefined) return;
+	try {
+		await deps.onSkip({
+			organizationId: input.organizationId,
+			taskId: input.taskId,
+			source,
+			reason,
+		});
+	} catch {
+		// Timeline is observability, not the task's correctness.
+	}
+}
 
 /**
  * Routes one incident task to exactly one context reader.
@@ -275,11 +393,25 @@ export function createRoutedContextLoader(
 			return deps.github === undefined ? null : deps.github(input);
 		}
 		if (deps.connector !== undefined) {
+			// The device loader owns its own skip reason and reports it through
+			// its observer; repeating it here would double-record the event.
 			return deps.connector({
 				organizationId: input.organizationId,
 				taskId: input.taskId,
 				incidentFingerprint: fingerprint,
 			});
+		}
+		// No device gateway bound: a recognized connector incident has no
+		// evidence path at all. Record that, then keep the pre-wave-19 GitHub
+		// fallback. An unrecognized shape is not a connector skip.
+		const connectorFingerprint = parseConnectorIncidentFingerprint(fingerprint);
+		if (connectorFingerprint !== null) {
+			await reportSkipped(
+				deps,
+				input,
+				connectorFingerprint.source,
+				"no_device_gateway",
+			);
 		}
 		return deps.github === undefined ? null : deps.github(input);
 	};

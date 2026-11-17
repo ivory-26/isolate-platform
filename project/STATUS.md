@@ -1,8 +1,192 @@
 # Status
 
-Last updated: 2026-11-02 (wave 24: connector verification, vendor selectors, landing capture)
+Last updated: 2026-11-17 (wave 28: DeepSeek source lanes integrated, connector pairing complete, Datadog monitor read proven)
 
-## Current: wave 24 — connector verification and vendor selectors (2026-11-02)
+## Current: wave 28 — goal recovery and offline completion (2026-11-17)
+
+The imported Claude Code goals cover connector evidence, offline benchmarks,
+T3 Code harness research/optimization, frontend/run detail, skills, and landing
+illustrations. The research reports, benchmarks, run-detail page, 19 skills and
+orthographic landing illustrations were already merged before this wave. Their
+stale headers have been reconciled instead of repeating completed work.
+
+### Execution and integration
+
+Codex coordinates; initial implementation ran in four isolated Claude Code worktrees
+using **`deepseek-v4.1-flash`**, confirmed by T3's `executedModel` for every lane.
+The existing Open Code Go Anthropic route was preserved. T3 initially rejected
+the custom model; adding its supported local Claude `customModels` entry fixed
+delegation without changing credentials or substituting a Claude model.
+
+| Lane | Source commit | Integrated commit | Result |
+|---|---|---|---|
+| Connectors | `e9b59218feec094767e0896518cf1289a4e1f002` | `1617a84` | Single-request Honeycomb verification distinguishes Configuration/ingest keys; partial trigger evidence survives query denial; normalized incident kinds and digest fingerprints accepted |
+| Harness | `ccc4b95435aec1324370c4f355e4d56affde08ae` | `160b7b2` | Bounded/cycle-safe wrapped error classification; Mastra internal retries explicitly zero so only the platform retry budget applies |
+| Worker/shared | `91997f03c494d30e0d8ca337039b5bccc20f2bed` | `c04322a` | Bounded `connector.context_skipped` reasons on the timeline; observer failures isolated; existing nullable loader/benchmark contract preserved; retry ceiling shared |
+| Frontend | `a1292627c76fefd16bc68d83aa6db543c8580cc6` | `6709f4b` | Active-run polling, goal/repository search and consistent count, authorized parallel reads, honest section caps, progressive event/log rendering |
+| Pairing relay follow-up | `150f8dc83ebaaf5f4d23e3ce9c060236080838ab` | `982b14c` | Propose the most recently seen active relay; show honest heartbeat hints and code-bound relay; preserve manual choice |
+
+The preexisting unfinished context-diagnostic edits were preserved in the named
+stash `coordinator-preserve-preexisting-context-diagnostics-2026-11-17` and used
+by the worker lane. That recovery stash remains available. `.mcp.json` is left
+untracked and untouched. All code is local; nothing was pushed.
+
+### Combined offline evidence
+
+Every command ran with `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`, paid
+provider/live flags removed from the child environment by name, and Bun's
+`--no-env-file`. The root test/typecheck/validation scripts now also disable
+automatic dotenv loading in their child Bun processes.
+
+- Initial integrated `bun --no-env-file run validate` **twice**: Biome **0 errors / 13 warnings**, **9/9** project
+  typechecks, **3,319 pass / 10 live skips / 0 fail** (3,329 tests, 225 files).
+- Integrated scoped tests: connectors/device **808 pass twice**; Mastra
+  **154 pass twice**. Worker/shared **560 pass twice** and web **861 pass twice**
+  were also recorded by their execution lanes and covered by both full runs.
+- Relay-selection follow-up: **23 focused tests twice**, then **104 combined
+  integration/device UI tests twice**, scoped Biome clean and web typecheck.
+  Final integrated `bun --no-env-file run validate` **twice**:
+  **3,342 pass / 10 live skips / 0 fail** (3,352 tests, 227 files), **9/9**
+  project typechecks, Biome **750 files / 0 errors / 13 warnings**.
+- `bun --no-env-file scripts/acceptance-offline.ts`: **7/7**, including success,
+  throw, abort, validation pass/fail, approved fake PR and retry lifecycle.
+- Web production build, `check:build` and `check:client`: public SSR works,
+  anonymous tenant routes refused, **106 client files / 34 secret checks pass**.
+  Repeated successfully after the selector follow-up; the security check passes
+  on **567 source/migration files / 1,009 tracked files**.
+- Connector benchmark: **24/24 twice**, **0 provider calls**.
+- ITBench-AA Scenario 16 replay: **entity recall 1.00**, **decisive token recall
+  1.00**, full condition-token recall **0.29**, 3 items / 1,077 bytes, digest
+  `6e05b5e44139b69e`, byte-deterministic. This is evidence extraction over a
+  cached Kubernetes snapshot, not live model or cluster performance.
+
+### Connector/browser acceptance — 2026-11-17
+
+Honeycomb's Onboarding ingest key is confirmed **Disabled**. Its enabled
+Configuration key has **Run queries** disabled with the explicit enterprise-plan
+message. Re-pairing alone cannot supply query evidence on this account. The
+integration now preserves the locally derived trigger snapshot honestly as a
+partial bundle; no live query-evidence success is claimed.
+
+Claude Code/DeepSeek completed both pairings on the running **Verification
+relay**. The earlier failures were device-selection errors: the form defaulted
+to the stale **Local daemon** registration, whose pairing cannot be claimed by
+a different authenticating device. The device-scoped claim remains correct.
+The integrated selector fix now proposes the most recent trustworthy heartbeat,
+labels the existing five-minute freshness window without claiming a daemon is
+online, preserves manual selection across refetch, and names the relay to which
+a created code is bound. Invalid/missing and implausible-future timestamps are
+treated as unknown. An idle tab still needs focus/invalidation to refresh the
+server's heartbeat rows; the displayed age re-evaluates every 30 seconds.
+
+Datadog US1 now uses a dedicated scoped application key granting exactly
+`monitors_read`, `metrics_read`, `incident_read`, `logs_read_data` and
+`logs_read_index_data`. One subsequent direct `datadog.get_monitor` acceptance
+read succeeded for monitor `344995520`: call
+`7793917d-12ac-4f86-9651-8da14c99d32d`, **7.95 s** total, **1 attempt**,
+`kind: monitor`, state **No Data**, `truncated: false`. The credential's request
+ledger records **1 request / 0 errors**. This proves `monitors_read`; the other
+scopes were inspected, not exercised. The call used `task_id: null` through the
+existing queue and running relay, with **0 new usage-record rows**, no model,
+worker start, sandbox or retry.
+
+Honeycomb's existing Configuration key is paired with `checkout` and passed its
+bounded authentication check. Its enterprise-only query permission remains the
+external blocker; no query request, upgrade or trial was made.
+
+The delegated browser task also checked `/runs` and an existing run detail at
+1440 px and 390 px. It reported clean reflow and no mobile horizontal overflow
+(`scrollWidth 375 <= innerWidth 390`), then closed its task tabs. The coordinator
+did not resume browser execution after the user's delegation-only instruction.
+
+**Resolved credential-handling incident:** the browser task accidentally returned
+a newly created Datadog application key in a tool result, immediately revoked it,
+and created/paired a replacement without returning its value. The revoked value
+can remain in that prior tool result; it was not re-read or copied into the
+repository. See `project/SECURITY.md` for the bounded incident record.
+
+No Baseten/Modal key, sandbox or model-backed delivery was used in this wave.
+Any paid end-to-end acceptance remains a separate bounded, explicitly authorized
+phase under `AGENTS.md`; the previous wave's PR/spend records below are historical.
+
+## Previous: wave 27 — connector live E2E and honest run budgets (2026-11-14)
+
+Design source: the user's goal to test Datadog, New Relic, Honeycomb, Axiom, SigNoz
+and Kubernetes end to end from `ivory-26/isolate-e2e-fixture`, then bring the docs
+to the measured truth. Run log: [`docs/connectors/live-verification.md`](../docs/connectors/live-verification.md).
+
+### What changed
+
+- **Six connectors exercised end to end through the real bridge.** Each run was a
+  signed `POST /api/webhooks/<vendor>` carrying a full `IncidentSignal`, a matched
+  enabled subscription, a paired relay, a worker started with
+  `DEVICE_GATEWAY_ENABLED=true`, and A2 approvals in `/approvals`. New Relic (#4),
+  Honeycomb (#5), Axiom (#6) and Kubernetes (#7) opened pull requests on the fixture
+  repo; Datadog had already opened #3 from its legacy run. SigNoz did not reach a PR.
+- **Evidence transport is real, evidence content is vendor-dependent.** `newrelic`,
+  `axiom` (1 item, truncated) and `k8s` on the second attempt (2 items: events plus
+  pod logs in 5.0 s) returned non-empty bundles. Honeycomb (no datasets), SigNoz
+  (no alert rules) and the Datadog rerun (unknown monitor id) returned empty ones.
+- **A stale Kubernetes ServiceAccount token failed closed in 63 ms** as
+  `INTEGRATION_UNAVAILABLE` (provider `401`). Minting a fresh token into the same
+  file fixed the next call with no re-pairing or daemon restart.
+- **Wall-clock and turn budgets, not the token cap, ended four runs.** New Relic
+  run 1 (600 s), Datadog rerun and SigNoz (900 s) dead-lettered `BUDGET_EXCEEDED` at
+  the handler budget, and Kubernetes run 2 exhausted the agent turn budget; token
+  spend stayed under 800,000 in every case.
+- **Docs reconciled to measurement.** `docs/connectors/live-verification.md` records
+  every run with fingerprints, tasks, call timings, PR numbers and spend. The six
+  vendor pages replace "Live: not run" with the measured result; `KNOWN-LIMITS.md`
+  §1/§2.1 and `connector-onboarding.md` now state the empty-evidence and
+  budget-bound behaviour and no longer claim that only GitHub is live-proven.
+- Prior waves in this branch: **wave 26** task-wide spend caps and stalled-stream
+  retry (`274e3b1`), then sandbox-cost accrual and an honest token reservation
+  (`90895a1`); connector docs aligned with the bridge-only paths (`4a8c76b`);
+  **wave 25** connector-detail route, pairing-origin and dead-letter fixes
+  (`5389565`, `d1881ae`, `3c6bc6a`, `d4f19b0`, `2f03087`).
+
+### Wave 27 follow-up (2026-11-14/15) — measured connector truth
+
+- **SigNoz now completes with evidence.** SigNoz ≥ 0.150 serves rule reads on
+  `/api/v2/rules/{id}` and `/api/v3/rules`; the v1 path answers `404`. After
+  `74385ef` and the `signoz-viewer` RBAC grant, run 7 (`f99a9b84`) carried one
+  `alert_rule` evidence item (8.3 s and 14.0 s calls), committed `413eb37` and
+  opened PR #8 — the first SigNoz delivery to finish the whole pipeline.
+- **A documentation-only diff no longer fails validation.** `1558483`: when every
+  changed path is prose, the repository's validation command is skipped with
+  `validation.finished {stage: "command", status: "skipped", reason:
+  "documentation-only diff"}`. Before this, PR-report deliverables always failed
+  on the fixture's pre-existing red suite. Run 7 recorded exactly that event.
+- **Honeycomb's missing vendor record is fixed; its credential is not.** Dataset
+  `checkout` now exists in environment `test` with three events (`service:
+  checkout`, status codes `500`, `502`, `200`). Three further deliveries exposed
+  two sender invariants and one credential blocker: a Honeycomb fingerprint must
+  be `dataset:triggerId:state` (a two-segment one silently yields no evidence
+  call — run 8, PR #9), the signal `kind` is forwarded as the query kind and must
+  be `latency`/`error_rate`/`saturation` (`alert` fails `VALIDATION_FAILED` — run
+  9, stopped at its gate), and the paired key answers `/1/auth` but `401`s the
+  query endpoint, so every read is `INTEGRATION_UNAVAILABLE` (run 10, PR #10).
+  Re-pairing with an environment **Configuration** API key is the remaining step;
+  verification cannot detect the difference because it only probes `/1/auth`.
+- **Datadog's real monitor is `344995520`** ("Isolate E2E CPU load",
+  `avg(last_5m):avg:system.load.1{*} > 90`, state `NO DATA`, no service tag); the
+  earlier run used the mistyped `344490966`. Run 11's context calls complete
+  without error but return zero items and `truncated: true`, i.e. the monitor
+  read failed as an optional item rather than as a typed failure.
+- **One active task per organization gates intake.** With a task parked at a
+  gate, the next delivery is recorded `ignored / THROTTLED` and no task is
+  created; the signal row is still stored, so a later delivery with the same
+  fingerprint dedupes.
+
+### Verification semantics
+
+Measured, not estimated: task ids, `connector_calls` rows, `usage_records` totals and
+PR numbers come from the live stack. `cost_usd` is `NULL` for every row because no
+`COST_PRICE_TABLE` is configured, so the spend table reports tokens only. No provider
+key was read, printed or committed; the only sandboxes created were the ones each
+approved agent run provisioned, and zero were left running.
+
+## Previous: wave 24 — connector verification and vendor selectors (2026-11-02)
 
 Design sources: [`WAVE24.md`](WAVE24.md), [`WAVE23.md`](WAVE23.md), [`docs/USER-SETUP.md`](../docs/USER-SETUP.md), [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md), [`docs/KNOWN-LIMITS.md`](../docs/KNOWN-LIMITS.md).
 

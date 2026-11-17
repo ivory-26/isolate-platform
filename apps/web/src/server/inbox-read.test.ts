@@ -90,7 +90,15 @@ describe("inbox read model", () => {
 			limit: 10,
 			connector: "sentry",
 			status: "ignored",
+			severity: null,
 		});
+	});
+
+	test("severity reaches the repository as a filter", async () => {
+		const fake = fakeRepository(manyRows);
+		const service = createInboxReadService(fake.repository);
+		await service.listInbox(scope(), { severity: "critical" });
+		expect(fake.calls[0]?.filter.severity).toBe("critical");
 	});
 
 	test("rejects malformed queries before touching storage", async () => {

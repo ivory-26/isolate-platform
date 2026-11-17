@@ -351,8 +351,11 @@ claim/result/heartbeat routes, browser pairing and the encrypted local store are
 implemented. The worker binds the broker when `DEVICE_GATEWAY_ENABLED=true`;
 calls fail closed as `INTEGRATION_UNAVAILABLE` when no active relay can serve
 them. Verification is one bounded read: it proves that the relay can authenticate
-and perform that read, not that every enabled tool has every vendor scope. Only
-Kubernetes has a local live proof; the SaaS adapters are fake-tested. See
+and perform that read, not that every enabled tool has every vendor scope. The
+bridge intake, the relay evidence call and the task path are live-proven for
+Grafana, PagerDuty, New Relic, Honeycomb, Axiom, Kubernetes, Datadog and SigNoz
+(the last without a PR); the recorded runs, including empty-bundle cases, are in
+[`connectors/live-verification.md`](connectors/live-verification.md). See
 [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 ### 2.4 Device registration, rotation, revocation and audit
@@ -471,6 +474,34 @@ task claimed
   only create-time exception and is unrelated to connector reads. A tool never
   receives the sandbox handle.
 
+### 4.1 Evidence loading for incident tasks
+
+A task created from an `IncidentSignal` may carry `incident_source` and
+`incident_fingerprint`. Before the first agent turn the worker loads that
+connector's evidence once:
+
+1. Parse the fingerprint with the connector's parser: `datadog:<monitorId>`,
+   `newrelic:<digest>`, `honeycomb:<dataset>:<triggerId>:<state>`,
+   `axiom:<monitorId>`, `signoz:<ruleId>` or
+   `k8s:<cluster>:<namespace>:<kind>/<name>:<reason>`. Sentry, Grafana and
+   PagerDuty use the same mechanism with their own parser prefixes. An
+   unparsable fingerprint loads nothing.
+2. Resolve an `active` device and an `active` credential for the organization
+   and connector.
+3. Require the stored signal row for `(organization, source, fingerprint)`.
+4. Enqueue exactly one `<source>.context.fetch` device call with
+   `{incidentFingerprint, service, kind}` and a bounded TTL, then attach the
+   returned bundle as untrusted evidence. Kubernetes uses the short prefix,
+   `k8s.context.fetch`; `service` and `kind` come from the stored signal row.
+   A credential supplied only by a relay env fallback has no device queue and so
+   loads no evidence.
+
+Every failure - no device, offline relay, missing row, timeout, malformed or
+mismatched bundle - returns `null`. **Evidence loading is non-fatal:** the task
+runs without that connector's evidence and is never failed, retried or delayed
+by it. An invented or over-length fingerprint names no provider object, so a
+bridge sender must forward real ids from the provider payload.
+
 ## 5. Free-by-design guardrails
 
 ### 5.1 Free-tier profile
@@ -558,13 +589,20 @@ tool result for the agent).
 ## 6. Multi-connector routing
 
 Builds on [`connector-usage.md`](connector-usage.md) §5; no new routing model.
+This section is the **target** routing model. The implemented webhook route is
+the single generic signed bridge described in §0 and §4.1:
+`POST /api/webhooks/<any-path>`, one `WEBHOOK_SIGNING_SECRET`, a strict
+`IncidentSignal` body. Datadog, New Relic, Honeycomb, Axiom, SigNoz and
+Kubernetes have no native intake adapter; their trigger arrives through that
+bridge.
 
 - **Per-organization instances.** A connector is not global. Each row in
   `connector_credentials` belongs to one organization and one device. Two teams
   on one deployment can connect the same vendor with different accounts.
-- **Path routing.** `POST /api/webhooks/{connector}/{endpointId}`; both segments
-  are validated against closed patterns. An unknown pair is `404` with no
-  distinction between "unknown" and "another tenant's".
+- **Path routing (target design, not implemented).**
+  `POST /api/webhooks/{connector}/{endpointId}`; both segments are validated
+  against closed patterns. An unknown pair is `404` with no distinction between
+  "unknown" and "another tenant's".
 - **Organization from the endpoint row.** The webhook body, query string and
   headers never supply the tenant. The endpoint row supplies it.
 - **Per-connector secret.** The endpoint's `webhook_hmac` inbound verification
@@ -654,7 +692,7 @@ metadata row.
 | `CONNECTOR_REQUEST_TIMEOUT_MS` | worker | Default `10000` |
 | `CONNECTOR_ALLOW_TRIAL` | web | Default `false`; trial connectors stay disabled |
 | `WEBHOOK_MAX_BODY_BYTES` | web | Existing; 64 KiB body cap |
-| `WEBHOOK_SIGNING_SECRET` | web | Existing generic-mode HMAC (legacy) |
+| `WEBHOOK_SIGNING_SECRET` | web | Generic signed-bridge HMAC, at least 32 characters; the intake path for every vendor without a native adapter |
 | `WEBHOOK_GITHUB_SECRET` | web | Existing GitHub-mode HMAC (legacy) |
 | `WEBHOOK_ORGANIZATION_ID` | web | Legacy single binding only |
 | `WEBHOOK_ACTOR_ID`, `WEBHOOK_ACTOR_ROLE` | web | Legacy single binding only |
@@ -765,7 +803,14 @@ register/list/revoke/rotate and claim/result/heartbeat routes, browser/relay
 pairing with an encrypted local store, vendor-specific pairing fields, the
 metadata-only connect/list/revoke routes, Devices/Connectors UI, per-task
 connector tool binding behind `DEVICE_GATEWAY_ENABLED`, per-organization GitHub
-installation, trigger subscriptions and the bounded `connector.verify` read. The
-GitHub and generic-webhook paths remain the only end-to-end live-proven connector
-executions; Kubernetes has a local live proof. SaaS live acceptance and the
-remaining intake gaps are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
+installation, trigger subscriptions and the bounded `connector.verify` read.
+
+End-to-end live proofs now exist for GitHub, the generic webhook, Grafana,
+PagerDuty, New Relic, Honeycomb, Axiom, Kubernetes, Datadog and SigNoz: each was
+driven by a real signed bridge delivery against `ivory-26/isolate-e2e-fixture`,
+produced a real `<source>.context.fetch` execution through a paired relay, and —
+except where the vendor workspace returned no data (Honeycomb, SigNoz) or the job
+execution budget was exhausted (SigNoz) — opened a pull request. The measured run
+log, including the empty-data and budget findings, is
+[`connectors/live-verification.md`](connectors/live-verification.md). Remaining
+intake gaps are recorded in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).

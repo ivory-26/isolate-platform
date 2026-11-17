@@ -469,6 +469,7 @@ export function createPostgresOverviewRepository(
 				limit: clampInboxLimit(limit),
 				connector: null,
 				status: null,
+				severity: null,
 			});
 		},
 		async readIntegrationAggregate(scope) {

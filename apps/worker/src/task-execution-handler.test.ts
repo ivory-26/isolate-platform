@@ -9,6 +9,7 @@ import type {
 	TaskContext,
 	ToolDecisionRecord,
 } from "@isolate/mastra";
+import { toProviderError } from "@isolate/mastra";
 import type {
 	CommandPolicy,
 	CommandResult,
@@ -51,8 +52,10 @@ import type { HandlerContext, HandlerVerdict } from "./contracts";
 import {
 	BRANCH_LOCK_RENEW_INTERVAL_MS,
 	buildTaskPrompt,
+	closeTaskAsFailed,
 	createResumeTaskHandler,
 	createTaskExecutionHandler,
+	isDocumentationOnlyDiff,
 	pushApprovalPayloadSha256,
 	type TaskExecutionDeps,
 } from "./task-execution-handler";
@@ -231,6 +234,8 @@ class FakeLifecycle implements ExecutionLifecycle {
 	cancelled = false;
 	/** Target statuses whose transition throws a stale-from conflict. */
 	conflictOn: Set<TaskStatus> = new Set();
+	/** When set, only this `from` status is current; others are stale. */
+	activeFrom: TaskStatus | null = null;
 	approvalRequestedError: unknown = null;
 
 	async transition(input: LifecycleTransitionInput): Promise<void> {
@@ -240,7 +245,10 @@ class FakeLifecycle implements ExecutionLifecycle {
 			to: input.to,
 			...(input.reason === undefined ? {} : { reason: input.reason }),
 		});
-		if (this.conflictOn.has(input.to)) {
+		if (
+			this.conflictOn.has(input.to) ||
+			(this.activeFrom !== null && input.from !== this.activeFrom)
+		) {
 			// The wave-7 lifecycle contract calls this CONFLICT; the shared
 			// ErrorCode vocabulary spells it DEPENDENCY_CONFLICT.
 			throw new PlatformError("DEPENDENCY_CONFLICT", "stale transition");
@@ -401,6 +409,13 @@ function makeRuntimeScript(script: ScriptTurn[]): RuntimeScript {
 	const factory: CodingAgentRuntimeFactory = (options) => ({
 		id: "fake-runtime",
 		name: "Fake Runtime",
+		capabilities: {
+			streaming: false,
+			toolCalls: false,
+			approvals: false,
+			session: false,
+			context: false,
+		},
 		async runTurn(input) {
 			cursor += 1;
 			runTurns.push(cursor);
@@ -490,6 +505,8 @@ type HarnessOptions = {
 	acquireBranchLock?: TaskExecutionDeps["acquireBranchLock"];
 	/** Wave 13: incident context seam. */
 	loadContextBundle?: TaskExecutionDeps["loadContextBundle"];
+	/** Wave 26: persisted task-wide usage; `undefined` = no prior spend. */
+	loadTaskUsage?: TaskExecutionDeps["loadTaskUsage"];
 	/** Wave 11: blob store for full large payloads; `undefined` = inline only. */
 	blobStore?: FakeBlobStore;
 	/** Trusted policy used for the PR head-SHA read (`git rev-parse HEAD`). */
@@ -575,6 +592,9 @@ function makeHarness(options: HarnessOptions = {}) {
 		...(options.loadContextBundle === undefined
 			? {}
 			: { loadContextBundle: options.loadContextBundle }),
+		...(options.loadTaskUsage === undefined
+			? {}
+			: { loadTaskUsage: options.loadTaskUsage }),
 		...(options.blobStore === undefined
 			? {}
 			: { blobStore: options.blobStore }),
@@ -777,6 +797,44 @@ describe("task execution handler — failure mapping", () => {
 			expect(verdict.note).not.toContain("secret");
 			expect(verdict.note).not.toContain("https");
 		}
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("classified non-retryable provider failure → dead_letter", async () => {
+		const harness = makeHarness({
+			script: [
+				{
+					output: "",
+					throwError: toProviderError(
+						Object.assign(new Error("raw upstream detail"), { status: 401 }),
+					),
+				},
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toMatchObject({
+			outcome: "dead_letter",
+			code: "AGENT_EXECUTION_FAILED",
+			note: "provider rejected the credentials",
+		});
+		expect(JSON.stringify(verdict)).not.toContain("raw upstream detail");
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("classified retryable provider failure → bounded retry", async () => {
+		const harness = makeHarness({
+			script: [
+				{
+					output: "",
+					throwError: toProviderError(
+						Object.assign(new Error("raw upstream detail"), { status: 429 }),
+					),
+				},
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({ outcome: "retry", code: "RATE_LIMITED" });
+		expect(JSON.stringify(verdict)).not.toContain("raw upstream detail");
 		expect(harness.provider.destroyCalls).toHaveLength(1);
 	});
 
@@ -1040,6 +1098,248 @@ describe("task execution handler — budgets", () => {
 		});
 		expect(harness.runtime.runTurns).toEqual([1, 2, 3]);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+});
+
+/* ------------------------------ task-wide caps ------------------------------ */
+
+describe("task execution handler — task-wide caps", () => {
+	test("prior tokens count toward the task token cap", async () => {
+		const harness = makeHarness({
+			caps: { maxTaskTokens: 100 },
+			loadTaskUsage: async () => ({ tokens: 100, costUsd: 0 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "agent token budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toHaveLength(0);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("seeds the runtime token accumulator with prior task tokens", async () => {
+		const seenCaps: Array<AgentTurnCaps | undefined> = [];
+		const runtime: RuntimeScript = {
+			runTurns: [],
+			prompts: [],
+			factory: (options) => {
+				seenCaps.push(options.caps);
+				return {
+					id: "caps-runtime",
+					name: "Caps Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
+					async runTurn() {
+						runtime.runTurns.push(1);
+						return "";
+					},
+				};
+			},
+		};
+		const harness = makeHarness({
+			runtime,
+			loadTaskUsage: async () => ({ tokens: 42, costUsd: 0 }),
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(seenCaps).toHaveLength(1);
+		expect(seenCaps[0]).toMatchObject({
+			maxTaskTokens: 200_000,
+			priorTaskTokens: 42,
+		});
+	});
+
+	test("a usage read failure degrades to zero and warns once", async () => {
+		const harness = makeHarness({
+			loadTaskUsage: async () => {
+				throw new Error("usage store down");
+			},
+			script: [{ output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(
+			harness.logs.filter((record) =>
+				record.message.includes("task usage read failed"),
+			),
+		).toHaveLength(1);
+	});
+
+	test("prior USD spend counts toward the task cost cap", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 1,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 2 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toHaveLength(0);
+	});
+
+	test("earlier sandbox rows count toward the cap via the usage loader", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 1,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 0.85 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "more", costUsd: 0.2 }, { output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+	});
+
+	test("elapsed sandbox time alone can exhaust the USD cap before the next turn", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			maxCostUsdPerTask: 1,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			// Model spend is zero: only the accrued sandbox bill (3s * 0.625)
+			// pushes the task past the cap.
+			script: [
+				{ output: "more", costUsd: 0, onTurn: () => clock.advance(3000) },
+				{ output: "never" },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(harness.provider.destroyCalls).toHaveLength(1);
+		// The gating estimate never doubles as a spend row: teardown still writes
+		// the measured sandbox row exactly once.
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBe(1.875);
+	});
+
+	test("without a price table sandbox accrual never gates and the job completes", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			priceTable: null,
+			maxCostUsdPerTask: 1,
+			maxSandboxSeconds: 3600,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [
+				{ output: "more", costUsd: 0, onTurn: () => clock.advance(500_000) },
+				{ output: "" },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBeNull();
+		// One unmetered warning for the job, with an id only.
+		const unmetered = harness.logs.filter((record) =>
+			record.message.includes("usage has no trusted price"),
+		);
+		expect(unmetered).toHaveLength(1);
+		expect(unmetered[0]?.fields).toEqual({ modelId: "sandbox:1x512" });
+	});
+
+	test("the accrued sandbox estimate is not written as a second usage row", async () => {
+		const clock = new FakeClock();
+		const harness = makeHarness({
+			clock,
+			maxCostUsdPerTask: 10,
+			maxSandboxSeconds: 3600,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [
+				{ output: "more", onTurn: () => clock.advance(1000) },
+				{ output: "", onTurn: () => clock.advance(1000) },
+			],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+		expect(modelRows(harness.sink.rows)).toHaveLength(2);
+		// Accrual is estimated before each turn but only teardown records spend:
+		// one row at the measured 2s wall time.
+		expect(sandboxRows(harness.sink.rows)).toHaveLength(1);
+		expect(sandboxRows(harness.sink.rows)[0]?.costUsd).toBe(1.25);
+	});
+
+	test("a zero cost cap disables USD gating even with prior spend", async () => {
+		const harness = makeHarness({
+			maxCostUsdPerTask: 0,
+			loadTaskUsage: async () => ({ tokens: 0, costUsd: 99 }),
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			script: [{ output: "more", costUsd: 0.9 }, { output: "" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.runtime.runTurns).toEqual([1, 2]);
+	});
+
+	test("no price table warns once and the job still completes", async () => {
+		const harness = makeHarness({
+			priceTable: null,
+			maxCostUsdPerTask: 1,
+			script: [{ output: "", costUsd: null }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual(COMPLETE);
+
+		const cannotBind = harness.logs.filter((record) =>
+			record.message.includes("USD cap cannot bind without COST_PRICE_TABLE"),
+		);
+		expect(cannotBind).toHaveLength(1);
+		const unmetered = harness.logs.filter((record) =>
+			record.message.includes("usage has no trusted price"),
+		);
+		expect(unmetered).toHaveLength(1);
+		// The first (and only) unmetered spend is the sandbox accrual; ids only,
+		// no token counts or provider payloads in the warning fields.
+		expect(unmetered[0]?.fields).toEqual({ modelId: "sandbox:1x512" });
+	});
+
+	test("a priced table still stops at the cumulative cap", async () => {
+		const harness = makeHarness({
+			priceTable: {
+				models: [
+					{
+						modelId: "test-model",
+						promptTokenUsdPerMillion: 1000,
+						completionTokenUsdPerMillion: 1000,
+					},
+				],
+				sandbox: { cpuSecondUsd: 0, gibSecondUsd: 0 },
+			},
+			maxCostUsdPerTask: 0.01,
+			context: { limits: { ...DEFAULT_CONTEXT.limits, max_agent_turns: 5 } },
+			// 10 prompt + 5 completion tokens at $1000/M = $0.015 per turn.
+			script: [{ output: "more" }, { output: "never" }],
+		});
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+		expect(verdict).toEqual({
+			outcome: "dead_letter",
+			code: "BUDGET_EXCEEDED",
+			note: "task cost budget exhausted",
+		});
+		expect(harness.runtime.runTurns).toEqual([1]);
+		expect(modelRows(harness.sink.rows)[0]?.costUsd).toBe(0.015);
 	});
 });
 
@@ -2307,6 +2607,26 @@ function artifactsOf(lifecycle: FakeLifecycle) {
 	);
 }
 
+describe("isDocumentationOnlyDiff", () => {
+	test("prose-only diffs are documentation", () => {
+		expect(isDocumentationOnlyDiff(["INCIDENT_REPORT.md"])).toBe(true);
+		expect(isDocumentationOnlyDiff(["docs/a.md", "docs/b.MDX"])).toBe(true);
+		expect(isDocumentationOnlyDiff(["notes/memory.txt"])).toBe(true);
+	});
+
+	test("any code path keeps the command gate", () => {
+		expect(isDocumentationOnlyDiff(["INCIDENT_REPORT.md", "src/x.ts"])).toBe(
+			false,
+		);
+		expect(isDocumentationOnlyDiff(["package.json"])).toBe(false);
+		expect(isDocumentationOnlyDiff(["README.md.bak"])).toBe(false);
+	});
+
+	test("an empty diff is not documentation", () => {
+		expect(isDocumentationOnlyDiff([])).toBe(false);
+	});
+});
+
 describe("task execution handler — wave 8 validation gate", () => {
 	test("a passing command runs in the same sandbox and stores a log artifact", async () => {
 		const lifecycle = new FakeLifecycle();
@@ -2397,6 +2717,77 @@ describe("task execution handler — wave 8 validation gate", () => {
 			"review_ready",
 		]);
 		expect(harness.provider.destroyCalls).toHaveLength(1);
+	});
+
+	test("a documentation-only diff skips the configured command with a reason", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 1,
+			insertions: 12,
+			deletions: 0,
+			files: ["INCIDENT_REPORT.md"],
+		};
+		workspace.patch =
+			"diff --git a/INCIDENT_REPORT.md b/INCIDENT_REPORT.md\n+x\n";
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			validationPolicy: VALIDATION_POLICY,
+			// A red suite left by the incident itself must not fail the attempt.
+			executeHandler: () =>
+				commandResult({ exitCode: 1, stdout: "1 test failed\n" }),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		// The command never ran: no execute call, no log_bundle artifact.
+		expect(harness.provider.executeCalls).toHaveLength(0);
+		expect(artifactsOf(lifecycle).map((artifact) => artifact.kind_)).toEqual([
+			"diff",
+		]);
+		const skipped = lifecycle.calls.find(
+			(call) =>
+				call.kind === "event" &&
+				call.type === "validation.finished" &&
+				call.data?.stage === "command",
+		);
+		expect(skipped).toMatchObject({
+			data: {
+				stage: "command",
+				status: "skipped",
+				reason: "documentation-only diff",
+			},
+		});
+		expect(transitionPairs(lifecycle)).toContainEqual([
+			"validating",
+			"review_ready",
+		]);
+	});
+
+	test("a mixed diff still runs the configured command", async () => {
+		const lifecycle = new FakeLifecycle();
+		const workspace = new FakeWorkspaceGit();
+		workspace.diffStatResult = {
+			filesChanged: 2,
+			insertions: 4,
+			deletions: 1,
+			files: ["INCIDENT_REPORT.md", "src/widget.ts"],
+		};
+		const harness = makeHarness({
+			lifecycle,
+			workspaceGit: workspace,
+			validationPolicy: VALIDATION_POLICY,
+			executeHandler: () => commandResult(),
+			script: [{ output: "" }],
+		});
+
+		const verdict = await harness.handler.handle(harness.job, harness.ctx);
+
+		expect(verdict).toEqual(COMPLETE);
+		expect(harness.provider.executeCalls).toHaveLength(1);
 	});
 
 	test("a failing command fails the task with no push and no diff artifact", async () => {
@@ -2862,6 +3253,13 @@ describe("task execution handler — wave 9 tool invocation audit", () => {
 				factory: (options) => ({
 					id: "audit-runtime",
 					name: "Audit Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
 					async runTurn() {
 						const hook = (
 							options as {
@@ -2934,6 +3332,13 @@ describe("task execution handler — wave 9 tool invocation audit", () => {
 				factory: (options) => ({
 					id: "audit-runtime",
 					name: "Audit Runtime",
+					capabilities: {
+						streaming: false,
+						toolCalls: false,
+						approvals: false,
+						session: false,
+						context: false,
+					},
 					async runTurn() {
 						const hook = (
 							options as {
@@ -3177,6 +3582,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: lock.acquireBranchLock,
 			script: [
 				{
@@ -3208,6 +3616,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			workspaceGit: new FakeWorkspaceGit(),
 			acquireBranchLock: lock.acquireBranchLock,
 			script: [
@@ -3235,6 +3646,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: async () => ({
 				release: () => {},
 				renew: async () => {
@@ -3265,6 +3679,9 @@ describe("task execution handler — wave 12 branch lease renewal", () => {
 		const harness = makeHarness({
 			clock,
 			maxSandboxSeconds: 3600,
+			// USD gating is not under test here and the simulated five-minute
+			// renewal interval would otherwise accrue a sandbox bill past the cap.
+			maxCostUsdPerTask: 0,
 			acquireBranchLock: async () => {
 				const lease = await lock.acquireBranchLock();
 				return { release: lease.release };
@@ -3437,5 +3854,60 @@ describe("task execution handler — run tracing", () => {
 		expect(turns.map((event) => event.attributes.turn)).toEqual([1, 2]);
 		// Only bounded identifiers/numbers leave the handler.
 		expect(JSON.stringify(traceSink.events)).not.toContain("working");
+	});
+});
+
+describe("task execution handler — dead-letter task closure", () => {
+	test("closes an executing task as failed", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.activeFrom = "executing";
+		const logs: LogRecord[] = [];
+		const closed = await closeTaskAsFailed(lifecycle, makeFakeLogger(logs), {
+			organizationId: "org_test" as OrganizationId,
+			taskId: "task_test" as TaskId,
+			reason: "job dead-lettered: BUDGET_EXCEEDED",
+		});
+		expect(closed).toBe(true);
+		expect(lifecycle.calls).toEqual([
+			{
+				kind: "transition",
+				from: "executing",
+				to: "failed",
+				reason: "job dead-lettered: BUDGET_EXCEEDED",
+			},
+		]);
+	});
+
+	test("skips stale statuses until the current one matches", async () => {
+		const lifecycle = new FakeLifecycle();
+		lifecycle.activeFrom = "validating";
+		const logs: LogRecord[] = [];
+		const closed = await closeTaskAsFailed(lifecycle, makeFakeLogger(logs), {
+			organizationId: "org_test" as OrganizationId,
+			taskId: "task_test" as TaskId,
+			reason: "job dead-lettered: BUDGET_EXCEEDED",
+		});
+		expect(closed).toBe(true);
+		const transitions = lifecycle.calls.filter(
+			(call) => call.kind === "transition",
+		);
+		expect(transitions.map((call) => call.from)).toEqual([
+			"executing",
+			"validating",
+		]);
+	});
+
+	test("leaves an already-terminal task untouched and reports no failure", async () => {
+		const lifecycle = new FakeLifecycle();
+		// The transition is not possible from any candidate (terminal task).
+		lifecycle.conflictOn = new Set<TaskStatus>(["failed"]);
+		const logs: LogRecord[] = [];
+		const closed = await closeTaskAsFailed(lifecycle, makeFakeLogger(logs), {
+			organizationId: "org_test" as OrganizationId,
+			taskId: "task_test" as TaskId,
+			reason: "job dead-lettered: POLICY_DENIED",
+		});
+		expect(closed).toBe(false);
+		expect(logs).toEqual([]);
 	});
 });

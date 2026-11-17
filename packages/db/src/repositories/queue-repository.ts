@@ -11,7 +11,12 @@ import { parseJsonbColumn } from "../client";
  *   concurrent workers can never receive the same job twice. Counters are
  *   owned by the database (attempts increments inside the claim).
  * - `ackFail` decides retry vs dead-letter from the DB-side `attempts` vs
- *   `max_attempts`; callers can never influence the counter or the decision.
+ *   `max_attempts`; callers cannot influence the counter. A handler that has
+ *   already classified the failure as terminal (deterministic sandbox/Git
+ *   error, exhausted budget) may still pass `terminal`, which dead-letters on
+ *   the spot: an approval follow-up carries 60 attempts to outlast a human
+ *   decision, and a retried deterministic failure would pay for a sandbox on
+ *   every attempt.
  * - Statements are static strings; every value is a bound `$n` parameter.
  */
 
@@ -83,6 +88,8 @@ export interface QueueRepository {
 		ownerId: string;
 		code: string;
 		message: string;
+		/** Handler-classified terminal failure: dead-letter without retrying. */
+		terminal?: boolean;
 	}): Promise<
 		| { ok: true; requeued: boolean }
 		| { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }
@@ -103,9 +110,10 @@ export type AckFailOutcome = {
 export function ackFailOutcome(
 	attempts: number,
 	maxAttempts: number,
+	terminal = false,
 ): AckFailOutcome {
 	const safeMax = Math.max(1, Math.floor(maxAttempts));
-	if (attempts >= safeMax) {
+	if (terminal || attempts >= safeMax) {
 		return { requeued: false, status: "dead_letter", backoffSeconds: null };
 	}
 	const backoff = Math.min(2 ** attempts, ACK_FAIL_BACKOFF_CAP_SECONDS);
@@ -150,15 +158,16 @@ const STMT = {
 			lease_expires_at = NULL
 		WHERE id = $1 AND status = 'claimed' AND lease_owner_id = $2
 		RETURNING id`,
-	// Retry/dead-letter decided by the DB-side counters; no caller input.
+	// Retry/dead-letter decided by the DB-side counters; the caller may only
+	// assert that its failure classification is terminal (`$5`).
 	ackFail: `UPDATE jobs SET
-			status = CASE WHEN attempts >= max_attempts
+			status = CASE WHEN $5::boolean OR attempts >= max_attempts
 				THEN 'dead_letter' ELSE 'pending' END,
 			last_error_code = $3,
 			last_error_message = $4,
 			lease_owner_id = NULL,
 			lease_expires_at = NULL,
-			not_before = CASE WHEN attempts >= max_attempts
+			not_before = CASE WHEN $5::boolean OR attempts >= max_attempts
 				THEN not_before
 				ELSE now() + make_interval(secs => LEAST(2 ^ attempts, 300)::int) END
 		WHERE id = $1 AND status = 'claimed' AND lease_owner_id = $2
@@ -274,6 +283,7 @@ export class PostgresQueueRepository implements QueueRepository {
 		ownerId: string;
 		code: string;
 		message: string;
+		terminal?: boolean;
 	}): Promise<
 		| { ok: true; requeued: boolean }
 		| { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }
@@ -289,6 +299,7 @@ export class PostgresQueueRepository implements QueueRepository {
 			input.ownerId,
 			input.code,
 			message,
+			input.terminal === true,
 		])) as unknown as Array<Record<string, unknown>>;
 		if (rows.length === 0) {
 			return classifyOwnershipFailure(this.sql, input.jobId, input.ownerId);

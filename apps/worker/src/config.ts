@@ -1,3 +1,4 @@
+import { MAX_PROVIDER_RETRY_ATTEMPTS } from "@isolate/mastra";
 import {
 	workerConfigSchema as sharedWorkerConfigSchema,
 	WORKER_CONFIG_DEFAULTS,
@@ -55,6 +56,22 @@ export const workerConfigSchema = z.object({
 	// USD; zero is allowed (spend disabled) but never negative or non-finite.
 	maxCostUsdPerTask: z.coerce.number().min(0).max(100).default(1),
 	maxAgentSteps: z.coerce.number().int().min(1).max(50).default(12),
+	/**
+	 * Harness P0-2: verified model context window. Unset means no prompt
+	 * preflight; a present invalid value fails at load. The study forbids
+	 * guessing a window, so there is no default.
+	 */
+	modelContextWindow: z.coerce.number().int().min(1).max(2_000_000).optional(),
+	/**
+	 * Harness P0-3: automatic retries for retryable provider failures. Default
+	 * 0 = classify once and fail the turn, matching current spend behavior.
+	 */
+	providerRetryAttempts: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.max(MAX_PROVIDER_RETRY_ATTEMPTS)
+		.default(0),
 	databaseUrl: z.string().min(1).optional(),
 });
 
@@ -100,6 +117,12 @@ export function loadWorkerConfig(
 		...(env.WORKER_MAX_AGENT_STEPS === undefined
 			? {}
 			: { maxAgentSteps: env.WORKER_MAX_AGENT_STEPS }),
+		...(env.WORKER_MODEL_CONTEXT_WINDOW === undefined
+			? {}
+			: { modelContextWindow: env.WORKER_MODEL_CONTEXT_WINDOW }),
+		...(env.WORKER_PROVIDER_RETRY_ATTEMPTS === undefined
+			? {}
+			: { providerRetryAttempts: env.WORKER_PROVIDER_RETRY_ATTEMPTS }),
 		...(env.DATABASE_URL === undefined
 			? {}
 			: { databaseUrl: env.DATABASE_URL }),

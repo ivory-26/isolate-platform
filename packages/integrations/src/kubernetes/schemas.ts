@@ -22,6 +22,8 @@ export const KUBERNETES_MAX_REASON_CHARS = 128;
 export const KUBERNETES_MAX_MESSAGE_CHARS = 4096;
 export const KUBERNETES_MAX_CONTAINERS = 64;
 export const KUBERNETES_MAX_CONDITIONS = 32;
+/** Container env vars rendered in a deployment excerpt; names are bounded. */
+export const KUBERNETES_MAX_ENV_VARS = 16;
 export const KUBERNETES_MAX_ITEMS = 50;
 export const KUBERNETES_MAX_LABELS = 64;
 export const KUBERNETES_MAX_OWNER_REFERENCES = 16;
@@ -221,6 +223,34 @@ export const kubernetesDeploymentSchema = z.object({
 			replicas: z.number().int().nonnegative().optional(),
 			selector: z
 				.object({ matchLabels: boundedLabelMap.optional() })
+				.optional(),
+			// Config that explains a failed rollout. `valueFrom` is deliberately
+			// absent: only literal values are modelled, so a SecretKeyRef or
+			// ConfigMap ref can never be resolved into evidence.
+			template: z
+				.object({
+					spec: z
+						.object({
+							containers: z
+								.array(
+									z.object({
+										name: boundedName,
+										env: z
+											.array(
+												z.object({
+													name: boundedName,
+													value: z.string().max(256).optional(),
+												}),
+											)
+											.max(KUBERNETES_MAX_ENV_VARS)
+											.optional(),
+									}),
+								)
+								.max(KUBERNETES_MAX_CONTAINERS)
+								.optional(),
+						})
+						.optional(),
+				})
 				.optional(),
 		})
 		.optional(),

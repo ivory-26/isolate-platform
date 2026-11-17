@@ -349,33 +349,38 @@ describe("fetchHoneycombIncidentContext", () => {
 		expect(calls).toHaveLength(2);
 	});
 
-	test("maps 429 to RATE_LIMITED and 401 to INTEGRATION_UNAVAILABLE", async () => {
-		for (const [status, code] of [
-			[429, "RATE_LIMITED"],
-			[401, "INTEGRATION_UNAVAILABLE"],
-		] as const) {
-			const { impl } = router({ queryCreateStatus: status });
-			let error: unknown;
-			try {
-				await fetchHoneycombIncidentContext(dependencies(impl), INPUT);
-			} catch (thrown) {
-				error = thrown;
-			}
-			expect(codeOf(error)).toBe(code);
-			expect(String((error as Error).message)).not.toContain(API_KEY);
+	test("a rate-limited or rejected read degrades to trigger-only evidence", async () => {
+		// A 429 or a 401 on the query/SLO calls is "this credential cannot read
+		// that data right now", not a reason to throw away the trigger snapshot
+		// the daemon already holds. Both provider attempts still run exactly once.
+		for (const status of [429, 401] as const) {
+			const { impl, calls } = router({
+				queryCreateStatus: status,
+				sloStatus: status,
+			});
+			const bundle = await fetchHoneycombIncidentContext(
+				dependencies(impl),
+				INPUT,
+			);
+			expect(bundle.items.map((item) => item.kind)).toEqual(["trigger"]);
+			expect(bundle.truncated).toBe(true);
+			expect(calls).toHaveLength(2);
+			expect(JSON.stringify(bundle)).not.toContain(API_KEY);
 		}
 	});
 
-	test("maps a transport failure without echoing provider text", async () => {
-		const { impl } = router({ transportError: true });
-		let error: unknown;
-		try {
-			await fetchHoneycombIncidentContext(dependencies(impl), INPUT);
-		} catch (thrown) {
-			error = thrown;
-		}
-		expect(codeOf(error)).toBe("INTEGRATION_UNAVAILABLE");
-		expect(String((error as Error).message)).not.toContain(API_KEY);
+	test("a transport failure degrades without echoing provider text", async () => {
+		const { impl, calls } = router({ transportError: true });
+		const bundle = await fetchHoneycombIncidentContext(
+			dependencies(impl),
+			INPUT,
+		);
+		expect(bundle.items.map((item) => item.kind)).toEqual(["trigger"]);
+		expect(bundle.truncated).toBe(true);
+		expect(calls).toHaveLength(2);
+		const serialized = JSON.stringify(bundle);
+		expect(serialized).not.toContain(API_KEY);
+		expect(serialized).not.toContain("connection reset");
 	});
 
 	test("drops an oversized query result and marks the bundle truncated", async () => {

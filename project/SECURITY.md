@@ -1,5 +1,27 @@
 # Security loop — connector model (wave 17)
 
+## Operational credential incident — resolved 2026-11-17
+
+During delegated Datadog pairing, a browser `evaluate` returned a new application
+key as part of a dialog's `innerText`. The DeepSeek browser task reported the
+exposure, immediately revoked that key and created one replacement with the
+same dedicated read scopes. The replacement value was not returned in a tool
+result. A later single monitor read authenticated successfully with the paired
+replacement. No secret value is reproduced in this record.
+
+The revoked value may remain in the historical tool output; it was not re-read
+or copied into repository files. The task also reports deleting an unintended
+tool-result file containing masked vendor UI values. One-time pairing codes
+visible in navigation output were consumed and expire after ten minutes.
+
+Boundary for future browser work: inspect narrowly selected, non-secret fields;
+never return a key-creation dialog's full text/HTML or screenshot. Transfer
+credentials only within the authorized local pairing flow and return fixed
+success/failure metadata. If a secret enters output, stop, revoke/replace it,
+verify revocation, and report the event without repeating the value.
+
+The wave-17 audit below is historical and describes its own verification date.
+
 | Field | Value |
 |---|---|
 | Date | 2026-10-31 |

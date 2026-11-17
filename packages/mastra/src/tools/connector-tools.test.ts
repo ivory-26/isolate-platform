@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_RISKS } from "./connector-tools";
+import { INCIDENT_SOURCES } from "@isolate/shared";
+import {
+	CONNECTOR_TOOL_NAMES,
+	CONNECTOR_TOOL_RISKS,
+	connectorIdForToolName,
+	connectorToolNamesForSource,
+} from "./connector-tools";
 import { createRiskTablePolicy, type ToolName } from "./policy";
 
 const READ_ONLY = [
@@ -62,5 +68,69 @@ describe("connector tool risk bands", () => {
 			});
 			expect(result.ok).toBe(true);
 		}
+	});
+});
+
+describe("connector tool scoping by incident source", () => {
+	test("every exposed tool maps to exactly one known connector id", () => {
+		const owned = new Map<string, string>();
+		for (const name of CONNECTOR_TOOL_NAMES) {
+			const connectorId = connectorIdForToolName(name);
+			expect(connectorId.length).toBeGreaterThan(0);
+			expect(owned.has(name)).toBe(false);
+			owned.set(name, connectorId);
+		}
+		const knownSources: readonly string[] = INCIDENT_SOURCES;
+		for (const connectorId of owned.values()) {
+			expect(knownSources).toContain(connectorId);
+		}
+	});
+
+	test("each source exposes only tools of its own connector", () => {
+		const counts = new Map<string, number>();
+		for (const source of INCIDENT_SOURCES) {
+			const names = connectorToolNamesForSource(source);
+			counts.set(source, names.length);
+			for (const name of names) {
+				expect(connectorIdForToolName(name)).toBe(source);
+			}
+		}
+		expect(counts.get("sentry")).toBe(3);
+		expect(counts.get("grafana")).toBe(3);
+		expect(counts.get("pagerduty")).toBe(5);
+		expect(counts.get("kubernetes")).toBe(4);
+		expect(counts.get("datadog")).toBe(4);
+		expect(counts.get("axiom")).toBe(3);
+		expect(counts.get("signoz")).toBe(3);
+		expect(counts.get("newrelic")).toBe(3);
+		expect(counts.get("honeycomb")).toBe(3);
+		// No connector implementation: nothing is exposed.
+		expect(counts.get("github")).toBe(0);
+		expect(counts.get("generic")).toBe(0);
+	});
+
+	test("kubernetes source owns the k8s.* tools", () => {
+		const names = connectorToolNamesForSource("kubernetes");
+		expect(names).toEqual([
+			"k8s.list_events",
+			"k8s.get_pod",
+			"k8s.get_deployment",
+			"k8s.logs_tail",
+		]);
+	});
+
+	test("every connector name is owned by one source, with nothing left over", () => {
+		const owned = INCIDENT_SOURCES.flatMap((source) =>
+			connectorToolNamesForSource(source),
+		);
+		expect(new Set(owned).size).toBe(owned.length);
+		expect([...owned].sort()).toEqual([...CONNECTOR_TOOL_NAMES].sort());
+	});
+
+	test("an unknown or absent source exposes nothing", () => {
+		expect(connectorToolNamesForSource(undefined)).toEqual([]);
+		expect(connectorToolNamesForSource("")).toEqual([]);
+		expect(connectorToolNamesForSource("unknown-connector")).toEqual([]);
+		expect(connectorToolNamesForSource("Kubernetes")).toEqual([]);
 	});
 });

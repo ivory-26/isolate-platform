@@ -1,8 +1,10 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
+	Outlet,
 	useNavigate,
 	useRouter,
+	useRouterState,
 } from "@tanstack/react-router";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
@@ -60,6 +62,9 @@ function IntegrationsError() {
 function IntegrationsPage() {
 	const search = Route.useSearch();
 	const navigate = useNavigate();
+	const isDetailRoute = useRouterState({
+		select: (state) => state.location.pathname !== "/integrations",
+	});
 	const query = useSuspenseQuery(integrationsOptions());
 	const data = query.data.ok ? query.data.value : null;
 	const integrations = data?.integrations ?? [];
@@ -70,6 +75,10 @@ function IntegrationsPage() {
 	const setTab = (tab: IntegrationTab) => {
 		void navigate({ to: "/integrations", search: { tab }, replace: true });
 	};
+
+	if (isDetailRoute) {
+		return <Outlet />;
+	}
 
 	return (
 		<PageContainer>

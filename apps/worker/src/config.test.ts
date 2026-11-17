@@ -175,3 +175,60 @@ describe("worker config — task execution caps", () => {
 		}
 	});
 });
+
+describe("worker config — harness preflight and retry bounds", () => {
+	test("defaults keep preflight disabled and retries at zero", () => {
+		const config = workerConfigSchema.parse({});
+		expect(config.modelContextWindow).toBeUndefined();
+		expect(config.providerRetryAttempts).toBe(0);
+	});
+
+	test("env values coerce into the preflight and retry bounds", () => {
+		const config = loadWorkerConfig({
+			WORKER_MODEL_CONTEXT_WINDOW: "128000",
+			WORKER_PROVIDER_RETRY_ATTEMPTS: "2",
+		});
+		expect(config.modelContextWindow).toBe(128_000);
+		expect(config.providerRetryAttempts).toBe(2);
+	});
+
+	test.each([
+		["modelContextWindow", 1],
+		["modelContextWindow", 2_000_000],
+		["providerRetryAttempts", 0],
+		["providerRetryAttempts", 3],
+	])("accepts boundary %s=%d", (field, value) => {
+		const parsed = workerConfigSchema.parse({
+			[field]: value,
+		}) as unknown as Record<string, number>;
+		expect(parsed[field]).toBe(value);
+	});
+
+	test.each([
+		["modelContextWindow", 0],
+		["modelContextWindow", -1],
+		["modelContextWindow", 1.5],
+		["modelContextWindow", 2_000_001],
+		["providerRetryAttempts", -1],
+		["providerRetryAttempts", 4],
+		["providerRetryAttempts", 1.5],
+	])("rejects out-of-bounds %s=%d", (field, value) => {
+		expect(workerConfigSchema.safeParse({ [field]: value }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects unusable env values without echoing them", () => {
+		for (const [name, value] of [
+			["WORKER_MODEL_CONTEXT_WINDOW", "0"],
+			["WORKER_MODEL_CONTEXT_WINDOW", "not-a-number"],
+			["WORKER_PROVIDER_RETRY_ATTEMPTS", "-1"],
+			["WORKER_PROVIDER_RETRY_ATTEMPTS", "9"],
+			["WORKER_PROVIDER_RETRY_ATTEMPTS", "Infinity"],
+		] as const) {
+			expect(() => loadWorkerConfig({ [name]: value })).toThrow(
+				"worker config invalid: check WORKER_* environment values",
+			);
+		}
+	});
+});

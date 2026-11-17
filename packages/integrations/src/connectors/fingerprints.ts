@@ -50,6 +50,21 @@ function segment(value: string | undefined): string | null {
 }
 
 /**
+ * The Honeycomb builder appends a `~<12 hex>` digest to the alert-state segment
+ * when the full fingerprint would exceed the shared 128-character bound
+ * (`honeycombIncidentFingerprint`). The state itself is what the reader needs;
+ * the digest only keeps two long prefixes from merging. Strip it before the
+ * strict segment check, and reject anything that is not exactly that suffix.
+ */
+const HONEYCOMB_STATE_WITH_DIGEST = /^(.{1,64})~[0-9a-f]{12}$/;
+
+function honeycombStateSegment(value: string | undefined): string | null {
+	if (value === undefined) return null;
+	const match = HONEYCOMB_STATE_WITH_DIGEST.exec(value);
+	return segment(match?.[1] ?? value);
+}
+
+/**
  * Parses the fingerprint shapes produced by the ten adapters. GitHub
  * fingerprints are handled by the existing GitHub context reader and return
  * `null` here.
@@ -106,7 +121,7 @@ export function parseConnectorIncidentFingerprint(
 		case "honeycomb": {
 			const dataset = segment(parts[1]);
 			const triggerId = segment(parts[2]);
-			const state = segment(parts[3]);
+			const state = honeycombStateSegment(parts[3]);
 			return dataset !== null && triggerId !== null && state !== null
 				? { source: "honeycomb", dataset, triggerId, state }
 				: null;

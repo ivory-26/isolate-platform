@@ -38,7 +38,13 @@ import {
 	fetchGitHubIncidentContext,
 	type GitHubTokenProvider,
 } from "@isolate/integrations";
-import { CONNECTOR_TOOL_RISKS, type SandboxToolBackend } from "@isolate/mastra";
+import {
+	BASETEN_PROVIDER_ID,
+	CONNECTOR_TOOL_RISKS,
+	type CodingAgentRuntimeFactory,
+	META_PROVIDER_ID,
+	type SandboxToolBackend,
+} from "@isolate/mastra";
 import {
 	createModalSandboxClient,
 	createTaskWorkspaceGit,
@@ -52,6 +58,7 @@ import {
 	createLoggerTraceSink,
 	createMultiTraceSink,
 	createOtlpTraceSink,
+	type ExecutionLifecycle,
 	type Logger,
 	type OrganizationId,
 	PlatformError,
@@ -65,6 +72,7 @@ import {
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
 import {
+	type ConnectorContextSkipObserver,
 	createConnectorContextLoader,
 	createRoutedContextLoader,
 } from "./connector-context";
@@ -83,6 +91,7 @@ import {
 } from "./pull-request-approval";
 import { buildRunSummary } from "./run-summary";
 import {
+	type BasetenRuntimeFactoryOptions,
 	type ConnectorToolBinding,
 	createBasetenRuntimeFactory,
 	createMetaRuntimeFactory,
@@ -214,6 +223,40 @@ export function createRunSummaryReader(deps: {
 	};
 }
 
+/**
+ * Wave 26: task-wide spend for the executor's cumulative caps. The task read is
+ * the tenant gate; `sumByTask` is keyed by task id alone, so a foreign task
+ * must never be read. Both model and sandbox rows are included by the existing
+ * aggregate. The USD total is converted only for comparison against the cap;
+ * the exact-decimal source is never rewritten or re-summed here.
+ */
+export function createTaskUsageLoader(deps: {
+	tasks: Pick<TaskRepository, "get">;
+	usage: Pick<UsageRepository, "sumByTask">;
+}): NonNullable<WorkerCompositionOverrides["loadTaskUsage"]> {
+	return async (input) => {
+		const task = await deps.tasks.get(input.taskId);
+		if (task === null || task.organization_id !== input.organizationId) {
+			return null;
+		}
+		const totals = await deps.usage.sumByTask(input.taskId);
+		return {
+			tokens: totals.totalTokens,
+			costUsd: usageCostUsdToNumber(totals.costUsd),
+		};
+	};
+}
+
+/**
+ * Exact decimal string → JS number for cap comparison only. `null`, malformed
+ * and non-positive values count as zero; spend is never invented or rounded up.
+ */
+export function usageCostUsdToNumber(value: string | null): number {
+	if (value === null) return 0;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function readProviderName(env: Record<string, string | undefined>): string {
 	return env.SANDBOX_PROVIDER?.trim() || "null";
 }
@@ -328,19 +371,38 @@ export async function selectSandboxProvider(
 	return { provider: new ModalSandboxProvider({ client }), real: true };
 }
 
+type RuntimeFactoryBuilder = (
+	env: Record<string, string | undefined>,
+	options: BasetenRuntimeFactoryOptions,
+) => CodingAgentRuntimeFactory;
+
+/**
+ * Declarative provider seam (harness study P0-1): the registry is data, not an
+ * if/else. `none` remains the offline default and is handled before lookup so
+ * no key or config is read.
+ */
+const RUNTIME_FACTORY_BUILDERS: ReadonlyMap<string, RuntimeFactoryBuilder> =
+	new Map<string, RuntimeFactoryBuilder>([
+		[META_PROVIDER_ID, createMetaRuntimeFactory],
+		[BASETEN_PROVIDER_ID, createBasetenRuntimeFactory],
+	]);
+
 export function selectRuntimeFactory(
 	env: Record<string, string | undefined>,
 	connectorTools?: ConnectorToolBinding,
 ): WorkerCompositionOverrides["createRuntime"] {
 	const name = readInferenceProvider(env);
-	const options = connectorTools === undefined ? {} : { connectorTools };
 	if (name === "none") return undefined;
-	if (name === "meta") return createMetaRuntimeFactory(env, options);
-	if (name === "baseten") return createBasetenRuntimeFactory(env, options);
-	throw new PlatformError(
-		"MISSING_CONFIG",
-		"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
-	);
+	const builder = RUNTIME_FACTORY_BUILDERS.get(name);
+	if (builder === undefined) {
+		// Preserve the exact pre-registry failure message.
+		throw new PlatformError(
+			"MISSING_CONFIG",
+			"INFERENCE_PROVIDER must be 'none', 'meta' or 'baseten'",
+		);
+	}
+	const options = connectorTools === undefined ? {} : { connectorTools };
+	return builder(env, options);
 }
 
 function sandboxBackendFactory(
@@ -835,6 +897,28 @@ export function createOrganizationIncidentContextBundleLoader(
 }
 
 /**
+ * Wave 28: records a skipped evidence read on the run timeline.
+ *
+ * The payload is a bounded reason and a source token — never provider text, a
+ * URL, a header or a secret. The observers that call this swallow failures, so
+ * an unavailable timeline can never fail the task or change its verdict.
+ */
+export function createConnectorContextSkipSink(
+	lifecycle: Pick<ExecutionLifecycle, "event">,
+): ConnectorContextSkipObserver {
+	return async ({ organizationId, taskId, source, reason }) => {
+		await lifecycle.event({
+			organizationId,
+			taskId,
+			workflowRunId: null,
+			type: "connector.context_skipped",
+			actor: "worker",
+			data: { source, reason },
+		});
+	};
+}
+
+/**
  * Wave 17: connector tool binding for the device poll queue.
  *
  * Enabled only when `DEVICE_GATEWAY_ENABLED` is exactly `true` (the same gate
@@ -910,10 +994,20 @@ export async function createConfiguredWorkerComposition(
 	const taskAttemptRepository = new PostgresTaskAttemptRepository(sql);
 	const artifactRepository = new PostgresArtifactRepository(sql);
 	const branchLocks = new PostgresBranchLockRepository(sql);
+	// One durable lifecycle per worker: the task surface and the evidence-skip
+	// timeline share it.
+	const executionLifecycle = new PostgresExecutionLifecycle(sql);
 
 	const overrides: WorkerCompositionOverrides = {
 		...traceOverrides,
 		usageSink,
+		// Wave 26: cumulative caps need spend persisted by earlier attempts
+		// (model + sandbox rows). Tenant-gated and read from the same aggregate
+		// the run summary uses.
+		loadTaskUsage: createTaskUsageLoader({
+			tasks: taskRepository,
+			usage: usageRepository,
+		}),
 		// Wave 13: the task-context projection predates the incident columns, so
 		// the task row is consulted once to carry the fingerprint into the
 		// context. Only an incident task pays for that second read.
@@ -939,7 +1033,7 @@ export async function createConfiguredWorkerComposition(
 		priceTable,
 		// Wave 11: one durable lifecycle per worker. It is inert until a task
 		// actually moves through the new handler path.
-		lifecycle: new PostgresExecutionLifecycle(sql),
+		lifecycle: executionLifecycle,
 		// Wave 11: full large payloads (diffs) go to the tenant-scoped blob table;
 		// artifacts keep a bounded inline preview and a `blob:<sha256>` reference.
 		blobStore: new PostgresBlobStore(sql),
@@ -1048,6 +1142,10 @@ export async function createConfiguredWorkerComposition(
 	// receives incident evidence.
 	const deviceGatewayEnabled =
 		env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true";
+	// Evidence loss is observable: a skipped connector read lands on the run
+	// timeline with a bounded reason, never as an empty bundle the run page
+	// cannot explain. The payload carries no provider text.
+	const reportContextSkip = createConnectorContextSkipSink(executionLifecycle);
 	// Wave 19: non-GitHub incidents are read by the user's device, which holds
 	// the provider key. Built only with the device gateway; the queue transport
 	// is `connector_calls`, never a synchronous provider call in the worker.
@@ -1060,6 +1158,7 @@ export async function createConfiguredWorkerComposition(
 				}),
 				calls: new PostgresConnectorCallRepository(sql),
 				signals: new PostgresIncidentRepository(sql),
+				onSkip: reportContextSkip,
 			})
 		: undefined;
 	const githubContextLoader =
@@ -1084,6 +1183,9 @@ export async function createConfiguredWorkerComposition(
 			...(connectorContextLoader === undefined
 				? {}
 				: { connector: connectorContextLoader }),
+			// A routing-level skip (no device gateway bound) uses the same sink
+			// as the loader's own reasons.
+			onSkip: reportContextSkip,
 		});
 	}
 

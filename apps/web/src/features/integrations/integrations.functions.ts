@@ -89,6 +89,7 @@ export const getIntegration = createServerFn({ method: "GET" })
 						summary: summarizeIntegration(entry, aggregate),
 						subscriptions: subscriptions.subscriptions,
 						deliveries: deliveries.deliveries,
+						deliveriesTruncated: deliveries.truncated,
 						canManage: canManage(scope.role),
 					};
 				},

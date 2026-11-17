@@ -2,6 +2,69 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 28 — recover the Claude Code goals (2026-11-17)
+
+Coordinator: Codex on `task/w28-recovery-coordinator`. Execution: four T3-managed
+isolated Claude Code worktrees using `deepseek-v4.1-flash` through the existing
+Open Code Go Anthropic endpoint. T3's supported Claude custom-model setting was
+registered locally without changing the Claude/Open Code credentials.
+
+| Lane | Ownership | Acceptance | Status |
+|---|---|---|---|
+| W28-WEB | `apps/web/**` | Reconcile the old audit; close remaining concrete P0/P1 data, refresh, truncation and latency gaps | done — `a129262` → `6709f4b` |
+| W28-CONNECTORS | `packages/integrations/**`, `apps/device-daemon/**` | Capability-aware bounded Honeycomb verification; preserve honest partial evidence; fake transports only | done — `e9b5921` → `1617a84` |
+| W28-HARNESS | `packages/mastra/**` | Verify and repair concrete gaps in the merged harness P0 work | done — `ccc4b95` → `160b7b2` |
+| W28-CONTEXT | `apps/worker/**`, `packages/shared/**` | Finish the preserved context-skip diagnostics without breaking consumers; bounded events, observer isolation and tenancy tests | done — `91997f0` → `c04322a` |
+| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | done — final validation 3,342 pass / 10 skips / 0 fail twice; 9/9 typechecks, build/client/security checks pass |
+| W28-BROWSER | browser configuration/visual checks only; no source edits | Honeycomb/Datadog pairing and bounded auth verification, then close task tabs | done — both paired on Verification relay; query-plan blocker recorded; temporary exposed Datadog key revoked/replaced |
+| W28-DD-READ | existing relay queue/Neon MCP only; no source edits | Exactly one `datadog.get_monitor` read, no model/sandbox or retry | done — call `7793917d-12ac-4f86-9651-8da14c99d32d`, 1 request / 0 errors, 7.95 s, 0 usage rows |
+| W28-RELAY-CHOICE | focused pairing UI/helper/tests under `apps/web/**` | Prefer the reachable relay without overriding a manual selection or weakening device-bound claims | done — `150f8dc` → `982b14c`; 23 focused / 104 integration-device tests pass twice |
+
+Every execution lane must commit on its own `task/*` branch and supply scoped
+Biome, project `tsc --noEmit`, and scoped test evidence twice. Never push.
+The three preexisting context-diagnostic edits are preserved in a named stash
+and a local handoff patch; `.mcp.json` remains untracked and untouched.
+
+Browser finding: Honeycomb's existing enabled Configuration key cannot enable
+**Run queries**: the control is disabled with “This feature is only available
+for enterprise plans.” Re-pairing alone does not unblock query evidence.
+The old Onboarding ingest key is confirmed disabled. Datadog site: US1,
+confirmed by the user; scoped pairing and one real `monitors_read` acceptance
+read are complete. Other Datadog scopes have not been live-exercised.
+No Baseten/Modal acceptance or model/sandbox-backed webhook run is authorized
+by this offline implementation wave.
+
+## Wave 27 — connector live E2E and honest run budgets (2026-11-14)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W27-E2E | `task/w25-connector-detail-outlet` (working tree) | pending | **done** — six connectors driven by signed bridge deliveries against `ivory-26/isolate-e2e-fixture`; PRs #3–#7; SigNoz blocked on an empty workspace |
+| W27-DOCS | same | pending | **done** — `docs/connectors/live-verification.md`; six vendor pages; `KNOWN-LIMITS` §1/§2.1; `connector-onboarding` |
+
+Evidence: task ids, `connector_calls`, `usage_records` and PR numbers recorded in
+[`docs/connectors/live-verification.md`](../docs/connectors/live-verification.md).
+Result: New Relic, Honeycomb, Axiom and Kubernetes reached a PR; Datadog had #3 from
+its legacy run; SigNoz produced no PR (no alert rules, job budget exhausted).
+Findings: worker needs `DEVICE_GATEWAY_ENABLED=true`; a stale k8s ServiceAccount token
+fails closed in 63 ms; empty evidence makes runs spend their turn/job budget; `cost_usd`
+stays `NULL` without `COST_PRICE_TABLE`. No provider keys used; zero sandboxes left running.
+
+## Wave 26 — task-wide spend caps and stalled-stream retry (2026-11-13)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W26-CAPS | `task/w26-caps` | `274e3b1` | **done** — task-wide token/USD seeding from `usage_records`, pre-turn token reservation, one bounded transport retry per turn |
+| W26-CAPS-FOLLOWUP | `task/w26-caps-followup` | `de1568f` (merge `90895a1`) | **done** — meter the current attempt's sandbox in the USD cap; keep the reservation for a usage-less turn; comments state the heuristic honestly |
+| W26-DOCS | `task/w26-docs-connectors` | `0c7f90e` (merge `4a8c76b`) | **done** — six bridge-only connector pages aligned with the implemented paths |
+
+## Wave 25 — connector detail outlet and pairing/dead-letter fixes (2026-11-13)
+
+| Lane | Branch | Commit | Status |
+|---|---|---|---|
+| W25-DETAIL | `task/w25-connector-detail-outlet` | `5389565`, `8ba8744`, `860f7ae`, `7a7a459`, `93ca846` | **done** — connector detail route under `/integrations`, GitHub install return, guided pairing fields, landing alt cleanup |
+| W25-INTAKE | same | `993100d`, `d1881ae` | **done** — ask for a fix when the owned target is source; browser origin preserved on pairing posts |
+| W25-QUEUE | same | `3c6bc6a`, `d4f19b0`, `2f03087` | **done** — terminal handler verdict honored, deterministic provider rejection dead-lettered, task closed when its job dead-letters |
+
 ## Wave 24 — connector verification, selectors, landing truth (2026-11-02)
 
 | Lane | Branch | Commit | Status |

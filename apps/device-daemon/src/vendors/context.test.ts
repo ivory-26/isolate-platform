@@ -191,7 +191,8 @@ const VENDOR_CASES: readonly VendorCase[] = [
 		tool: "signoz.context.fetch",
 		fingerprint: "signoz:rule-1:abcdef0123456789",
 		service: "checkout",
-		selector: "/api/v1/rules/rule-1",
+		// SigNoz >= 0.150 serves rule reads on v2; v1 answers 404.
+		selector: "/api/v2/rules/rule-1",
 	},
 ];
 
@@ -250,6 +251,45 @@ describe("context preloading mapping", () => {
 			}),
 		);
 		expect(fetch.requests[0]?.body).toContain('"column":"error"');
+	});
+
+	test("honeycomb accepts its own trigger_triggered incident kind", async () => {
+		// `trigger_triggered` is the kind the Honeycomb adapter itself emits; it
+		// is an incident classification, not a query kind. Forwarding it
+		// verbatim used to fail the whole evidence call before the provider read.
+		const fetch = recordingFetch();
+		const dispatch = dispatched(
+			fetch.fetchImpl,
+			recordingKubernetesClient().factory,
+		);
+		const outcome = await dispatch(
+			call("honeycomb.context.fetch", {
+				incidentFingerprint: "honeycomb:prod:trigger-1:triggered",
+				service: "checkout",
+				kind: "trigger_triggered",
+			}),
+		);
+		expect(outcome.ok).toBe(true);
+		expect(fetch.requests.length).toBeGreaterThan(0);
+		expect(fetch.requests[0]?.body).toContain('"column":"duration_ms"');
+	});
+
+	test("honeycomb accepts the digest-suffixed over-long fingerprint", async () => {
+		// The builder appends `~<12 hex>` to the state segment when the full
+		// value would exceed 128 chars; the daemon must still resolve the state.
+		const fetch = recordingFetch();
+		const dispatch = dispatched(
+			fetch.fetchImpl,
+			recordingKubernetesClient().factory,
+		);
+		const outcome = await dispatch(
+			call("honeycomb.context.fetch", {
+				incidentFingerprint: `honeycomb:${"d".repeat(34)}:${"t".repeat(34)}:critical~0123456789ab`,
+				service: "checkout",
+			}),
+		);
+		expect(outcome.ok).toBe(true);
+		expect(fetch.requests[0]?.body).toContain('"column":"duration_ms"');
 	});
 });
 

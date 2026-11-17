@@ -763,11 +763,32 @@ async function fetchMonitor(
 	client: HttpClient,
 	input: { monitorId: string; fetchedAt: string },
 ): Promise<DatadogEvidenceResult> {
+	const path = `/api/v1/monitor/${encodeURIComponent(input.monitorId)}`;
 	const outcome = await client.request(
-		`/api/v1/monitor/${encodeURIComponent(input.monitorId)}`,
+		path,
 		{ method: "GET" },
 		"datadog monitor",
 	);
+	// A rejected or missing monitor is a diagnosable state, not silence: an
+	// empty bundle cannot tell a missing scope from a wrong monitor id.
+	if (outcome.kind === "denied" || outcome.kind === "missing") {
+		const denied = outcome.kind === "denied";
+		const excerpt = denied
+			? "Datadog rejected the monitor read with 403. The paired Application key does not grant monitors_read, so monitor state is unavailable for this incident."
+			: `Datadog returned 404 for monitor ${input.monitorId} on this site, so monitor state is unavailable for this incident.`;
+		return {
+			item: buildContextItem({
+				kind: denied ? "monitor_denied" : "monitor_missing",
+				title: denied
+					? "Monitor read denied (monitors_read)"
+					: `Monitor not found: ${input.monitorId}`,
+				url: `${config.baseUrl}${path}`,
+				excerpt,
+				fetchedAt: input.fetchedAt,
+			}),
+			truncated: true,
+		};
+	}
 	if (outcome.kind !== "ok") return { item: null, truncated: true };
 	const parsed = datadogMonitorSchema.safeParse(outcome.body);
 	if (!parsed.success) return { item: null, truncated: true };

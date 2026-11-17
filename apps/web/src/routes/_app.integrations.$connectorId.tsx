@@ -198,7 +198,7 @@ function ConnectorDetail({
 
 					<DeliveriesPanel
 						deliveries={detail?.deliveries ?? []}
-						truncated={false}
+						truncated={detail?.deliveriesTruncated ?? false}
 					/>
 
 					<ConsoleNote role="note">

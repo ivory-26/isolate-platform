@@ -16,6 +16,7 @@ import {
 import { NullProvider } from "@isolate/sandbox";
 import {
 	asOrganizationId,
+	type LifecycleEventInput,
 	type Logger,
 	type OrganizationId,
 	type TaskId,
@@ -24,9 +25,11 @@ import { workerConfigSchema } from "./config";
 import {
 	createConfiguredConnectorTools,
 	createConfiguredWorkerComposition,
+	createConnectorContextSkipSink,
 	createIncidentContextBundleLoader,
 	createRunSummaryReader,
 	createSandboxEnvResolver,
+	createTaskUsageLoader,
 	createToolInvocationRecorder,
 	loadPullRequestTargetFromEvents,
 	loadPullRequestTaskState,
@@ -196,6 +199,8 @@ describe("configured composition", () => {
 		expect(composition.queue).toBeDefined();
 		expect(typeof composition.overrides.usageSink?.record).toBe("function");
 		expect(typeof composition.overrides.loadTaskContext).toBe("function");
+		// Wave 26: cumulative caps read task-wide spend from `usage_records`.
+		expect(typeof composition.overrides.loadTaskUsage).toBe("function");
 		expect(composition.overrides.lifecycle).toBeDefined();
 		// Wave 11: large diffs are stored through the tenant-scoped blob table.
 		expect(composition.overrides.blobStore).toBeDefined();
@@ -576,6 +581,123 @@ describe("wave-13 incident context seam", () => {
 		);
 		expect(composed.githubAuth).toBe(true);
 		expect(typeof composed.overrides.loadContextBundle).toBe("function");
+	});
+});
+
+describe("wave-28 connector context skip timeline", () => {
+	const ORG = "11111111-1111-4111-8111-111111111111" as OrganizationId;
+	const OTHER_ORG = "22222222-2222-4222-8222-222222222222" as OrganizationId;
+	const TASK = "3f0a2c7e-8b1d-4c2a-9e5f-6a7b8c9d0e1f" as TaskId;
+
+	/**
+	 * Minimal SQL seam: task read by id, device list by organization, and the
+	 * run-event insert. Any other statement fails loudly, so the test cannot
+	 * silently pass on a path it did not intend to exercise.
+	 */
+	function fakeSql(inserts: unknown[][]) {
+		const taskRow = {
+			id: TASK,
+			organization_id: ORG,
+			incident_fingerprint: "sentry:acme:web:42",
+			budget_limits: null,
+			acceptance_checks: null,
+			file_ownership: null,
+			created_at: new Date(0),
+			updated_at: new Date(0),
+		};
+		return {
+			async unsafe(text: string, params: readonly unknown[]) {
+				if (params.length === 6 && params[3] === "connector.context_skipped") {
+					inserts.push([...params]);
+					return [{ id: "evt-1" }];
+				}
+				if (params.length === 1 && params[0] === TASK) return [taskRow];
+				if (params.length === 1 && params[0] === ORG) return [];
+				throw new Error(`unexpected query: ${text}`);
+			},
+		} as unknown as PgSql;
+	}
+
+	test("builds a bounded skip event with no evidence text", async () => {
+		const events: LifecycleEventInput[] = [];
+		const sink = createConnectorContextSkipSink({
+			async event(input) {
+				events.push(input);
+			},
+		});
+
+		await sink({
+			organizationId: ORG,
+			taskId: TASK,
+			source: "kubernetes",
+			reason: "call_timeout",
+		});
+
+		expect(events).toEqual([
+			{
+				organizationId: ORG,
+				taskId: TASK,
+				workflowRunId: null,
+				type: "connector.context_skipped",
+				actor: "worker",
+				data: { source: "kubernetes", reason: "call_timeout" },
+			},
+		]);
+	});
+
+	test("a skipped connector read is written to the run timeline", async () => {
+		const inserts: unknown[][] = [];
+		const composed = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{ DEVICE_GATEWAY_ENABLED: "true" },
+			{ createDb: () => fakeSql(inserts) },
+		);
+		const load = composed.overrides.loadContextBundle;
+		if (load === undefined) throw new Error("routed loader not bound");
+
+		const bundle = await load({
+			organizationId: ORG,
+			taskId: TASK,
+			repositoryFullName: "acme/widget",
+			ref: "main",
+		});
+
+		expect(bundle).toBeNull();
+		// No device row for the organization: the broker fails closed and the
+		// loader reports that reason instead of staying silent.
+		expect(inserts).toEqual([
+			[
+				ORG,
+				TASK,
+				null,
+				"connector.context_skipped",
+				"worker",
+				JSON.stringify({ source: "sentry", reason: "broker_failed" }),
+			],
+		]);
+	});
+
+	test("a foreign organization never reads a device or writes a skip", async () => {
+		const inserts: unknown[][] = [];
+		const composed = await createConfiguredWorkerComposition(
+			{ ...CONFIG, databaseUrl: "postgres://unused.invalid/db" },
+			logger(),
+			{ DEVICE_GATEWAY_ENABLED: "true" },
+			{ createDb: () => fakeSql(inserts) },
+		);
+		const load = composed.overrides.loadContextBundle;
+		if (load === undefined) throw new Error("routed loader not bound");
+
+		const bundle = await load({
+			organizationId: OTHER_ORG,
+			taskId: TASK,
+			repositoryFullName: "acme/widget",
+			ref: "main",
+		});
+
+		expect(bundle).toBeNull();
+		expect(inserts).toEqual([]);
 	});
 });
 
@@ -976,5 +1098,68 @@ describe("wave-11 price table and run summary", () => {
 		expect(
 			await reader({ organizationId: OTHER_ORG, taskId: TASK }),
 		).toBeNull();
+	});
+
+	test("task usage loader returns task-wide tokens and parses exact cost", async () => {
+		const seen: TaskId[] = [];
+		const load = createTaskUsageLoader({
+			tasks: {
+				get: async (taskId) =>
+					({
+						id: taskId,
+						organization_id: ORG,
+					}) as unknown as TaskRow,
+			},
+			usage: {
+				sumByTask: async (taskId) => {
+					seen.push(taskId);
+					return {
+						promptTokens: 120,
+						completionTokens: 30,
+						totalTokens: 150,
+						costUsd: "1.250042",
+					};
+				},
+			},
+		});
+		expect(await load({ organizationId: ORG, taskId: TASK })).toEqual({
+			tokens: 150,
+			costUsd: 1.250042,
+		});
+		expect(seen).toEqual([TASK]);
+
+		// A foreign task is never read: `sumByTask` is keyed by task id only.
+		expect(await load({ organizationId: OTHER_ORG, taskId: TASK })).toBeNull();
+		expect(seen).toEqual([TASK]);
+	});
+
+	test("task usage loader treats a null or malformed cost as zero", async () => {
+		const loadWith = (costUsd: string | null) =>
+			createTaskUsageLoader({
+				tasks: {
+					get: async (taskId) =>
+						({ id: taskId, organization_id: ORG }) as unknown as TaskRow,
+				},
+				usage: {
+					sumByTask: async () => ({
+						promptTokens: 0,
+						completionTokens: 0,
+						totalTokens: 0,
+						costUsd,
+					}),
+				},
+			});
+		expect(await loadWith(null)({ organizationId: ORG, taskId: TASK })).toEqual(
+			{
+				tokens: 0,
+				costUsd: 0,
+			},
+		);
+		expect(
+			await loadWith("not-a-decimal")({
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toEqual({ tokens: 0, costUsd: 0 });
 	});
 });

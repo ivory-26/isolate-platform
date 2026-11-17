@@ -401,10 +401,25 @@ describe("fetchDatadogContext", () => {
 			incidentId: INCIDENT_ID,
 			monitorId: MONITOR_ID,
 		});
-		expect(bundle.items).toEqual([]);
+		// A denied or missing optional resource is reported, not swallowed.
+		expect(bundle.items.map((item) => item.kind)).toEqual(["monitor_missing"]);
+		expect(bundle.items[0]?.excerpt).toContain("404");
 		expect(bundle.truncated).toBe(true);
 		expect(calls.length).toBe(4);
 		expect(contextBundleSchema.safeParse(bundle).success).toBe(true);
+	});
+
+	test("a monitor 403 names the missing scope instead of returning silence", async () => {
+		const { impl } = router({ monitorStatus: 403 });
+		const bundle = await fetchDatadogContext(dependencies(impl), {
+			incidentFingerprint: "datadog:1:abc",
+			service: "checkout",
+			monitorId: MONITOR_ID,
+		});
+		const denied = bundle.items.find((item) => item.kind === "monitor_denied");
+		expect(denied?.excerpt).toContain("monitors_read");
+		expect(denied?.excerpt).not.toContain("supersecret");
+		expect(bundle.truncated).toBe(true);
 	});
 
 	test("skips incident and monitor calls, and logs when disabled", async () => {

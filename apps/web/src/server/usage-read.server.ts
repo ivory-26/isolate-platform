@@ -80,27 +80,19 @@ export async function readUsage(
 	now: Date = new Date(),
 ): Promise<UsageReadModel> {
 	const window = buildUsageWindow(period, now);
-	const usageRows = rowsOf(
-		await sql.unsafe(USAGE_DAYS_SQL, [
-			organizationId,
-			window.since,
-			window.until,
-		]),
-	) as unknown as UsageDayRow[];
-	const sandboxRows = rowsOf(
-		await sql.unsafe(SANDBOX_DAYS_SQL, [
-			organizationId,
-			window.since,
-			window.until,
-		]),
-	) as unknown as SandboxDayRow[];
-	const taskRows = rowsOf(
-		await sql.unsafe(USAGE_TASKS_SQL, [
-			organizationId,
-			window.since,
-			window.until,
-		]),
-	);
+	const parameters = [organizationId, window.since, window.until] as const;
+
+	// The three aggregates share one window and are independent of each other,
+	// so they go out together rather than as three serial round trips.
+	const [usageResult, sandboxResult, taskResult] = await Promise.all([
+		sql.unsafe(USAGE_DAYS_SQL, parameters),
+		sql.unsafe(SANDBOX_DAYS_SQL, parameters),
+		sql.unsafe(USAGE_TASKS_SQL, parameters),
+	]);
+
+	const usageRows = rowsOf(usageResult) as unknown as UsageDayRow[];
+	const sandboxRows = rowsOf(sandboxResult) as unknown as SandboxDayRow[];
+	const taskRows = rowsOf(taskResult);
 	return aggregateUsage({
 		period,
 		now,

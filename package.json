@@ -9,16 +9,16 @@
 		"format": "biome format",
 		"lint": "biome lint",
 		"check": "biome check",
-		"test": "bun test",
-		"acceptance:offline": "bun scripts/acceptance-offline.ts",
+		"test": "bun --no-env-file test",
+		"acceptance:offline": "bun --no-env-file scripts/acceptance-offline.ts",
 		"acceptance:live": "bun --env-file .env scripts/acceptance-live.ts",
 		"acceptance:github-write": "bun --env-file .env scripts/acceptance-live-github-write.ts",
 		"acceptance:connector-live": "bun --env-file .env scripts/acceptance-connector-live.ts",
 		"seed": "bun scripts/seed-workspace.ts",
 		"security:check": "bun scripts/security-check.ts",
 		"acceptance:k8s-local": "bun scripts/acceptance-k8s-local.ts",
-		"typecheck": "bun scripts/typecheck-all.ts",
-		"validate": "bun run check && bun run typecheck && bun test"
+		"typecheck": "bun --no-env-file scripts/typecheck-all.ts",
+		"validate": "bun --no-env-file run check && bun --no-env-file run typecheck && bun --no-env-file test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.5",

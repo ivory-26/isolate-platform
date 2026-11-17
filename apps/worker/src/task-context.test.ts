@@ -116,6 +116,44 @@ describe("toTaskContext", () => {
 		).toBeUndefined();
 	});
 
+	test("rejects a task branch equal to the base branch before provisioning", () => {
+		// `git switch -c main` cannot succeed after cloning main; the handler
+		// would otherwise spend a sandbox to discover it as GIT_FAILED.
+		expect(() =>
+			toTaskContext(row({ branch: "main" }), {
+				organizationId: ORG,
+				taskId: TASK,
+			}),
+		).toThrow(/task branch must differ/);
+	});
+
+	test("forwards a bounded incident source and omits it for ordinary tasks", () => {
+		expect(
+			toTaskContext(row({ incidentSource: "signoz" }), {
+				organizationId: ORG,
+				taskId: TASK,
+			}).incidentSource,
+		).toBe("signoz");
+		// Bounded to the `tasks.incident_source` column constraint (32 chars).
+		expect(
+			toTaskContext(row({ incidentSource: "s".repeat(64) }), {
+				organizationId: ORG,
+				taskId: TASK,
+			}).incidentSource?.length,
+		).toBe(32);
+		// Ordinary tasks carry no source and therefore expose no connector tools.
+		expect(
+			toTaskContext(row(), { organizationId: ORG, taskId: TASK })
+				.incidentSource,
+		).toBeUndefined();
+		expect(
+			toTaskContext(row({ incidentSource: "   " }), {
+				organizationId: ORG,
+				taskId: TASK,
+			}).incidentSource,
+		).toBeUndefined();
+	});
+
 	test("rejects a mismatched organization", () => {
 		expect(() =>
 			toTaskContext(row(), {

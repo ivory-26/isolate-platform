@@ -12,14 +12,15 @@
 
 This document answers one question: **what is the smallest, safest set of DevSecOps integrations that lets the agent turn a real operational signal into a bounded context bundle and a normal task?** It is deliberately biased toward read-only access, provider-native structure, and evidence that can be audited. The implemented subset is listed in [Implemented today](#implemented-today-code-map).
 
-> **Wave 24 status note.** This page preserves the 2026-10-30 research and its
-> 2026-11-01 code map. The relay now carries nine vendor adapters with
-> vendor-specific pairing fields and one bounded `connector.verify` read. Only
-> GitHub and the generic webhook are live-proven end to end; Kubernetes has a
-> local live proof, and the SaaS adapters are fake-tested. Where this page says a
-> vendor adapter is design-only, read that as **no end-to-end live proof**. Current
-> behavior is in [`connectors/SETUP.md`](connectors/SETUP.md); current limits are
-> in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
+> **Wave 27 status note.** This page preserves the 2026-10-30 research and its
+> 2026-11-01 code map. The relay carries nine vendor adapters with vendor-specific
+> pairing fields and one bounded `connector.verify` read. GitHub and the generic
+> webhook are live-proven end to end, and every relay connector except Sentry now
+> has a recorded live run through the signed bridge (see
+> [`connectors/live-verification.md`](connectors/live-verification.md)). Where this
+> page says a vendor adapter is design-only, read that as **no adapter code**.
+> Current behavior is in [`connectors/SETUP.md`](connectors/SETUP.md); current
+> limits are in [`KNOWN-LIMITS.md`](KNOWN-LIMITS.md).
 
 Anything that could not be confirmed against official documentation is marked **UNVERIFIED** rather than guessed. Endpoint paths, scope names, header names, and numeric limits below are quoted from the sources in §9. Where code and an earlier version of this document disagreed, the code is quoted and the difference is recorded in §8.
 

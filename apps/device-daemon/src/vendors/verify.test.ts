@@ -118,7 +118,10 @@ const PAIRED: Record<
 describe("connector.verify provider probes", () => {
 	test("each SaaS connector makes exactly one bounded authenticated read", async () => {
 		for (const [connectorId, paired] of Object.entries(PAIRED)) {
-			const capture = captureFetch(() => Response.json({ ok: true }));
+			// Honeycomb verifies the credential class from the `/1/auth` body,
+			// so its mock has to answer with a documented Configuration key.
+			const body = connectorId === "honeycomb" ? { type: "configuration" } : {};
+			const capture = captureFetch(() => Response.json(body));
 			const dispatch = createDispatcher({
 				config: baseConfig(),
 				env: {},
@@ -231,7 +234,9 @@ describe("connector.verify provider probes", () => {
 	});
 
 	test("Honeycomb, Axiom and SigNoz use their documented headers", async () => {
-		const honeycomb = captureFetch(() => Response.json({}));
+		const honeycomb = captureFetch(() =>
+			Response.json({ type: "configuration" }),
+		);
 		await createDispatcher({
 			config: baseConfig(),
 			env: {},
@@ -320,6 +325,161 @@ describe("connector.verify provider probes", () => {
 		expect(calls).toEqual([
 			{ path: "/api/v1/namespaces/production/events", query: { limit: "1" } },
 		]);
+	});
+});
+
+describe("connector.verify Honeycomb credential class", () => {
+	async function verifyHoneycomb(
+		respond: (request: CapturedRequest) => Response | Promise<Response>,
+	) {
+		const capture = captureFetch(respond);
+		const dispatch = createDispatcher({
+			config: baseConfig(),
+			env: {},
+			fetchImpl: capture.fetchImpl,
+			secretStore: storeWith(
+				PAIRED.honeycomb?.fields ?? {},
+				PAIRED.honeycomb?.selectors ?? {},
+			),
+		});
+		const outcome = outcomeOf(await dispatch(callFor("honeycomb")));
+		return { outcome, requests: capture.requests };
+	}
+
+	test("a Free-plan Configuration key verifies even with Run queries off", async () => {
+		// Measured in the Honeycomb UI: on a Free plan "Run queries" is shown
+		// unchecked *and disabled* ("only available for enterprise plans"), so a
+		// correct Configuration key carries `queries: false`. Requiring query
+		// capability would invalidate every valid Free-plan key.
+		const { outcome, requests } = await verifyHoneycomb(() =>
+			Response.json({
+				id: "hcxl_0000000000000000",
+				type: "configuration",
+				api_key_access: {
+					events: true,
+					markers: true,
+					triggers: true,
+					boards: true,
+					queries: false,
+					columns: true,
+					createDatasets: false,
+					slos: true,
+					recipients: true,
+					privateBoards: true,
+				},
+				environment: { name: "test", slug: "test" },
+				team: { name: "acme", slug: "acme" },
+			}),
+		);
+		expect(outcome).toEqual({ verified: true, reasonCode: "OK" });
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("https://api.honeycomb.io/1/auth");
+		expect(requests[0]?.headers.get("x-honeycomb-team")).toBe("honeycomb-key");
+	});
+
+	test("an ingest key is AUTH_FAILED, not silently promoted", async () => {
+		// Ingest keys authenticate against `/1/auth` too, then refuse every read
+		// the connector makes; a bare 2xx used to promote them.
+		const { outcome, requests } = await verifyHoneycomb(() =>
+			Response.json({
+				id: "hcxik_0000000000000000",
+				type: "ingest",
+				api_key_access: { createDatasets: true },
+			}),
+		);
+		expect(outcome).toEqual({ verified: false, reasonCode: "AUTH_FAILED" });
+		expect(requests).toHaveLength(1);
+	});
+
+	test("a 2xx body without a documented class is PROVIDER_ERROR", async () => {
+		// PROVIDER_ERROR leaves the stored status unchanged: a body that proves
+		// nothing must never promote the key.
+		for (const body of [{ ok: true }, {}, [], "configuration", null]) {
+			const { outcome, requests } = await verifyHoneycomb(() =>
+				Response.json(body),
+			);
+			expect(outcome).toEqual({
+				verified: false,
+				reasonCode: "PROVIDER_ERROR",
+			});
+			expect(requests).toHaveLength(1);
+		}
+	});
+
+	test("provider rejections map before the class check", async () => {
+		const denied = await verifyHoneycomb(
+			() => new Response("denied", { status: 401 }),
+		);
+		expect(denied.outcome).toEqual({
+			verified: false,
+			reasonCode: "AUTH_FAILED",
+		});
+		const limited = await verifyHoneycomb(
+			() => new Response("slow down", { status: 429 }),
+		);
+		expect(limited.outcome).toEqual({
+			verified: false,
+			reasonCode: "RATE_LIMITED",
+		});
+	});
+
+	test("a thrown fetch is UNREACHABLE with no retry", async () => {
+		let calls = 0;
+		const capture = captureFetch(() => {
+			calls += 1;
+			throw new Error("connection refused");
+		});
+		const dispatch = createDispatcher({
+			config: baseConfig(),
+			env: {},
+			fetchImpl: capture.fetchImpl,
+			secretStore: storeWith(
+				PAIRED.honeycomb?.fields ?? {},
+				PAIRED.honeycomb?.selectors ?? {},
+			),
+		});
+		expect(outcomeOf(await dispatch(callFor("honeycomb")))).toEqual({
+			verified: false,
+			reasonCode: "UNREACHABLE",
+		});
+		expect(calls).toBe(1);
+	});
+
+	test("a non-JSON or oversized body is not read past the cap", async () => {
+		const nonJson = await verifyHoneycomb(
+			() => new Response("<html>not json</html>", { status: 200 }),
+		);
+		expect(nonJson.outcome).toEqual({
+			verified: false,
+			reasonCode: "PROVIDER_ERROR",
+		});
+		expect(nonJson.requests).toHaveLength(1);
+
+		let produced = 0;
+		const chunks = Array.from({ length: 8 }, () =>
+			new Uint8Array(16 * 1024).fill(97),
+		);
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				const chunk = chunks[produced];
+				produced += 1;
+				if (chunk === undefined) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(chunk);
+			},
+		});
+		const oversized = await verifyHoneycomb(
+			() => new Response(stream, { status: 200 }),
+		);
+		expect(oversized.outcome).toEqual({
+			verified: false,
+			reasonCode: "PROVIDER_ERROR",
+		});
+		expect(oversized.requests).toHaveLength(1);
+		// 128 KiB is available; the reader stops at the 64 KiB cap.
+		expect(produced).toBeLessThan(chunks.length);
 	});
 });
 

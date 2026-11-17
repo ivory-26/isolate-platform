@@ -97,7 +97,11 @@ const HTML_HEADERS = {
 	pragma: "no-cache",
 	"content-security-policy":
 		"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-	"referrer-policy": "no-referrer",
+	// `no-referrer` makes Chromium send `Origin: null` on the same-origin form
+	// POST, which the CSRF origin check below rejects. `strict-origin` keeps the
+	// request's real origin and still sends only the origin (never the pairing
+	// code in the path) as the referrer.
+	"referrer-policy": "strict-origin",
 	"x-content-type-options": "nosniff",
 } as const;
 

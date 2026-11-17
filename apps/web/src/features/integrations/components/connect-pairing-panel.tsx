@@ -35,6 +35,7 @@ import {
 	pairingErrorMessage,
 } from "../pairing";
 import { integrationKeys } from "../queries";
+import { defaultRelayId, relayChoices } from "../relay-selection";
 import {
 	autoVerificationCredentialId,
 	verificationFailureMessage,
@@ -43,9 +44,7 @@ import {
 	verificationStatusLabel,
 } from "../verification";
 import { verifyConnectorCredentialAction } from "../verification.functions";
-
-const SELECT_CLASS =
-	"h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
+import { RelayPicker } from "./relay-picker";
 
 /**
  * Relay pairing wizard. The browser receives a one-time local URL served by the
@@ -69,9 +68,40 @@ export function ConnectPairingPanel({
 	const queryClient = useQueryClient();
 	const activeRelays = relays.filter((relay) => relay.status === "active");
 	const [pairing, setPairing] = useState<PairingCreateView | null>(null);
+	const [pairingRelayId, setPairingRelayId] = useState<string | null>(null);
+	// A manual relay choice wins over the heartbeat-derived default. Only the
+	// absence of a choice lets polling/refetch move the selection.
+	const [selectedRelayId, setSelectedRelayId] = useState<string | null>(null);
+	// Null until the client measures "now", so the server render asserts no
+	// freshness instead of disagreeing at hydration.
+	const [nowMs, setNowMs] = useState<number | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [started, setStarted] = useState(false);
 	const [pairingCompleted, setPairingCompleted] = useState(false);
+
+	const relayChoicesView = relayChoices(activeRelays, nowMs);
+	const proposedRelayId = defaultRelayId(relayChoicesView);
+	const chosenRelayId =
+		selectedRelayId !== null &&
+		activeRelays.some((relay) => relay.id === selectedRelayId)
+			? selectedRelayId
+			: proposedRelayId;
+	const pairingRelayName =
+		pairingRelayId === null
+			? null
+			: (relays.find((relay) => relay.id === pairingRelayId)?.displayName ??
+				null);
+
+	// Re-evaluate heartbeat freshness while the form is visible; once a pairing
+	// exists the reported relay is fixed and the picker is gone.
+	useEffect(() => {
+		if (pairing !== null) return;
+		const update = () => setNowMs(Date.now());
+		update();
+		if (activeRelays.length === 0) return;
+		const timer = setInterval(update, 30_000);
+		return () => clearInterval(timer);
+	}, [pairing, activeRelays.length]);
 
 	const statusQuery = useQuery({
 		queryKey: ["integrations", "pairing", pairing?.pairingId ?? "none"],
@@ -103,8 +133,9 @@ export function ConnectPairingPanel({
 
 	const create = useMutation({
 		mutationFn: (input: CreatePairingInput) => createPairing(input),
-		onSuccess: (result) => {
+		onSuccess: (result, input) => {
 			setPairing(result);
+			setPairingRelayId(input.relayId);
 			setStarted(false);
 			setPairingCompleted(false);
 			setError(null);
@@ -117,6 +148,7 @@ export function ConnectPairingPanel({
 		mutationFn: (pairingId: string) => cancelPairing(pairingId),
 		onSuccess: () => {
 			setPairing(null);
+			setPairingRelayId(null);
 			setError(null);
 		},
 		onError: (cause) => setError(pairingErrorMessage(cause)),
@@ -139,7 +171,7 @@ export function ConnectPairingPanel({
 
 	function onSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (create.isPending || activeRelays.length === 0) return;
+		if (create.isPending || chosenRelayId === null) return;
 		setError(null);
 		const form = new FormData(event.currentTarget);
 		// The keychain item name is an implementation detail. Generate an
@@ -150,7 +182,7 @@ export function ConnectPairingPanel({
 				? crypto.randomUUID().slice(0, 8)
 				: `${Date.now().toString(36)}`;
 		create.mutate({
-			relayId: String(form.get("relayId") ?? ""),
+			relayId: chosenRelayId,
 			connectorId: entry.id,
 			displayName: String(form.get("displayName") ?? ""),
 			authKind: entry.defaultAuthKind,
@@ -336,22 +368,12 @@ export function ConnectPairingPanel({
 			) : pairing === null ? (
 				<form onSubmit={onSubmit} className="space-y-4" noValidate>
 					<div className="grid gap-4 sm:grid-cols-2">
-						<div className="space-y-1.5">
-							<Label htmlFor="pairing-relay">Relay</Label>
-							<select
-								id="pairing-relay"
-								name="relayId"
-								className={SELECT_CLASS}
-								required
-								defaultValue={activeRelays[0]?.id}
-							>
-								{activeRelays.map((relay) => (
-									<option key={relay.id} value={relay.id}>
-										{relay.displayName}
-									</option>
-								))}
-							</select>
-						</div>
+						<RelayPicker
+							relays={activeRelays}
+							selectedId={chosenRelayId}
+							onSelect={setSelectedRelayId}
+							nowMs={nowMs}
+						/>
 						<div className="space-y-1.5">
 							<Label htmlFor="pairing-display-name">Display name</Label>
 							<Input
@@ -400,6 +422,11 @@ export function ConnectPairingPanel({
 							Code expires{" "}
 							<RelativeTime value={status?.expiresAt ?? pairing.expiresAt} />
 						</span>
+						{pairingRelayName === null ? null : (
+							<span className="text-xs text-ink-muted">
+								Code is bound to {pairingRelayName}
+							</span>
+						)}
 					</div>
 					<div className="space-y-1.5">
 						<p className="text-xs font-medium text-ink-muted">
@@ -435,6 +462,7 @@ export function ConnectPairingPanel({
 								size="sm"
 								onClick={() => {
 									setPairing(null);
+									setPairingRelayId(null);
 									setStarted(false);
 								}}
 							>

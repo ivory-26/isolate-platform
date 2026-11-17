@@ -65,7 +65,11 @@ import {
 	PULL_REQUEST_APPROVAL_ACTION,
 	parseGitHubFullName,
 } from "./pull-request-approval";
-import { clampErrorCode, sanitizeMessage } from "./sanitize";
+import {
+	clampErrorCode,
+	isDeterministicProviderRejection,
+	sanitizeMessage,
+} from "./sanitize";
 
 /**
  * Task execution handler (`run_task`) and its wave-7 companion
@@ -268,8 +272,24 @@ export type TaskExecutionDeps = {
 	};
 	/** Config-derived sandbox-seconds cap; the handler never imports config. */
 	maxSandboxSeconds: number;
-	/** Config-derived per-task USD cap (usage without a price cannot be capped). */
+	/**
+	 * Config-derived USD cap over the **whole task**, including spend persisted
+	 * by earlier attempts. `0` disables cost gating exactly as before (token,
+	 * step and time caps still apply). Usage without a trusted price cannot be
+	 * metered; the handler warns instead of pretending the cap binds.
+	 */
 	maxCostUsdPerTask: number;
+	/**
+	 * Wave 26: task-wide spend already persisted by earlier attempts of this
+	 * task (model rows and sandbox rows). Seeded into the cumulative token and
+	 * USD counters so both caps bind across the task, not per attempt. A read
+	 * failure is logged with a bounded code and treated as zero; it never fails
+	 * a job that could still complete. Absent (offline composition) = zero.
+	 */
+	loadTaskUsage?: (input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+	}) => Promise<{ tokens: number; costUsd: number } | null>;
 	/**
 	 * Wave 11 trusted price table, loaded by the composition root from
 	 * `COST_PRICE_TABLE` (the handler never reads env). `null`/absent means no
@@ -379,6 +399,59 @@ export function pushApprovalPayloadSha256(
 function isLifecycleConflict(error: unknown): boolean {
 	const code = (error as { code?: unknown } | null)?.code;
 	return code === "CONFLICT" || code === "DEPENDENCY_CONFLICT";
+}
+
+/**
+ * Statuses from which `failed` is a declared transition, most likely first.
+ * The lifecycle transition is optimistic, so a stale `from` is a CONFLICT the
+ * caller skips; the first matching status performs the transition.
+ */
+const FAILABLE_TASK_STATUSES = [
+	"executing",
+	"validating",
+	"repairing",
+	"planning",
+	"awaiting_approval",
+	"queued",
+] as const;
+
+/**
+ * Closes a task as `failed` after its job dead-lettered.
+ *
+ * A hard budget cut kills the handler mid-flight, so nothing else moves the
+ * task out of `executing`: without this the task would stay active forever
+ * while its only job was terminal. Already-terminal tasks CONFLICT on every
+ * candidate and are left untouched.
+ */
+export async function closeTaskAsFailed(
+	lifecycle: ExecutionLifecycle,
+	logger: Logger,
+	input: {
+		organizationId: OrganizationId;
+		taskId: TaskId;
+		reason: string;
+	},
+): Promise<boolean> {
+	for (const from of FAILABLE_TASK_STATUSES) {
+		try {
+			await lifecycle.transition({
+				organizationId: input.organizationId,
+				taskId: input.taskId,
+				from,
+				to: "failed",
+				actor: "worker",
+				reason: input.reason,
+			});
+			return true;
+		} catch (error) {
+			if (isLifecycleConflict(error)) continue;
+			logger.warn("failed to close task after dead letter", {
+				code: clampErrorCode(errorCodeOf(error)),
+			});
+			return false;
+		}
+	}
+	return false;
 }
 
 async function transitionLifecycle(
@@ -625,6 +698,44 @@ function budgetVerdict(note: string): HandlerVerdict {
 	return { outcome: "dead_letter", code: "BUDGET_EXCEEDED", note };
 }
 
+/** Prose suffixes a documentation/report deliverables diff can touch. */
+const DOCUMENTATION_EXTENSIONS = [
+	".md",
+	".mdx",
+	".markdown",
+	".rst",
+	".adoc",
+	".txt",
+] as const;
+
+/**
+ * A diff that only touches prose cannot be graded by the repository's
+ * validation command: that command exercises code, and a red suite is often the
+ * incident under investigation rather than a regression this task introduced.
+ * A report or docs deliverable would therefore always fail the gate on a
+ * pre-existing failure. The command is skipped with an explicit reason; the
+ * diff, ownership and approval gates still decide what ships.
+ */
+export function isDocumentationOnlyDiff(files: readonly string[]): boolean {
+	if (files.length === 0) return false;
+	return files.every((file) => {
+		const lower = file.toLowerCase();
+		return DOCUMENTATION_EXTENSIONS.some((extension) =>
+			lower.endsWith(extension),
+		);
+	});
+}
+
+/** Normalizes a persisted token total for cap arithmetic; junk counts as zero. */
+function persistedTokenTotal(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** Normalizes a persisted USD total; junk and negatives count as zero. */
+function persistedCostUsd(value: number): number {
+	return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /**
  * Cost for one model call from the worker's trusted price table.
  *
@@ -676,6 +787,15 @@ function toVerdict(error: unknown, ctx: HandlerContext): HandlerVerdict {
 		return note === ""
 			? { outcome: "dead_letter", code }
 			: { outcome: "dead_letter", code, note };
+	}
+	// An inference provider 4xx (bad request, bad key, deactivated model) is
+	// deterministic: retrying re-provisions a sandbox to get the same refusal.
+	if (isDeterministicProviderRejection(error)) {
+		return {
+			outcome: "dead_letter",
+			code: "AGENT_EXECUTION_FAILED",
+			note: "inference provider rejected the request",
+		};
 	}
 	// Sandbox adapters throw SandboxError, which is not a PlatformError; map its
 	// bounded code instead of collapsing every provisioning/Git failure to
@@ -812,10 +932,55 @@ function createHandler(
 				sink: deps.traceSink ?? createLoggerTraceSink(ctx.logger),
 			});
 
-			let createdAt = 0;
+			// Clock reading at provisioning; sandbox wall time and its accrued
+			// cost are both measured from this moment.
+			let provisionedAt = 0;
 			let promptTokens = 0;
 			let completionTokens = 0;
 			let spentUsd = 0;
+			// Wave 26: both caps are task-wide. Seed the cumulative counters from
+			// spend persisted by earlier attempts (model and sandbox rows) before
+			// any turn can run. A read failure degrades to zero with a bounded
+			// warning; it must not fail a job that could still complete.
+			let priorTaskTokens = 0;
+			if (deps.loadTaskUsage !== undefined) {
+				try {
+					const prior = await deps.loadTaskUsage({
+						organizationId: job.organizationId,
+						taskId: job.taskId,
+					});
+					if (prior !== null) {
+						priorTaskTokens = persistedTokenTotal(prior.tokens);
+						promptTokens = priorTaskTokens;
+						spentUsd = persistedCostUsd(prior.costUsd);
+					}
+				} catch (error) {
+					ctx.logger.warn(
+						"task usage read failed; starting this attempt from zero",
+						{ code: clampErrorCode(errorCodeOf(error)) },
+					);
+				}
+			}
+			// A USD cap with no trusted price can never bind. Say so once per job
+			// instead of looking enforced while metering nothing.
+			if (
+				maxCostUsd > 0 &&
+				(deps.priceTable === undefined || deps.priceTable === null)
+			) {
+				ctx.logger.warn(
+					"USD cap cannot bind without COST_PRICE_TABLE; spend stays unmetered",
+				);
+			}
+			// Once per job: a usage row with no trusted price is spend the cap
+			// cannot see. Ids only; never token counts or provider payloads.
+			let unmeteredUsageWarned = false;
+			const warnUnmeteredUsage = (modelId: string): void => {
+				if (maxCostUsd <= 0 || unmeteredUsageWarned) return;
+				unmeteredUsageWarned = true;
+				ctx.logger.warn("usage has no trusted price; USD cap cannot meter it", {
+					modelId: sanitizeMessage(modelId),
+				});
+			};
 
 			let attemptId: string | null = null;
 			let branchLock: BranchLockLease | null = null;
@@ -930,7 +1095,7 @@ function createHandler(
 					}
 				}
 
-				createdAt = now();
+				provisionedAt = now();
 				const handle = await deps.provider.create(spec);
 
 				try {
@@ -1022,7 +1187,9 @@ function createHandler(
 									}
 								};
 					const runtime = deps.createRuntime({
-						caps: deps.caps,
+						// Task-wide token cap: the runtime seeds its accumulator with
+						// spend from earlier attempts and reserves the prior turn size.
+						caps: { ...deps.caps, priorTaskTokens },
 						...(recordToolDecision === undefined
 							? {}
 							: { onToolDecision: recordToolDecision }),
@@ -1034,6 +1201,9 @@ function createHandler(
 							// caps and accounting see the real provider numbers. The cost
 							// comes from the trusted table, never from model output.
 							const costUsd = trustedModelCostUsd(deps.priceTable, usage);
+							if (costUsd === null) {
+								warnUnmeteredUsage(usage.modelId);
+							}
 							await deps.usageSink.record({
 								organizationId: job.organizationId,
 								taskId: job.taskId,
@@ -1067,6 +1237,11 @@ function createHandler(
 										...(mode === null
 											? {}
 											: { fileOwnership: [...context.fileOwnership] }),
+										// Incident provenance from the persisted task row scopes
+										// connector tool exposure to the reporting connector.
+										...(context.incidentSource === undefined
+											? {}
+											: { incidentSource: context.incidentSource }),
 									},
 								}),
 					});
@@ -1119,7 +1294,7 @@ function createHandler(
 								break;
 							}
 						}
-						if (now() - createdAt > maxSandboxMs) {
+						if (now() - provisionedAt > maxSandboxMs) {
 							stop = {
 								kind: "budget",
 								note: "sandbox wall-time budget exhausted",
@@ -1130,7 +1305,34 @@ function createHandler(
 							stop = { kind: "budget", note: "agent token budget exhausted" };
 							break;
 						}
-						if (spentUsd > 0 && spentUsd >= maxCostUsd) {
+						// The current attempt's sandbox bill accrues while the turns
+						// run but is only written as a usage row at teardown. Price it
+						// from the same trusted table so the cap can see it before the
+						// next model call; this estimate is for gating only and never
+						// becomes a second usage row. No table (or no price) leaves the
+						// accrual unmetered: warn once, never invent a price.
+						let accruedSandboxUsd = 0;
+						if (maxCostUsd > 0) {
+							const accrued = sandboxCostUsd(
+								{
+									cpuCount: deps.sandbox.cpuCount,
+									memoryMb: deps.sandbox.memoryMb,
+									seconds: Math.max(0, (now() - provisionedAt) / 1000),
+								},
+								deps.priceTable ?? null,
+							);
+							if (accrued === null) {
+								warnUnmeteredUsage(
+									`sandbox:${deps.sandbox.cpuCount}x${deps.sandbox.memoryMb}`,
+								);
+							} else {
+								accruedSandboxUsd = accrued;
+							}
+						}
+						// Cumulative task-wide spend (model usage from this attempt and
+						// earlier attempts, plus the accrued sandbox cost above). `0`
+						// disables cost gating exactly as before.
+						if (maxCostUsd > 0 && spentUsd + accruedSandboxUsd >= maxCostUsd) {
 							stop = { kind: "budget", note: "task cost budget exhausted" };
 							break;
 						}
@@ -1309,6 +1511,8 @@ function createHandler(
 						false,
 					);
 
+					const documentationOnlyDiff = isDocumentationOnlyDiff(stat.files);
+
 					// Wave 8 validation gate. It runs in THIS sandbox, after the
 					// diff exists and before anything is pushed. No configured
 					// command keeps the wave-7 meaning and is recorded as skipped.
@@ -1455,14 +1659,20 @@ function createHandler(
 						}
 					}
 					let validationReport: ValidationReport | null = null;
-					if (validationPolicy === null) {
+					if (validationPolicy === null || documentationOnlyDiff) {
 						await mode.lifecycle.event({
 							organizationId: job.organizationId,
 							taskId: job.taskId,
 							workflowRunId: null,
 							type: "validation.finished",
 							actor: "worker",
-							data: { stage: "command", status: "skipped" },
+							data: documentationOnlyDiff
+								? {
+										stage: "command",
+										status: "skipped",
+										reason: "documentation-only diff",
+									}
+								: { stage: "command", status: "skipped" },
 						});
 						emitMetric(ctx.logger, WORKER_METRICS.validationOutcome, {
 							outcome: "skipped",
@@ -1937,7 +2147,7 @@ function createHandler(
 					// written after destroy (measured wall time) even if destroy
 					// threw, so accrued sandbox spend is not silently lost.
 					const endedAt = now();
-					const wallSeconds = Math.max(0, (endedAt - createdAt) / 1000);
+					const wallSeconds = Math.max(0, (endedAt - provisionedAt) / 1000);
 					// Attempt bookkeeping keeps the measured sandbox time so the run
 					// summary can report it without a second table.
 					attemptOutcome = {
@@ -1958,6 +2168,11 @@ function createHandler(
 							},
 							deps.priceTable ?? null,
 						);
+						if (costUsd === null) {
+							warnUnmeteredUsage(
+								`sandbox:${deps.sandbox.cpuCount}x${deps.sandbox.memoryMb}`,
+							);
+						}
 						await deps.usageSink.record({
 							organizationId: job.organizationId,
 							taskId: job.taskId,

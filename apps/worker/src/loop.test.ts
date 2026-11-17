@@ -149,6 +149,7 @@ class FakeQueue implements QueueLike {
 		ownerId: string;
 		code: string;
 		message: string;
+		terminal?: boolean;
 	}): Promise<
 		| { ok: true; requeued: boolean }
 		| { ok: false; code: "NOT_FOUND" | "LEASE_LOST" }
@@ -162,6 +163,10 @@ class FakeQueue implements QueueLike {
 		});
 		job.lastError = { code: input.code, message: input.message };
 		job.lease = null;
+		if (input.terminal === true) {
+			job.status = "dead_letter";
+			return { ok: true, requeued: false };
+		}
 		if (job.attempts < job.maxAttempts) {
 			job.status = "pending";
 			job.notBefore = new Date(this.now + this.backoffMs).toISOString();
@@ -220,6 +225,7 @@ function makeHarness(
 		/** Parsed WorkerConfig value: the production precedence path. */
 		configJobTimeoutMs?: number;
 		maxAttemptsDefault?: number;
+		onJobDeadLettered?: (input: { job: JobRow; code: string }) => Promise<void>;
 	} = {},
 ): Harness {
 	const queue = new FakeQueue();
@@ -243,6 +249,9 @@ function makeHarness(
 		handlers,
 		queue,
 		jobTimeoutMs: options.jobTimeoutMs,
+		...(options.onJobDeadLettered === undefined
+			? {}
+			: { onJobDeadLettered: options.onJobDeadLettered }),
 		onEvent: (event) => events.push({ ...event }),
 	});
 	return {
@@ -361,6 +370,121 @@ describe("worker loop — failure ordering", () => {
 		await harness.stop("done");
 	});
 
+	test("a terminal verdict does not ride an approval follow-up's budget", async () => {
+		// Approval follow-ups carry 60 attempts to outlast a human decision; a
+		// deterministic failure that retried on every one of them would pay for
+		// a sandbox each time.
+		const handler: JobHandler = {
+			jobType: "resume_task",
+			supports: () => true,
+			handle: async () => ({
+				outcome: "dead_letter",
+				code: "AGENT_EXECUTION_FAILED",
+				note: "git failed",
+			}),
+		};
+		const harness = makeHarness([handler]);
+		harness.queue.jobs.push(makeJob({ type: "resume_task", maxAttempts: 60 }));
+		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
+		expect(harness.queue.jobs[0]?.attempts).toBe(1);
+		expect(harness.queue.ackFails.length).toBe(1);
+		expect(harness.queue.ackFails[0]?.code).toBe("AGENT_EXECUTION_FAILED");
+		await harness.stop("done");
+	});
+
+	test("a dead-lettered job invokes the dead-letter hook exactly once", async () => {
+		const calls: Array<{ jobId: string; code: string }> = [];
+		const handler: JobHandler = {
+			jobType: "resume_task",
+			supports: () => true,
+			handle: async () => ({
+				outcome: "dead_letter",
+				code: "AGENT_EXECUTION_FAILED",
+				note: "terminal",
+			}),
+		};
+		const harness = makeHarness([handler], {
+			onJobDeadLettered: async ({ job, code }) => {
+				calls.push({ jobId: job.id, code });
+			},
+		});
+		harness.queue.jobs.push(makeJob({ type: "resume_task", maxAttempts: 60 }));
+		await eventually(() => calls.length > 0);
+		expect(calls).toEqual([
+			{ jobId: harness.queue.jobs[0]?.id, code: "AGENT_EXECUTION_FAILED" },
+		]);
+		await harness.stop("done");
+	});
+
+	test("a requeued failure does not invoke the dead-letter hook", async () => {
+		const calls: string[] = [];
+		let attempts = 0;
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async () => {
+				attempts += 1;
+				// One retryable failure, then success: the job never terminalises.
+				return attempts === 1
+					? { outcome: "retry", code: "INTERNAL" }
+					: { outcome: "complete" };
+			},
+		};
+		const harness = makeHarness([handler], {
+			onJobDeadLettered: async ({ job }) => {
+				calls.push(job.id);
+			},
+		});
+		harness.queue.jobs.push(makeJob({ maxAttempts: 3 }));
+		await eventually(() => harness.queue.jobs[0]?.status === "done");
+		expect(calls).toEqual([]);
+		await harness.stop("done");
+	});
+
+	test("a hard budget cut still closes the task via the dead-letter hook", async () => {
+		const calls: string[] = [];
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			// Ignores its signal: the loop must cut it and still report the
+			// dead letter, because no handler code runs after the cut.
+			handle: () => new Promise<never>(() => undefined),
+		};
+		const harness = makeHarness([handler], {
+			jobTimeoutMs: 60,
+			onJobDeadLettered: async ({ code }) => {
+				calls.push(code);
+			},
+		});
+		harness.queue.jobs.push(makeJob());
+		await eventually(() => calls.length > 0);
+		expect(calls).toEqual(["BUDGET_EXCEEDED"]);
+		expect(harness.queue.jobs[0]?.status).toBe("dead_letter");
+		await harness.stop("done");
+	});
+
+	test("a throwing dead-letter hook never replaces the queue outcome", async () => {
+		const handler: JobHandler = {
+			jobType: "run_task",
+			supports: () => true,
+			handle: async () => ({
+				outcome: "dead_letter",
+				code: "POLICY_DENIED",
+			}),
+		};
+		const harness = makeHarness([handler], {
+			onJobDeadLettered: async () => {
+				throw new Error("lifecycle unavailable");
+			},
+		});
+		harness.queue.jobs.push(makeJob({ maxAttempts: 1 }));
+		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
+		expect(
+			harness.logs.some((log) => log.message === "dead-letter hook failed"),
+		).toBe(true);
+		await harness.stop("done");
+	});
+
 	test("unknown handler throw maps to INTERNAL with no payload leak", async () => {
 		const handler: JobHandler = {
 			jobType: "run_task",
@@ -396,7 +520,9 @@ describe("worker loop — failure ordering", () => {
 		await eventually(() => harness.queue.jobs[0]?.status === "dead_letter");
 		expect(handleRan).toBe(false);
 		expect(harness.queue.ackFails[0]?.code).toBe("VALIDATION_FAILED");
-		expect(harness.queue.ackFails.length).toBe(2); // redelivered, not retried in loop
+		// The same payload can only be rejected again: no redelivery.
+		expect(harness.queue.ackFails.length).toBe(1);
+		expect(harness.queue.jobs[0]?.attempts).toBe(1);
 		await harness.stop("done");
 	});
 

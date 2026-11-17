@@ -33,6 +33,8 @@ export type InboxFilter = {
 	connector: string | null;
 	/** Delivery status filter, already validated. */
 	status: string | null;
+	/** Severity filter, already validated; applied before the row cap. */
+	severity: string | null;
 };
 
 export type InboxReadRepository = {
@@ -61,8 +63,9 @@ const INBOX_SQL = `SELECT d.id, d.connector_id, d.source, d.event_kind, d.severi
 	WHERE d.organization_id = $1
 	  AND ($2::text IS NULL OR d.connector_id = $2)
 	  AND ($3::text IS NULL OR d.status = $3)
+	  AND ($4::text IS NULL OR d.severity = $4)
 	ORDER BY d.received_at DESC, d.id DESC
-	LIMIT $4`;
+	LIMIT $5`;
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
 	return result as unknown as Record<string, unknown>[];
@@ -94,6 +97,7 @@ export function createPostgresInboxRepository(sql: PgSql): InboxReadRepository {
 					scope.organizationId,
 					filter.connector,
 					filter.status,
+					filter.severity,
 					filter.limit,
 				]),
 			);
@@ -136,6 +140,7 @@ export function createInboxReadService(
 				limit,
 				connector: parsed.data?.source ?? null,
 				status: parsed.data?.status ?? null,
+				severity: parsed.data?.severity ?? null,
 			});
 			const items: InboxItem[] = rows
 				.slice(0, limit)

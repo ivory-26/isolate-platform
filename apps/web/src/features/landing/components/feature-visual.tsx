@@ -1,51 +1,40 @@
+import type { ReactNode } from "react";
+import { ApprovalPayload, PrHandoff } from "./illustrations/approval-payload";
+import { AuditRecord } from "./illustrations/audit-record";
+import {
+	SandboxBoundary,
+	ValidationGate,
+} from "./illustrations/sandbox-boundary";
+
+export type FeatureKey = "sandbox" | "approval" | "record";
+
 type Feature = {
-	src: string;
-	width: number;
-	height: number;
-	wide?: boolean;
+	primary: ReactNode;
+	inset?: ReactNode;
 };
 
-const FEATURES: Record<
-	"sandbox" | "approval" | "record" | "lifecycle",
-	Feature
-> = {
+const FEATURES: Record<FeatureKey, Feature> = {
 	sandbox: {
-		src: "/iso/sandbox.svg",
-		width: 720,
-		height: 470,
+		primary: <SandboxBoundary />,
+		inset: <ValidationGate />,
 	},
 	approval: {
-		src: "/iso/approval.svg",
-		width: 720,
-		height: 470,
+		primary: <ApprovalPayload />,
+		inset: <PrHandoff />,
 	},
 	record: {
-		src: "/iso/record.svg",
-		width: 720,
-		height: 470,
-	},
-	lifecycle: {
-		src: "/iso/lifecycle.svg",
-		width: 1000,
-		height: 560,
-		wide: true,
+		primary: <AuditRecord />,
 	},
 };
-
-export type FeatureKey = keyof typeof FEATURES;
 
 export function FeatureVisual({ feature }: { feature: FeatureKey }) {
 	const config = FEATURES[feature];
 	return (
-		<figure className={config.wide ? "wf-figure wf-figure-wide" : "wf-figure"}>
-			<img
-				src={config.src}
-				alt=""
-				width={config.width}
-				height={config.height}
-				loading="lazy"
-				decoding="async"
-			/>
+		<figure className="wf-figure">
+			{config.primary}
+			{config.inset ? (
+				<div className="wf-figure-inset">{config.inset}</div>
+			) : null}
 		</figure>
 	);
 }

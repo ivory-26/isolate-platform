@@ -191,7 +191,8 @@ const VENDOR_CASES: readonly VendorCase[] = [
 		tool: "signoz.context.fetch",
 		fingerprint: "signoz:rule-1:abcdef0123456789",
 		service: "checkout",
-		selector: "/api/v1/rules/rule-1",
+		// SigNoz >= 0.150 serves rule reads on v2; v1 answers 404.
+		selector: "/api/v2/rules/rule-1",
 	},
 ];
 

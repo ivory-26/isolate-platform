@@ -7,7 +7,7 @@ Owner / file ownership / dependencies / acceptance criteria / DoD per task. Stat
 Coordinator: Codex on `task/w28-recovery-coordinator`. Execution: four T3-managed
 isolated Claude Code worktrees using `deepseek-v4.1-flash` through the existing
 Open Code Go Anthropic endpoint. T3's supported Claude custom-model setting was
-registered locally; no provider credentials were changed.
+registered locally without changing the Claude/Open Code credentials.
 
 | Lane | Ownership | Acceptance | Status |
 |---|---|---|---|
@@ -15,8 +15,10 @@ registered locally; no provider credentials were changed.
 | W28-CONNECTORS | `packages/integrations/**`, `apps/device-daemon/**` | Capability-aware bounded Honeycomb verification; preserve honest partial evidence; fake transports only | done — `e9b5921` → `1617a84` |
 | W28-HARNESS | `packages/mastra/**` | Verify and repair concrete gaps in the merged harness P0 work | done — `ccc4b95` → `160b7b2` |
 | W28-CONTEXT | `apps/worker/**`, `packages/shared/**` | Finish the preserved context-skip diagnostics without breaking consumers; bounded events, observer isolation and tenancy tests | done — `91997f0` → `c04322a` |
-| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | integration/gates done; final browser evidence pending |
-| W28-BROWSER | browser configuration/visual checks only; no source edits | Honeycomb/Datadog pairing and bounded read verification, then close task tabs | in progress — Claude Code/DeepSeek; coordinator stopped browser execution at user request |
+| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | integration/gates done; relay-selection follow-up pending |
+| W28-BROWSER | browser configuration/visual checks only; no source edits | Honeycomb/Datadog pairing and bounded auth verification, then close task tabs | done — both paired on Verification relay; query-plan blocker recorded; temporary exposed Datadog key revoked/replaced |
+| W28-DD-READ | existing relay queue/Neon MCP only; no source edits | Exactly one `datadog.get_monitor` read, no model/sandbox or retry | done — call `7793917d-12ac-4f86-9651-8da14c99d32d`, 1 request / 0 errors, 7.95 s, 0 usage rows |
+| W28-RELAY-CHOICE | focused pairing UI/helper/tests under `apps/web/**` | Prefer the reachable relay without overriding a manual selection or weakening device-bound claims | in progress — Claude Code/DeepSeek |
 
 Every execution lane must commit on its own `task/*` branch and supply scoped
 Biome, project `tsc --noEmit`, and scoped test evidence twice. Never push.
@@ -27,7 +29,8 @@ Browser finding: Honeycomb's existing enabled Configuration key cannot enable
 **Run queries**: the control is disabled with “This feature is only available
 for enterprise plans.” Re-pairing alone does not unblock query evidence.
 The old Onboarding ingest key is confirmed disabled. Datadog site: US1,
-confirmed by the user; sign-in and `monitors_read` inspection remain in progress.
+confirmed by the user; scoped pairing and one real `monitors_read` acceptance
+read are complete. Other Datadog scopes have not been live-exercised.
 No Baseten/Modal acceptance or model/sandbox-backed webhook run is authorized
 by this offline implementation wave.
 

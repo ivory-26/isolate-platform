@@ -9,7 +9,14 @@
 | Read | Monitor v1, metrics v2 query, logs search v2 (incident v2 only when an incident id is supplied) |
 | Writes | None in scope (mute, annotate, incident edits are a later wave) |
 
-Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.4. The adapter, read context and relay tools exist in `packages/integrations/src/datadog/` and `apps/device-daemon/src/vendors/datadog.ts`. There is no Datadog intake mode in `apps/web`, so a delivery cannot create a task directly; it must be re-signed onto the generic bridge. No live Datadog acceptance run has been recorded.
+Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §3.4. The adapter, read context and relay tools exist in `packages/integrations/src/datadog/` and `apps/device-daemon/src/vendors/datadog.ts`. There is no Datadog intake mode in `apps/web`, so a delivery cannot create a task directly; it must be re-signed onto the generic bridge. Historical trigger-to-PR runs and the successful 2026-11-17 monitor read are recorded in [`live-verification.md`](live-verification.md).
+
+**Current live proof (2026-11-17):** a dedicated read-scoped key is paired on
+US1 through **Verification relay**. Exactly one `datadog.get_monitor` call for
+`344995520` succeeded in 7.95 s (one request, no retries), returning the real
+monitor's metadata and state **No Data**. This proves `monitors_read`; it does
+not prove metric/log/incident reads. The acceptance used `task_id: null` and
+the existing relay queue, with zero new model/sandbox usage rows.
 
 ## 1. Role in the agent
 

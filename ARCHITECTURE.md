@@ -102,6 +102,14 @@ Provider plan (wave 4, updated): inference has two mutually exclusive configurat
 
 Both use Mastra's existing OpenAI-compatible model object; `@mastra/core` stays pinned and tool calls are Mastra-native. Meta Muse models are the only inference models configured; no fallback provider or model exists. Usage is recorded per call in `usage_records` and bounded by per-task token/step/time caps. No provider SDK is imported by the web app or the browser bundle.
 
+Retry ownership (wave 28): the runtime always passes
+`modelSettings.maxRetries: 0` to Mastra, disabling its otherwise implicit model
+retries. The platform's bounded retry wrapper is the sole retry owner, defaults
+to zero retries, honors cancellation, and classifies wrapped provider errors
+through a bounded, cycle-safe cause chain. Code-execution models used by the
+development coordinator do not alter this application's inference-provider
+configuration.
+
 Per-job tool binding (wave 6): the worker provisions the sandbox first, builds a `SandboxToolBackend` over that handle (every call passes `executeCommand` with the trusted `CommandPolicy`), and passes it plus the job's organization/task ids to `CodingAgentRuntimeFactoryOptions`. The factory wires `wireSandboxTools(...).forTask(...)`, so one agent turn can reach exactly one sandbox and one task. Without a backend the runtime runs tool-less.
 
 ### Sandbox
@@ -263,6 +271,20 @@ Never define “complete the goal definitely” as an infinite loop. Completion 
 Wave 7 gate boundary: the worker transitions `executing → validating → review_ready` when the diff is non-empty and every changed path is inside `file_ownership`. Running formatter/lint/typecheck/tests as a gate needs a per-repository command contract (commands, cwd, timeouts, repairable failures) and is wave 8. `review_ready` therefore means "an in-bounds change exists", not "CI would pass"; merge/push stays approval-gated.
 
 Offline acceptance (`bun run acceptance:offline`, source `scripts/acceptance-offline.ts`) runs the lifecycle — submit → idempotent replay → claim → policy-gated tools → usage rows → sandbox destroy on success/throw/abort → ack — against package fakes with zero provider credentials. It refuses to start if any `BASETEN_*`/`MODAL_*` variable is present. Live provider calls are a separate, explicitly authorized, single-run phase; CI never receives keys.
+
+Connector acceptance is separate from inference acceptance: a bounded device
+call can be enqueued with `task_id: null` and executed by the already-running
+relay without a task, worker agent, model or sandbox. The repository's normal
+tenant/device scoping, credential status, tool contract and usage ledger still
+apply. A successful `connector.verify` proves its bounded probe, not every
+vendor permission or the whole trigger-to-PR pipeline.
+
+Evidence skips (wave 28) keep the context loader's `ContextBundle | null`
+contract and optionally emit `connector.context_skipped` with closed `source`
+and `reason` tokens. The sink carries no provider text or secret; an observer
+failure is isolated from task execution. This makes missing device/gateway,
+signal, timeout, failed call and rejected-bundle cases visible on the run
+timeline without fabricating evidence.
 
 
 ## 10. Parallel agents and Git worktrees

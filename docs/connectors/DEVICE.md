@@ -29,6 +29,13 @@ Two planes meet here: the **trigger/context plane** (webhooks and context bundle
 **live tool plane** (typed calls during a task). This runbook covers the second one; the
 first is in [`../connector-usage.md`](../connector-usage.md) §2.
 
+**Pairing selection:** choose the registration used by the running daemon,
+checking its recent heartbeat. An `active` registration can still describe an
+offline daemon. Pairing claims are device-bound: a code created for one relay
+cannot be claimed by a different relay, and the loopback page intentionally
+returns a generic failure. In the 2026-11-17 local acceptance, the running
+registration was **Verification relay**, while **Local daemon** was stale.
+
 Non-GitHub incident tasks preload evidence through the same queue: the worker parses the
 incident fingerprint, looks up the signal's `service`/`kind`, and enqueues
 `<source>.context.fetch` (`sentry`, `grafana`, `pagerduty`, `k8s`, `datadog`, `newrelic`,

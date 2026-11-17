@@ -63,7 +63,7 @@ Every PR above is a real pull request on `ivory-26/isolate-e2e-fixture` created 
 | `0a6bf6e8` | Honeycomb run 10 (PR #10) | 13 | 169,620 | 18,575 |
 | `97f9e8a7` | Datadog run 11 (PR #11) | 13 | 197,560 | 19,674 |
 
-No provider key was read or printed; no secret appears in any request, log or fixture. The only live vendors used here are the free-tier ones already paired to the relay; no paid provider (Baseten, Modal) was exercised beyond the sandboxes each approved agent run provisions, and every sandbox was terminated by the worker.
+For the historical runs above, no provider key was read or printed; no secret appears in a request log or fixture. The only live vendors used there are the ones already paired to the relay; every sandbox used by those approved agent runs was terminated by the worker. The separate wave-28 browser credential incident is recorded below.
 
 ## Known residual gaps
 
@@ -79,13 +79,50 @@ the earlier assumption that a Configuration-key re-pair alone enables query
 evidence. No plan upgrade, trial, key creation, query, signed delivery, model
 turn or sandbox was initiated during this inspection.
 
-The user confirmed Datadog **US1**. Its signed-out browser session was restored
-through the existing Google session; the Application Keys page is reachable.
-Key scopes and relay binding remain to be verified. No new live context result
-or PR is claimed by this browser inspection.
+The user confirmed Datadog **US1**. The delegated Claude Code/DeepSeek browser
+task restored its existing sign-in and completed both vendor pairings. The
+running daemon is **Verification relay**, whereas the form defaulted to a stale
+**Local daemon** registration. Selecting the running relay resolved the generic
+pairing failure without changing the device-scoped claim security.
 
-The bullets below record the earlier run state; the Honeycomb credential-only
-recommendation is superseded by the measured account limitation above.
+- **Honeycomb:** existing Configuration key + dataset `checkout`, authenticated
+  and marked Connected/Verified. Query permission remains disabled by the plan;
+  no live query, plan change or new Honeycomb key was attempted.
+- **Datadog:** dedicated application key `isolate-e2e-read-20261117`, scoped to
+  exactly `monitors_read`, `metrics_read`, `incident_read`, `logs_read_data` and
+  `logs_read_index_data`, paired on US1 and authenticated. One temporary key was
+  accidentally exposed in a tool result, immediately revoked and replaced;
+  no value is reproduced here. See `project/SECURITY.md`.
+
+### Direct Datadog monitor acceptance — 2026-11-17T09:28Z
+
+Claude Code/DeepSeek enqueued exactly one `datadog.get_monitor` call through
+`connector_calls` with `task_id: null`, using the active credential and running
+relay. The attached Neon MCP supplied non-secret metadata and reproduced the
+repository's enqueue/read contract; no database credential file was read.
+
+| Field | Measured result |
+|---|---|
+| Call | `7793917d-12ac-4f86-9651-8da14c99d32d` |
+| Monitor | `344995520`, **Monitor: Isolate E2E CPU load** |
+| Status | `completed`, no error code, **attempts 1** |
+| Created / claimed / completed | `09:28:13.182Z` / `09:28:16.390Z` / `09:28:21.136Z` |
+| Duration | **7.95 s** total; 3.21 s claim wait, 4.75 s execution |
+| Evidence | `kind: monitor`, type `query alert`, state **No Data**, `truncated: false` |
+| Ledger | **1 request / 0 errors**, no retry |
+| Bounds | 90 s queued TTL, <=60 s wait, 10 s adapter timeout |
+| Model/sandbox usage | **0 new `usage_records` rows**, no model, worker start or sandbox |
+
+This proves the newly paired key can read this real monitor. **No Data** is its
+reported state, not an authentication failure. No other scope, complete context
+bundle or new trigger-to-PR run is claimed. Honeycomb was not called, and no
+Baseten/Modal acceptance was performed. No cost estimate was recorded.
+
+### Historical run gaps
+
+The bullets below record the earlier run state. The credential-only Honeycomb
+recommendation is superseded by its plan limitation; Datadog's monitor read now
+passes; and wave 28 implements bounded `connector.context_skipped` events.
 
 - SigNoz is complete: run 7 carried one evidence item and opened PR #8. The earlier "no alert rules" state was an API-version bug plus a missing RBAC grant, both fixed.
 - **Honeycomb has real vendor data now, but the paired credential cannot read it.** Dataset `checkout` exists in environment `test` with three events (`service: checkout`, status codes `500`, `502`, `200`, tag `incident: signoz-error-spike`). Every query call still fails `INTEGRATION_UNAVAILABLE` because the stored key is ingest-class. Re-pairing Honeycomb with an environment **Configuration** API key is the remaining step; no code change is needed.

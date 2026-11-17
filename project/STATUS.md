@@ -52,7 +52,7 @@ automatic dotenv loading in their child Bun processes.
   `6e05b5e44139b69e`, byte-deterministic. This is evidence extraction over a
   cached Kubernetes snapshot, not live model or cluster performance.
 
-### Connector/browser work still in progress
+### Connector/browser acceptance — 2026-11-17
 
 Honeycomb's Onboarding ingest key is confirmed **Disabled**. Its enabled
 Configuration key has **Run queries** disabled with the explicit enterprise-plan
@@ -60,13 +60,38 @@ message. Re-pairing alone cannot supply query evidence on this account. The
 integration now preserves the locally derived trigger snapshot honestly as a
 partial bundle; no live query-evidence success is claimed.
 
-The user confirmed Datadog US1. Existing test keys inspected in its console are
-**Not Scoped**, owned by **Datadog Admin Role**, so the old missing-`monitors_read`
-diagnosis remains unproven until the relay's actual binding/read is checked.
+Claude Code/DeepSeek completed both pairings on the running **Verification
+relay**. The earlier failures were device-selection errors: the form defaulted
+to the stale **Local daemon** registration, whose pairing cannot be claimed by
+a different authenticating device. The device-scoped claim remains correct;
+the relay-selection UX is assigned to a focused frontend follow-up.
 
-At the user's direction, **all remaining browser execution** (pairing, bounded
-vendor verification, visual checks and tab cleanup) is assigned to a dedicated
-Claude Code/DeepSeek task; the coordinator no longer operates the browser.
+Datadog US1 now uses a dedicated scoped application key granting exactly
+`monitors_read`, `metrics_read`, `incident_read`, `logs_read_data` and
+`logs_read_index_data`. One subsequent direct `datadog.get_monitor` acceptance
+read succeeded for monitor `344995520`: call
+`7793917d-12ac-4f86-9651-8da14c99d32d`, **7.95 s** total, **1 attempt**,
+`kind: monitor`, state **No Data**, `truncated: false`. The credential's request
+ledger records **1 request / 0 errors**. This proves `monitors_read`; the other
+scopes were inspected, not exercised. The call used `task_id: null` through the
+existing queue and running relay, with **0 new usage-record rows**, no model,
+worker start, sandbox or retry.
+
+Honeycomb's existing Configuration key is paired with `checkout` and passed its
+bounded authentication check. Its enterprise-only query permission remains the
+external blocker; no query request, upgrade or trial was made.
+
+The delegated browser task also checked `/runs` and an existing run detail at
+1440 px and 390 px. It reported clean reflow and no mobile horizontal overflow
+(`scrollWidth 375 <= innerWidth 390`), then closed its task tabs. The coordinator
+did not resume browser execution after the user's delegation-only instruction.
+
+**Resolved credential-handling incident:** the browser task accidentally returned
+a newly created Datadog application key in a tool result, immediately revoked it,
+and created/paired a replacement without returning its value. The revoked value
+can remain in that prior tool result; it was not re-read or copied into the
+repository. See `project/SECURITY.md` for the bounded incident record.
+
 No Baseten/Modal key, sandbox or model-backed delivery was used in this wave.
 Any paid end-to-end acceptance remains a separate bounded, explicitly authorized
 phase under `AGENTS.md`; the previous wave's PR/spend records below are historical.

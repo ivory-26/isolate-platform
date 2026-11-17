@@ -140,6 +140,9 @@ export function createFakeAgentRuntime(
  * Bounds are enforced here, in trusted code, not by model judgement:
  * - `maxSteps` and `modelSettings.maxOutputTokens` are sent on every call
  *   (verified against @mastra/core@1.79.0 `AgentExecutionOptionsBase`).
+ * - `modelSettings.maxRetries` is always sent as 0, because Mastra otherwise
+ *   retries a retryable model error twice inside a single `generate()` call.
+ *   `withProviderRetry` is the only retry owner.
  * - The token accumulator is **task-wide**: it starts at
  *   `caps.priorTaskTokens` (spend persisted by earlier attempts) and blocks the
  *   next turn with `PlatformError("BUDGET_EXCEEDED")` once `caps.maxTaskTokens`
@@ -399,14 +402,22 @@ export function createMastraAgentRuntime(
 					() =>
 						agent.generate(input.prompt, {
 							abortSignal: input.signal,
-							...(caps === undefined
-								? {}
-								: {
-										maxSteps: caps.maxSteps,
-										modelSettings: {
-											maxOutputTokens: caps.maxOutputTokensPerTurn,
-										},
-									}),
+							...(caps === undefined ? {} : { maxSteps: caps.maxSteps }),
+							// Inside one `generate()` call Mastra's model loop retries a
+							// retryable model error `modelSettings.maxRetries ?? 2` times
+							// (@mastra/core@1.79.0 dist/agent-*.js, `execute()`). That
+							// hidden layer must stay off: forwarding
+							// `providerRetryAttempts` here as well would square the
+							// worst-case provider calls ((1+n)^2) and break the spend
+							// bound. `withProviderRetry` is the only retry owner. An agent
+							// constructed with an explicit `maxRetries` still wins over
+							// this call-time value; our factory never sets one.
+							modelSettings: {
+								maxRetries: 0,
+								...(caps === undefined
+									? {}
+									: { maxOutputTokens: caps.maxOutputTokensPerTurn }),
+							},
 						}),
 					input.signal,
 					caps?.providerRetryAttempts ?? 0,

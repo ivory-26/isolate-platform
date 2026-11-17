@@ -14,6 +14,18 @@ function withFields(
 	return Object.assign(new Error(message), fields);
 }
 
+/** The shape `Agent.generate()` throws: the SDK error is only reachable as `cause`. */
+function mastraWrapped(
+	cause: unknown,
+	message = "AGENT_GENERATE_FAILED",
+): Error {
+	return Object.assign(new Error(message), {
+		id: "AGENT_GENERATE_FAILED",
+		name: "Error",
+		cause,
+	});
+}
+
 describe("classifyProviderFailure", () => {
 	const cases: Array<{
 		label: string;
@@ -129,6 +141,54 @@ describe("classifyProviderFailure", () => {
 			kind: "unknown",
 			retryable: false,
 		},
+		{
+			label: "Mastra-wrapped 429",
+			error: mastraWrapped(
+				withFields({ statusCode: 429 }, "Too Many Requests"),
+			),
+			kind: "rate_limited",
+			retryable: true,
+		},
+		{
+			label: "Mastra-wrapped 401",
+			error: mastraWrapped(withFields({ statusCode: 401 }, "Unauthorized")),
+			kind: "auth",
+			retryable: false,
+		},
+		{
+			label: "Mastra-wrapped 500",
+			error: mastraWrapped(
+				withFields({ statusCode: 500 }, "Internal Server Error"),
+			),
+			kind: "unavailable",
+			retryable: true,
+		},
+		{
+			label: "Mastra-wrapped context-length code",
+			error: mastraWrapped(
+				withFields({ status: 400, code: "context_length_exceeded" }),
+			),
+			kind: "context_overflow",
+			retryable: false,
+		},
+		{
+			label: "numeric rate-limit code",
+			error: withFields({ code: 429 }),
+			kind: "rate_limited",
+			retryable: true,
+		},
+		{
+			label: "numeric unavailable errorCode",
+			error: withFields({ errorCode: 503 }),
+			kind: "unavailable",
+			retryable: true,
+		},
+		{
+			label: "plain-object message",
+			error: { message: "socket ECONNRESET" },
+			kind: "unavailable",
+			retryable: true,
+		},
 	];
 
 	for (const entry of cases) {
@@ -142,6 +202,64 @@ describe("classifyProviderFailure", () => {
 
 	test("honours the configured retry-attempt ceiling", () => {
 		expect(MAX_PROVIDER_RETRY_ATTEMPTS).toBe(3);
+	});
+});
+
+describe("classifyProviderFailure cause chain", () => {
+	function chainOf(depth: number, inner: unknown): Error {
+		let current: Error = inner as Error;
+		for (let index = 0; index < depth; index++) {
+			current = mastraWrapped(current);
+		}
+		return current;
+	}
+
+	test("finds a structured status five links down", () => {
+		expect(
+			classifyProviderFailure(chainOf(5, withFields({ status: 429 }))),
+		).toEqual({ kind: "rate_limited", retryable: true });
+	});
+
+	test("does not walk past the bounded depth", () => {
+		expect(
+			classifyProviderFailure(chainOf(6, withFields({ status: 429 }))),
+		).toEqual({ kind: "unknown", retryable: false });
+	});
+
+	test("a self-referencing cause terminates", () => {
+		const cyclic = withFields({}, "boom");
+		(cyclic as Error & { cause?: unknown }).cause = cyclic;
+		expect(classifyProviderFailure(cyclic)).toEqual({
+			kind: "unknown",
+			retryable: false,
+		});
+
+		const cyclicWithStatus = withFields({ status: 500 });
+		(cyclicWithStatus as Error & { cause?: unknown }).cause = cyclicWithStatus;
+		expect(classifyProviderFailure(cyclicWithStatus)).toEqual({
+			kind: "unavailable",
+			retryable: true,
+		});
+	});
+
+	test("the outermost structured status wins", () => {
+		const error = mastraWrapped(mastraWrapped(withFields({ status: 429 })));
+		Object.assign(error, { status: 401 });
+		expect(classifyProviderFailure(error)).toEqual({
+			kind: "auth",
+			retryable: false,
+		});
+	});
+
+	test("a wrapping message cannot hide the inner signal", () => {
+		const error = mastraWrapped(
+			withFields({ code: "context_length_exceeded" }, "too many tokens"),
+			"AGENT_GENERATE_FAILED: max_tokens exceeded",
+		);
+		expect(classifyProviderFailure(error)).toEqual({
+			kind: "context_overflow",
+			retryable: false,
+		});
 	});
 });
 
@@ -192,6 +310,22 @@ describe("toProviderError", () => {
 		expect(error.message).not.toContain("raw provider body");
 	});
 
+	test("clarifies a wrapped provider error and keeps the wrapper as cause", () => {
+		const wrapper = mastraWrapped(
+			withFields({ statusCode: 401 }, "invalid key sk-live-should-not-leak"),
+			"AGENT_GENERATE_FAILED at https://user:secret@provider.internal",
+		);
+		const error = toProviderError(wrapper);
+		expect(error).toMatchObject({
+			code: "AGENT_EXECUTION_FAILED",
+			retryable: false,
+			message: "provider rejected the credentials",
+		});
+		expect(error.cause).toBe(wrapper);
+		expect(error.message).not.toContain("sk-live-should-not-leak");
+		expect(error.message).not.toContain("provider.internal");
+	});
+
 	test("does not re-wrap an existing PlatformError", () => {
 		const existing = new PlatformError("POLICY_DENIED", "denied");
 		expect(toProviderError(existing)).toBe(existing);
@@ -207,5 +341,13 @@ describe("isAbortLikeError", () => {
 		expect(isAbortLikeError(withFields({ code: "ABORT_ERR" }))).toBe(true);
 		expect(isAbortLikeError(new Error("boom"))).toBe(false);
 		expect(isAbortLikeError(null)).toBe(false);
+	});
+
+	test("recognizes a wrapped cancellation", () => {
+		const wrapped = mastraWrapped(
+			Object.assign(new Error("aborted"), { name: "AbortError" }),
+		);
+		expect(isAbortLikeError(wrapped)).toBe(true);
+		expect(isAbortLikeError({ cause: { code: "ABORT_ERR" } })).toBe(true);
 	});
 });

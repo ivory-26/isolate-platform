@@ -74,14 +74,43 @@ function recordOf(value: unknown): UnknownRecord | undefined {
 		: undefined;
 }
 
-/** Structured HTTP status from `status`, `statusCode` or `response.status`. */
-function statusOf(error: unknown): number | undefined {
+/**
+ * Mastra's `Agent.generate()` does not rethrow the SDK error it caught: it
+ * throws `MastraError({ id: "AGENT_GENERATE_FAILED" }, cause)` whose `message`
+ * and `name` say nothing about the HTTP status, and keeps the SDK error
+ * (`APICallError`, whose `statusCode`/`code` are the real signal) only as
+ * `cause`. Classification therefore reads a bounded `cause` chain, the same
+ * shape Mastra itself traverses (@mastra/core@1.79.0, `MAX_CAUSE_DEPTH = 5`).
+ * The walk is cycle-safe: a self-referencing `cause` stops the chain.
+ */
+const MAX_CAUSE_DEPTH = 5;
+
+function causeChain(error: unknown): unknown[] {
+	const chain: unknown[] = [];
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+	for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth++) {
+		if (current === null || current === undefined) break;
+		if (seen.has(current)) break;
+		seen.add(current);
+		chain.push(current);
+		if (typeof current !== "object") break;
+		current = (current as UnknownRecord).cause;
+	}
+	return chain;
+}
+
+/** Structured HTTP status from `status`, `statusCode`, `response.status` or a numeric `code`. */
+function statusOfRecord(error: unknown): number | undefined {
 	const record = recordOf(error);
 	if (record === undefined) return undefined;
 	const candidates = [
 		record.status,
 		record.statusCode,
 		recordOf(record.response)?.status,
+		// Some gateways surface the HTTP status in `code`/`errorCode` instead.
+		record.code,
+		record.errorCode,
 	];
 	for (const candidate of candidates) {
 		if (
@@ -99,24 +128,51 @@ function statusOf(error: unknown): number | undefined {
 	return undefined;
 }
 
-function structuredCode(error: unknown): string {
-	const record = recordOf(error);
-	if (record === undefined) return "";
-	const raw = record.code ?? record.errorCode ?? record.type;
-	if (typeof raw === "string") return raw;
-	if (typeof raw === "number" && Number.isInteger(raw)) return String(raw);
-	return "";
+/** Outermost structured status wins; a wrapper without one defers to its cause. */
+function statusOf(error: unknown): number | undefined {
+	for (const link of causeChain(error)) {
+		const status = statusOfRecord(link);
+		if (status !== undefined) return status;
+	}
+	return undefined;
 }
 
-function structuredName(error: unknown): string {
-	const record = recordOf(error);
-	const raw = record?.name ?? (error instanceof Error ? error.name : "");
-	return typeof raw === "string" ? raw : "";
+type StructuredText = { codes: string; names: string };
+
+function structuredTextOf(error: unknown): StructuredText {
+	const codes: string[] = [];
+	const names: string[] = [];
+	for (const link of causeChain(error)) {
+		const record = recordOf(link);
+		if (record === undefined) continue;
+		const rawCode = record.code ?? record.errorCode ?? record.type;
+		if (typeof rawCode === "string" && rawCode.length > 0) {
+			codes.push(rawCode);
+		} else if (typeof rawCode === "number" && Number.isInteger(rawCode)) {
+			codes.push(String(rawCode));
+		}
+		const rawName =
+			record.name ?? (link instanceof Error ? link.name : undefined);
+		if (typeof rawName === "string" && rawName.length > 0) {
+			names.push(rawName);
+		}
+	}
+	return { codes: codes.join(" "), names: names.join(" ") };
 }
 
+/** Messages from the whole chain, including a plain object's `message`. */
 function messageOf(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return typeof error === "string" ? error : "";
+	const messages: string[] = [];
+	for (const link of causeChain(error)) {
+		if (link instanceof Error) {
+			if (link.message.length > 0) messages.push(link.message);
+			continue;
+		}
+		const raw = recordOf(link)?.message;
+		if (typeof raw === "string" && raw.length > 0) messages.push(raw);
+	}
+	if (messages.length === 0) return typeof error === "string" ? error : "";
+	return messages.join(" ");
 }
 
 function hasContextSignal(text: string): boolean {
@@ -190,15 +246,16 @@ function kindFromMessage(message: string): ProviderFailureKind | undefined {
 
 /**
  * Classifies any thrown value. Structured fields (`status`, `statusCode`,
- * `code`, `name`) win over the message fallback. Unknown stays non-retryable.
+ * `code`, `name`) anywhere in the bounded `cause` chain win over the message
+ * fallback, so a provider error wrapped by the agent library is still
+ * classified. Unknown stays non-retryable.
  */
 export function classifyProviderFailure(
 	error: unknown,
 ): ProviderFailureClassification {
 	const status = statusOf(error);
-	const codeText = structuredCode(error);
-	const nameText = structuredName(error);
-	const structured = `${codeText} ${nameText}`.trim().toLowerCase();
+	const { codes, names } = structuredTextOf(error);
+	const structured = `${codes} ${names}`.trim().toLowerCase();
 	const message = messageOf(error).toLowerCase();
 	const contextSignal = hasContextSignal(`${structured} ${message}`);
 
@@ -229,9 +286,18 @@ export function toProviderError(error: unknown): PlatformError {
 	});
 }
 
-/** True for cancellation-shaped errors, which keep their original identity. */
+/**
+ * True for cancellation-shaped errors, which keep their original identity.
+ * The bounded `cause` chain is checked too, so a cancellation wrapped by the
+ * agent library is never retried or reclassified as a provider failure.
+ */
 export function isAbortLikeError(error: unknown): boolean {
-	if (error instanceof Error && error.name === "AbortError") return true;
-	const record = recordOf(error);
-	return record?.code === "ABORT_ERR" || record?.name === "AbortError";
+	for (const link of causeChain(error)) {
+		if (link instanceof Error && link.name === "AbortError") return true;
+		const record = recordOf(link);
+		if (record?.code === "ABORT_ERR" || record?.name === "AbortError") {
+			return true;
+		}
+	}
+	return false;
 }

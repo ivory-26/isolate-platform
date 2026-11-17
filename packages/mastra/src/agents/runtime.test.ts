@@ -205,7 +205,7 @@ describe("createMastraAgentRuntime usage mapping", () => {
 });
 
 describe("createMastraAgentRuntime bounds", () => {
-	test("passes maxSteps, per-turn output cap and abort signal through", async () => {
+	test("passes maxSteps, per-turn output cap, retry bound and abort signal through", async () => {
 		const fake = fakeAgent(() => ({
 			text: "ok",
 			totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
@@ -221,10 +221,37 @@ describe("createMastraAgentRuntime bounds", () => {
 		await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
 		expect(fake.calls).toHaveLength(1);
 		expect(fake.calls[0].options.maxSteps).toBe(3);
+		// `maxRetries: 0` overrides Mastra's in-call default of 2 retries.
 		expect(fake.calls[0].options.modelSettings).toEqual({
 			maxOutputTokens: 16,
+			maxRetries: 0,
 		});
 		expect(fake.calls[0].options.abortSignal).toBe(signal);
+	});
+
+	test("disables Mastra's hidden model retries even without caps", async () => {
+		const fake = fakeAgent(() => ({ text: "ok" }));
+		const runtime = runtimeWith(fake.agent);
+		await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
+		expect(fake.calls[0].options.modelSettings).toEqual({ maxRetries: 0 });
+	});
+
+	test("keeps in-call model retries off even when the runtime retry budget is on", async () => {
+		const fake = fakeAgent(() => ({ text: "ok" }));
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 1000,
+				maxSteps: 2,
+				providerRetryAttempts: 2,
+			},
+		});
+		await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
+		// Forwarding the budget here too would square the worst-case calls.
+		expect(fake.calls[0].options.modelSettings).toEqual({
+			maxOutputTokens: 16,
+			maxRetries: 0,
+		});
 	});
 
 	test("cumulative token cap blocks the next turn before generate", async () => {
@@ -573,6 +600,61 @@ describe("createMastraAgentRuntime provider failure classification", () => {
 			usage: null,
 		});
 		expect(runtime.totalTokensUsed).toBe(0);
+	});
+
+	test("classifies a Mastra-wrapped provider error through its cause", async () => {
+		const raw = Object.assign(new Error("Too Many Requests"), {
+			statusCode: 429,
+			isRetryable: true,
+		});
+		const wrapper = Object.assign(new Error("AGENT_GENERATE_FAILED"), {
+			id: "AGENT_GENERATE_FAILED",
+			cause: raw,
+		});
+		const fake = fakeAgent(() => {
+			throw wrapper;
+		});
+		const runtime = runtimeWith(fake.agent);
+		let caught: unknown;
+		try {
+			await runtime.runTurn({ prompt: "go", context: CONTEXT, signal });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(PlatformError);
+		expect(caught).toMatchObject({
+			code: "RATE_LIMITED",
+			retryable: true,
+			message: "provider rate limited the request",
+			cause: wrapper,
+		});
+		expect(fake.calls).toHaveLength(1);
+	});
+
+	test("a wrapped 503 is retried only within the configured budget", async () => {
+		const fake = fakeAgent(() => {
+			throw Object.assign(new Error("AGENT_GENERATE_FAILED"), {
+				id: "AGENT_GENERATE_FAILED",
+				cause: Object.assign(new Error("Service Unavailable"), {
+					statusCode: 503,
+				}),
+			});
+		});
+		const runtime = runtimeWith(fake.agent, {
+			caps: {
+				maxOutputTokensPerTurn: 16,
+				maxTaskTokens: 1000,
+				maxSteps: 2,
+				providerRetryAttempts: 1,
+			},
+		});
+		await expect(
+			runtime.runTurn({ prompt: "go", context: CONTEXT, signal }),
+		).rejects.toMatchObject({
+			code: "INTEGRATION_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(fake.calls).toHaveLength(2);
 	});
 
 	test("auth failures are not retried even when retries are enabled", async () => {

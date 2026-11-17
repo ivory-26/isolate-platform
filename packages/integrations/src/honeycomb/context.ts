@@ -1,5 +1,6 @@
 import {
 	isBoundedHttpsUrl,
+	isPlatformError,
 	MAX_CONTEXT_EXCERPT_CHARS,
 	MAX_CONTEXT_TOTAL_EXCERPT_BYTES,
 	PlatformError,
@@ -79,6 +80,12 @@ export const HONEYCOMB_CONTEXT_MAX_ROWS = HONEYCOMB_QUERY_MAX_ROWS;
 export const HONEYCOMB_CONTEXT_MAX_SLO_ROWS = 20;
 export const HONEYCOMB_CONTEXT_MAX_TRIGGER_CHARS = 2000;
 export const HONEYCOMB_CONTEXT_MAX_SLO_SUMMARY_CHARS = 2000;
+
+/** Codes that mean "this credential cannot read query/SLO data", not a bug. */
+const DEGRADABLE_EVIDENCE_CODES: ReadonlySet<string> = new Set([
+	"INTEGRATION_UNAVAILABLE",
+	"RATE_LIMITED",
+]);
 
 /** Group fields safe for prompt context; host/url/user fields are excluded. */
 const HONEYCOMB_CONTEXT_GROUP_FIELDS = [
@@ -594,9 +601,31 @@ export async function fetchHoneycombTriggerEvidence(
 }
 
 /**
+ * The trigger snapshot needs no provider call: it is rebuilt from the already
+ * validated signal. A query or SLO read the credential cannot make (401, a
+ * query capability the plan does not include, or a rate limit) therefore
+ * degrades that evidence to `truncated` instead of discarding the snapshot.
+ * Contract violations and input validation errors still throw.
+ */
+async function degradeUnavailableEvidence(
+	run: () => Promise<HoneycombEvidence>,
+): Promise<HoneycombEvidence> {
+	try {
+		return await run();
+	} catch (error) {
+		if (isPlatformError(error) && DEGRADABLE_EVIDENCE_CODES.has(error.code)) {
+			return { item: null, truncated: true, failure: "failed" };
+		}
+		throw error;
+	}
+}
+
+/**
  * The bounded, cited bundle for one incident. Partial bundles are valid:
- * 403/404/5xx/parse failures and an empty Free-plan SLO list set `truncated`
- * rather than failing the task. 401 and 429 remain typed errors.
+ * 403/404/5xx/parse failures, an empty Free-plan SLO list, and a query or SLO
+ * read that the credential cannot perform all set `truncated` rather than
+ * failing the task, so the locally derived trigger snapshot survives. Contract
+ * violations and input validation errors remain typed failures.
  */
 export async function fetchHoneycombIncidentContext(
 	dependencies: HoneycombContextDependencies,
@@ -631,15 +660,19 @@ export async function fetchHoneycombIncidentContext(
 		truncated = true;
 	}
 
-	const query = await fetchHoneycombQueryEvidence(dependencies, {
-		service: parsedInput.data.service,
-		kind: parsedInput.data.kind,
-		windowMinutes: parsedInput.data.windowMinutes,
-	});
+	const query = await degradeUnavailableEvidence(() =>
+		fetchHoneycombQueryEvidence(dependencies, {
+			service: parsedInput.data.service,
+			kind: parsedInput.data.kind,
+			windowMinutes: parsedInput.data.windowMinutes,
+		}),
+	);
 	if (query.item !== null) candidates.push(query.item);
 	truncated = truncated || query.truncated;
 
-	const slo = await fetchHoneycombSloEvidence(dependencies, {});
+	const slo = await degradeUnavailableEvidence(() =>
+		fetchHoneycombSloEvidence(dependencies, {}),
+	);
 	if (slo.item !== null) candidates.push(slo.item);
 	truncated = truncated || slo.truncated;
 

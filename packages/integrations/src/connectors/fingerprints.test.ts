@@ -53,6 +53,24 @@ describe("parseConnectorIncidentFingerprint", () => {
 		).toEqual({ source: "signoz", ruleId: "rule-1" });
 	});
 
+	test("parses the digest-suffixed Honeycomb form emitted for over-long keys", () => {
+		// Exactly the shape `honeycombIncidentFingerprint` returns once the full
+		// value exceeds 128 characters: the builder keeps a bounded state prefix
+		// and appends `~<12 hex>` of the full-value digest.
+		const dataset = "d".repeat(34);
+		const triggerId = "t".repeat(34);
+		expect(
+			parseConnectorIncidentFingerprint(
+				`honeycomb:${dataset}:${triggerId}:critical~0123456789ab`,
+			),
+		).toEqual({
+			source: "honeycomb",
+			dataset,
+			triggerId,
+			state: "critical",
+		});
+	});
+
 	test("returns null for unknown, malformed or over-long fingerprints", () => {
 		for (const value of [
 			"github:repo:run:main",
@@ -61,6 +79,8 @@ describe("parseConnectorIncidentFingerprint", () => {
 			"k8s:cluster:ns:not-a-kind-name:reason",
 			"newrelic:",
 			`datadog:${"a".repeat(200)}:hash`,
+			"honeycomb:dataset-1:trigger-1:critical~NOTAHEXDIGEST",
+			"honeycomb:dataset-1:trigger-1:critical~0123456789",
 			"",
 		]) {
 			expect(parseConnectorIncidentFingerprint(value)).toBeNull();

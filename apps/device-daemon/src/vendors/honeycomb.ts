@@ -1,6 +1,7 @@
 import {
 	fetchHoneycombIncidentContext,
 	getHoneycombTrigger,
+	HONEYCOMB_TRIGGER_INCIDENT_KIND,
 	type HoneycombToolDependencies,
 	listHoneycombSlos,
 	runHoneycombQuery,
@@ -45,6 +46,19 @@ type HoneycombAlertState = (typeof HONEYCOMB_ALERT_STATES)[number];
 const HONEYCOMB_QUERY_KINDS = ["latency", "error_rate", "saturation"] as const;
 type HoneycombQueryKind = (typeof HONEYCOMB_QUERY_KINDS)[number];
 const HONEYCOMB_TRIGGER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/**
+ * The adapter's own normalizer emits `trigger_triggered` as the incident kind.
+ * That is an incident classification, not a query kind; forwarding it verbatim
+ * used to fail the whole evidence call `VALIDATION_FAILED` even though the
+ * query template is fixed. It maps to the adapter default (`latency`); any
+ * other unknown kind is still an explicit sender error.
+ */
+const HONEYCOMB_SIGNAL_KIND_QUERY_KIND: Readonly<
+	Record<string, HoneycombQueryKind>
+> = {
+	[HONEYCOMB_TRIGGER_INCIDENT_KIND]: "latency",
+};
 
 function honeycombAlertState(value: string): HoneycombAlertState | null {
 	return (
@@ -148,7 +162,10 @@ export function createHoneycombHandlers(
 			if (state === null) return failure("VALIDATION_FAILED");
 			let kind: HoneycombQueryKind | undefined;
 			if (parsed.kind !== undefined) {
-				const requested = honeycombQueryKind(parsed.kind);
+				const requested =
+					honeycombQueryKind(parsed.kind) ??
+					HONEYCOMB_SIGNAL_KIND_QUERY_KIND[parsed.kind] ??
+					null;
 				if (requested === null) return failure("VALIDATION_FAILED");
 				kind = requested;
 			}

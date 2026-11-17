@@ -43,6 +43,23 @@ type ProbeResult =
 	| { readonly kind: "status"; readonly status: number }
 	| { readonly kind: "network" };
 
+/**
+ * A provider body read to the cap and parsed, or a fixed "we could not read it"
+ * marker. Parsed values are inspected in fixed code paths only; they are never
+ * echoed into a result, log or error.
+ */
+type BoundedBody =
+	| { readonly kind: "json"; readonly value: unknown }
+	| { readonly kind: "invalid" };
+
+type JsonProbeResult =
+	| {
+			readonly kind: "status";
+			readonly status: number;
+			readonly body: BoundedBody;
+	  }
+	| { readonly kind: "network" };
+
 type RequestOptions = {
 	readonly method?: "GET" | "POST";
 	readonly headers: Record<string, string>;
@@ -103,6 +120,67 @@ async function requestStatus(
 	return { kind: "status", status: response.status };
 }
 
+/**
+ * Reads at most the body cap and parses it. The same cap as every other probe
+ * applies; an oversized or malformed body is `invalid`, never buffered past the
+ * cap and never echoed. Callers may inspect only fixed fields of the result.
+ */
+async function readBoundedJsonBody(response: Response): Promise<BoundedBody> {
+	if (response.body === null) return { kind: "invalid" };
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	let total = 0;
+	let finished = false;
+	try {
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) {
+				finished = true;
+				break;
+			}
+			total += next.value.byteLength;
+			if (total > CONNECTOR_VERIFY_MAX_BODY_BYTES) return { kind: "invalid" };
+			text += decoder.decode(next.value, { stream: true });
+		}
+		text += decoder.decode();
+	} catch {
+		return { kind: "invalid" };
+	} finally {
+		if (!finished) await reader.cancel().catch(() => undefined);
+	}
+	try {
+		return { kind: "json", value: JSON.parse(text) as unknown };
+	} catch {
+		return { kind: "invalid" };
+	}
+}
+
+/** One bounded authenticated read whose small JSON body is inspected. */
+async function requestStatusWithJson(
+	url: string,
+	options: RequestOptions,
+	fetchImpl: typeof fetch,
+): Promise<JsonProbeResult> {
+	let response: Response;
+	try {
+		response = await fetchImpl(url, {
+			method: options.method ?? "GET",
+			headers: options.headers,
+			...(options.body === undefined ? {} : { body: options.body }),
+			redirect: "error",
+			signal: AbortSignal.timeout(CONNECTOR_VERIFY_TIMEOUT_MS),
+		});
+	} catch {
+		return { kind: "network" };
+	}
+	return {
+		kind: "status",
+		status: response.status,
+		body: await readBoundedJsonBody(response),
+	};
+}
+
 function reasonFromStatus(status: number): ConnectorVerifyReasonCode {
 	if (status >= 200 && status < 300) return "OK";
 	if (status === 401 || status === 403) return "AUTH_FAILED";
@@ -128,6 +206,38 @@ function resultOutcome(result: ProbeResult): DispatchOutcome {
 	if (result.kind === "network") return unverified("UNREACHABLE");
 	const reasonCode = reasonFromStatus(result.status);
 	return reasonCode === "OK" ? verified() : unverified(reasonCode);
+}
+
+/**
+ * `/1/auth` proof for Honeycomb.
+ *
+ * A 2xx alone proves only that the value is *some* Honeycomb API key: ingest
+ * keys authenticate there too and then refuse every read the connector makes.
+ * The documented response carries `type` (`configuration` | `ingest`), which is
+ * the credential class the connector needs. Verification therefore requires a
+ * Configuration key and never claims query capability: Honeycomb gates
+ * "Run queries" to enterprise plans (the Free-plan UI shows it unchecked and
+ * disabled), so a correct Free-plan Configuration key has
+ * `api_key_access.queries: false` and must still verify.
+ *
+ * Backwards compatibility: this stays the same single bounded read; only the
+ * already-capped body is inspected for `type`. A 2xx body without the
+ * documented `type` proves nothing about the class, so it maps to
+ * PROVIDER_ERROR, which leaves the stored status unchanged rather than
+ * promoting a key that cannot read. An explicit `ingest` class maps to
+ * AUTH_FAILED, the existing "provider rejected this credential" reason the
+ * server records as `invalid`.
+ */
+function honeycombCredentialClass(
+	body: BoundedBody,
+): "configuration" | "ingest" | "unknown" {
+	if (body.kind !== "json") return "unknown";
+	const value = body.value;
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return "unknown";
+	}
+	const type = (value as Record<string, unknown>).type;
+	return type === "configuration" || type === "ingest" ? type : "unknown";
 }
 
 export type ConnectorVerifyOptions = {
@@ -305,18 +415,27 @@ export function createConnectorVerifyHandler(
 				);
 				if (!settings.ok) return configurationRequired();
 				const baseUrl = settings.deps.apiBaseUrl ?? HONEYCOMB_DEFAULT_ORIGIN;
-				return resultOutcome(
-					await requestStatus(
-						joinUrl(baseUrl, "/1/auth"),
-						{
-							headers: {
-								accept: "application/json",
-								"X-Honeycomb-Team": settings.deps.apiKey,
-							},
+				const probe = await requestStatusWithJson(
+					joinUrl(baseUrl, "/1/auth"),
+					{
+						headers: {
+							accept: "application/json",
+							"X-Honeycomb-Team": settings.deps.apiKey,
 						},
-						fetchImpl,
-					),
+					},
+					fetchImpl,
 				);
+				if (probe.kind === "network") return unverified("UNREACHABLE");
+				const statusReason = reasonFromStatus(probe.status);
+				if (statusReason !== "OK") return unverified(statusReason);
+				switch (honeycombCredentialClass(probe.body)) {
+					case "configuration":
+						return verified();
+					case "ingest":
+						return unverified("AUTH_FAILED");
+					default:
+						return unverified("PROVIDER_ERROR");
+				}
 			}
 			case "axiom": {
 				const settings = resolveAxiomSettings(

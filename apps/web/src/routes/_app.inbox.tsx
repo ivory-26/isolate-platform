@@ -1,6 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { useMemo } from "react";
 import { ErrorState } from "@/components/common/error-state";
 import { PageContainer } from "@/components/common/page-container";
 import { PageHeader } from "@/components/common/page-header";
@@ -8,7 +7,6 @@ import { ConsoleNote } from "@/components/console/note";
 import { ConnectorsIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
-	filterInboxItems,
 	type InboxSearch,
 	inboxSearchFor,
 	parseInboxSearch,
@@ -63,13 +61,7 @@ function InboxPage() {
 	const navigate = Route.useNavigate();
 	const query = useSuspenseQuery(inboxOptions(search));
 
-	const items = useMemo(
-		() =>
-			query.data.ok
-				? filterInboxItems(query.data.value.items, search.severity)
-				: [],
-		[query.data, search.severity],
-	);
+	const items = query.data.ok ? query.data.value.items : [];
 
 	const updateSearch = (changes: Partial<InboxSearch>) => {
 		void navigate({
@@ -107,8 +99,7 @@ function InboxPage() {
 		);
 	}
 
-	const total = query.data.value.items.length;
-	const empty = total === 0 && filterIsClear(search);
+	const empty = items.length === 0 && filterIsClear(search);
 
 	return (
 		<PageContainer>
@@ -121,7 +112,6 @@ function InboxPage() {
 					<InboxFilters
 						search={search}
 						count={items.length}
-						total={total}
 						onChange={updateSearch}
 					/>
 					{query.isRefetchError ? (

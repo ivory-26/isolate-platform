@@ -26,7 +26,7 @@ export const INBOX_LIMITS = { default: 25, max: 100 } as const;
 /** One table page. The page loads a bounded window and pages it here. */
 export const INBOX_PAGE_SIZE = 25;
 
-/** Severity values accepted by the optional client-side severity filter. */
+/** Severity values accepted by the optional severity filter. */
 export const INBOX_SEVERITIES = [
 	"critical",
 	"high",
@@ -46,6 +46,7 @@ export const inboxQuerySchema = z
 		/** Connector token filter, e.g. `github`. */
 		source: z.string().trim().regex(CONNECTOR_PATTERN).optional(),
 		status: z.enum(EVENT_DELIVERY_STATUSES).optional(),
+		severity: z.enum(INBOX_SEVERITIES).optional(),
 	})
 	.optional();
 
@@ -222,29 +223,22 @@ export function inboxSearchFor(
 }
 
 /**
- * The bounded server query for a search. Severity is not a server filter in
- * the merged read model, so it is applied to the loaded window by
- * {@link filterInboxItems}; status and source are filtered in SQL.
+ * The bounded server query for a search. Every filter — status, source and
+ * severity — is applied in SQL before the row cap, so a filtered page is never
+ * falsely empty because matching rows sit beyond the loaded window.
  */
 export function inboxQueryFor(search: InboxSearch): {
 	status?: EventDeliveryStatus;
 	source?: string;
+	severity?: InboxSeverity;
 	limit: number;
 } {
 	return {
 		limit: INBOX_LIMITS.max,
 		...(search.status === undefined ? {} : { status: search.status }),
 		...(search.source === undefined ? {} : { source: search.source }),
+		...(search.severity === undefined ? {} : { severity: search.severity }),
 	};
-}
-
-/** Applies the optional severity filter to the already-bounded delivery list. */
-export function filterInboxItems<T extends { severity: string }>(
-	items: readonly T[],
-	severity: InboxSeverity | undefined,
-): T[] {
-	if (severity === undefined) return [...items];
-	return items.filter((item) => item.severity === severity);
 }
 
 /** The bounded row the server read produces (no payloads, no tokens). */

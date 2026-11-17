@@ -237,25 +237,41 @@ function RunsPage() {
 						</caption>
 						<TableHeader>
 							<TableRow className="border-line-subtle hover:bg-transparent">
-								<TableHead className="h-9 w-[260px] text-[10px] font-medium">
+								<TableHead
+									scope="col"
+									className="h-9 w-[260px] text-[10px] font-medium"
+								>
 									Task
 								</TableHead>
-								<TableHead className="text-[10px] font-medium">
+								<TableHead scope="col" className="text-[10px] font-medium">
 									Branch
 								</TableHead>
-								<TableHead className="w-[170px] text-[10px] font-medium">
+								<TableHead
+									scope="col"
+									className="w-[170px] text-[10px] font-medium"
+								>
 									Status
 								</TableHead>
-								<TableHead className="w-[170px] text-[10px] font-medium">
+								<TableHead
+									scope="col"
+									className="w-[170px] text-[10px] font-medium"
+								>
 									Latest run
 								</TableHead>
-								<TableHead className="w-[110px] text-[10px] font-medium">
+								<TableHead
+									scope="col"
+									className="w-[110px] text-[10px] font-medium"
+								>
 									Retry depth
 								</TableHead>
-								<TableHead className="w-[130px] text-[10px] font-medium">
+								<TableHead
+									scope="col"
+									className="w-[130px] text-[10px] font-medium"
+								>
 									Created
 								</TableHead>
 								<TableHead
+									scope="col"
 									className="w-[130px] text-[10px] font-medium"
 									style={{ textAlign: "right" }}
 								>

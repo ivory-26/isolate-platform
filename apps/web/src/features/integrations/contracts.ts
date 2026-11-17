@@ -352,6 +352,8 @@ export const integrationDetailSchema = z.strictObject({
 		.array(integrationSubscriptionSchema)
 		.max(MAX_SUBSCRIPTIONS_PER_CONNECTOR),
 	deliveries: z.array(eventDeliverySchema).max(MAX_DELIVERIES_PER_READ),
+	/** True when the read hit its row cap, so the panel can say so. */
+	deliveriesTruncated: z.boolean().default(false),
 	canManage: z.boolean(),
 });
 export type IntegrationDetail = z.infer<typeof integrationDetailSchema>;

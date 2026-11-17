@@ -20,6 +20,7 @@ export const RUN_EVENT_TYPES = [
 	"agent.turn_finished",
 	"tool.invoked",
 	"tool.denied_by_policy",
+	"connector.context_skipped",
 	"workflow.step_started",
 	"workflow.step_finished",
 	"workflow.step_failed",

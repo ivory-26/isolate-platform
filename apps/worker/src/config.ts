@@ -1,3 +1,4 @@
+import { MAX_PROVIDER_RETRY_ATTEMPTS } from "@isolate/mastra";
 import {
 	workerConfigSchema as sharedWorkerConfigSchema,
 	WORKER_CONFIG_DEFAULTS,
@@ -65,7 +66,12 @@ export const workerConfigSchema = z.object({
 	 * Harness P0-3: automatic retries for retryable provider failures. Default
 	 * 0 = classify once and fail the turn, matching current spend behavior.
 	 */
-	providerRetryAttempts: z.coerce.number().int().min(0).max(3).default(0),
+	providerRetryAttempts: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.max(MAX_PROVIDER_RETRY_ATTEMPTS)
+		.default(0),
 	databaseUrl: z.string().min(1).optional(),
 });
 

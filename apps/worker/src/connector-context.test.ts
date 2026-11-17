@@ -13,6 +13,8 @@ import type { ContextBundle, OrganizationId, TaskId } from "@isolate/shared";
 import {
 	CONNECTOR_CONTEXT_TOOLS,
 	type ConnectorContextDependencies,
+	type ConnectorContextSkip,
+	type ConnectorContextSkipSource,
 	createConnectorContextLoader,
 	createRoutedContextLoader,
 } from "./connector-context";
@@ -89,6 +91,8 @@ type Harness = {
 	enqueued: EnqueueConnectorCallInput[];
 	resolveCalls: Array<{ organizationId: string; connectorId: string }>;
 	signalCalls: Array<{ organizationId: string; source: string }>;
+	/** Reasons reported through the loader's optional observer. */
+	skips: ConnectorContextSkip[];
 	setOutcome: (next: ConnectorCallOutcome | null) => void;
 	setAwaitError: (error: unknown) => void;
 	setEnqueueError: (error: unknown) => void;
@@ -104,6 +108,7 @@ function makeHarness(
 	const enqueued: EnqueueConnectorCallInput[] = [];
 	const resolveCalls: Harness["resolveCalls"] = [];
 	const signalCalls: Harness["signalCalls"] = [];
+	const skips: ConnectorContextSkip[] = [];
 	let outcome: ConnectorCallOutcome | null = null;
 	let awaitError: unknown = null;
 	let enqueueError: unknown = null;
@@ -135,6 +140,9 @@ function makeHarness(
 				return options.signal === undefined ? SIGNAL : options.signal;
 			},
 		},
+		onSkip(skip) {
+			skips.push(skip);
+		},
 		...options.overrides,
 	};
 
@@ -143,6 +151,7 @@ function makeHarness(
 		enqueued,
 		resolveCalls,
 		signalCalls,
+		skips,
 		setOutcome(next) {
 			outcome = next;
 		},
@@ -356,6 +365,174 @@ describe("connector context loader — result parsing", () => {
 	});
 });
 
+describe("connector context loader — evidence skip reasons", () => {
+	function expectSkip(
+		harness: Harness,
+		source: ConnectorContextSkipSource,
+		reason: ConnectorContextSkip["reason"],
+	) {
+		expect(harness.skips).toEqual([
+			{ organizationId: ORG, taskId: TASK, source, reason },
+		]);
+	}
+
+	test("a loaded bundle reports no skip", async () => {
+		const fingerprint = "sentry:acme:web:42";
+		const harness = makeHarness();
+		harness.setOutcome({ ok: true, data: bundleFor(fingerprint) });
+
+		const bundle = await harness.loader(input(fingerprint));
+
+		expect(bundle?.incidentFingerprint).toBe(fingerprint);
+		expect(harness.skips).toEqual([]);
+	});
+
+	test("GitHub, unknown and malformed fingerprints report unrecognized_fingerprint", async () => {
+		for (const fingerprint of [
+			"github:acme/widget:ci:main",
+			"unknown:source:1",
+			"sentry:only-one-segment",
+			"",
+		]) {
+			const harness = makeHarness();
+			expect(await harness.loader(input(fingerprint))).toBeNull();
+			expectSkip(harness, "unknown", "unrecognized_fingerprint");
+			expect(harness.enqueued).toHaveLength(0);
+		}
+	});
+
+	test("a credential with no device queue reports no_device_credential", async () => {
+		const harness = makeHarness({
+			resolve: async () => device({ deviceId: null, credentialId: null }),
+		});
+
+		expect(await harness.loader(input("sentry:acme:web:42"))).toBeNull();
+		expectSkip(harness, "sentry", "no_device_credential");
+		expect(harness.enqueued).toHaveLength(0);
+	});
+
+	test("a missing normalized signal reports no_signal", async () => {
+		const harness = makeHarness({ signal: null });
+
+		expect(await harness.loader(input("grafana:rule-1"))).toBeNull();
+		expectSkip(harness, "grafana", "no_signal");
+		expect(harness.enqueued).toHaveLength(0);
+	});
+
+	test("no result inside the bounded wait reports call_timeout", async () => {
+		const harness = makeHarness();
+		harness.setOutcome(null);
+
+		expect(await harness.loader(input("datadog:12345"))).toBeNull();
+		expectSkip(harness, "datadog", "call_timeout");
+	});
+
+	test("a device-reported provider failure reports call_failed", async () => {
+		const harness = makeHarness();
+		harness.setOutcome({ ok: false, errorCode: "INTEGRATION_UNAVAILABLE" });
+
+		expect(await harness.loader(input("newrelic:abc123"))).toBeNull();
+		expectSkip(harness, "newrelic", "call_failed");
+	});
+
+	test("malformed and mismatched bundles report contract_rejected", async () => {
+		const fingerprint = "honeycomb:dataset1:trigger1:firing";
+		const malformed = makeHarness();
+		malformed.setOutcome({
+			ok: true,
+			data: { incidentFingerprint: fingerprint, items: "not-an-array" },
+		});
+		expect(await malformed.loader(input(fingerprint))).toBeNull();
+		expectSkip(malformed, "honeycomb", "contract_rejected");
+
+		const mismatched = makeHarness();
+		mismatched.setOutcome({
+			ok: true,
+			data: bundleFor("honeycomb:dataset1:trigger2:firing"),
+		});
+		expect(await mismatched.loader(input(fingerprint))).toBeNull();
+		expectSkip(mismatched, "honeycomb", "contract_rejected");
+	});
+
+	test("broker, enqueue and awaited-read failures report broker_failed", async () => {
+		const brokerFailure = makeHarness({
+			resolve: async () => {
+				throw new Error("no active device");
+			},
+		});
+		expect(
+			await brokerFailure.loader(input("pagerduty:PSVC1:INC1")),
+		).toBeNull();
+		expectSkip(brokerFailure, "pagerduty", "broker_failed");
+
+		const enqueueFailure = makeHarness();
+		enqueueFailure.setEnqueueError(new Error("db down"));
+		expect(await enqueueFailure.loader(input("sentry:acme:web:42"))).toBeNull();
+		expectSkip(enqueueFailure, "sentry", "broker_failed");
+
+		const awaitFailure = makeHarness();
+		awaitFailure.setAwaitError(new Error("db down"));
+		expect(await awaitFailure.loader(input("sentry:acme:web:42"))).toBeNull();
+		expectSkip(awaitFailure, "sentry", "broker_failed");
+	});
+
+	test("an observer throw or rejection never fails the task", async () => {
+		const throws = makeHarness({
+			signal: null,
+			overrides: {
+				onSkip() {
+					throw new Error("timeline down");
+				},
+			},
+		});
+		expect(await throws.loader(input("sentry:acme:web:42"))).toBeNull();
+
+		const rejects = makeHarness({
+			signal: null,
+			overrides: {
+				async onSkip() {
+					throw new Error("timeline down");
+				},
+			},
+		});
+		expect(await rejects.loader(input("sentry:acme:web:42"))).toBeNull();
+		// The skip was still attempted exactly once; nothing was retried.
+		expect(rejects.skips).toEqual([]);
+	});
+
+	test("a skip is tenant-attributed and carries no evidence text", async () => {
+		const fingerprint = "sentry:acme:web:42";
+		const base = bundleFor(fingerprint);
+		const item = base.items[0];
+		if (item === undefined) throw new Error("fixture has no item");
+		const harness = makeHarness();
+		harness.setOutcome({
+			ok: true,
+			// Wrong fingerprint forces a contract rejection while the payload
+			// above still contains provider text the timeline must not carry.
+			data: {
+				...base,
+				incidentFingerprint: "sentry:acme:web:99",
+				items: [{ ...item, excerpt: "provider-secret-excerpt" }],
+			},
+		});
+
+		expect(await harness.loader(input(fingerprint))).toBeNull();
+		const [skip] = harness.skips;
+		if (skip === undefined) throw new Error("no skip reported");
+		expect(Object.keys(skip).sort()).toEqual([
+			"organizationId",
+			"reason",
+			"source",
+			"taskId",
+		]);
+		expect(skip.organizationId).toBe(ORG);
+		expect(skip.taskId).toBe(TASK);
+		expect(skip.reason).toBe("contract_rejected");
+		expect(JSON.stringify(skip)).not.toContain("provider-secret-excerpt");
+	});
+});
+
 describe("routed context loader", () => {
 	const REQUEST = {
 		organizationId: ORG,
@@ -457,5 +634,147 @@ describe("routed context loader", () => {
 			})(REQUEST),
 		).toBeNull();
 		expect(seen).toEqual([]);
+	});
+});
+
+describe("routed context loader — evidence skip reporting", () => {
+	const REQUEST = {
+		organizationId: ORG,
+		taskId: TASK,
+		repositoryFullName: "acme/widget",
+		ref: "main",
+	};
+
+	function reader(fingerprint: string | null, organizationId = ORG) {
+		return {
+			async get() {
+				return {
+					organization_id: organizationId,
+					incident_fingerprint: fingerprint,
+				};
+			},
+		};
+	}
+
+	test("a connector skip is reported by the device loader exactly once", async () => {
+		const harness = makeHarness({ signal: null });
+		const routerSkips: ConnectorContextSkip[] = [];
+		const loader = createRoutedContextLoader({
+			tasks: reader("grafana:rule-1"),
+			connector: harness.loader,
+			onSkip(skip) {
+				routerSkips.push(skip);
+			},
+		});
+
+		expect(await loader(REQUEST)).toBeNull();
+		expect(harness.skips).toEqual([
+			{
+				organizationId: ORG,
+				taskId: TASK,
+				source: "grafana",
+				reason: "no_signal",
+			},
+		]);
+		// The router must not double-record a reason the loader already owns.
+		expect(routerSkips).toEqual([]);
+	});
+
+	test("a connector incident without a gateway reports no_device_gateway and keeps the fallback", async () => {
+		const skips: ConnectorContextSkip[] = [];
+		let githubCalls = 0;
+		const loader = createRoutedContextLoader({
+			tasks: reader("sentry:acme:web:42"),
+			github: async () => {
+				githubCalls += 1;
+				return null;
+			},
+			onSkip(skip) {
+				skips.push(skip);
+			},
+		});
+
+		expect(await loader(REQUEST)).toBeNull();
+		expect(skips).toEqual([
+			{
+				organizationId: ORG,
+				taskId: TASK,
+				source: "sentry",
+				reason: "no_device_gateway",
+			},
+		]);
+		expect(githubCalls).toBe(1);
+	});
+
+	test("GitHub fingerprints and unknown shapes are not connector skips", async () => {
+		// A GitHub or unrecognized fingerprint keeps the GitHub fallback; a task
+		// with no fingerprint has no reader at all and must not be called.
+		for (const { fingerprint, githubCalls: expectedCalls } of [
+			{ fingerprint: "github:acme/widget:ci:main", githubCalls: 1 },
+			{ fingerprint: "unknown:source:1", githubCalls: 1 },
+			{ fingerprint: null, githubCalls: 0 },
+		]) {
+			const skips: ConnectorContextSkip[] = [];
+			let githubCalls = 0;
+			const loader = createRoutedContextLoader({
+				tasks: reader(fingerprint),
+				github: async () => {
+					githubCalls += 1;
+					return null;
+				},
+				onSkip(skip) {
+					skips.push(skip);
+				},
+			});
+			expect(await loader(REQUEST)).toBeNull();
+			expect(skips).toEqual([]);
+			expect(githubCalls).toBe(expectedCalls);
+		}
+	});
+
+	test("a foreign or missing task never reaches a reader or a skip sink", async () => {
+		const skips: ConnectorContextSkip[] = [];
+		const delegates = {
+			github: async () => {
+				throw new Error("must not be called");
+			},
+			connector: async () => {
+				throw new Error("must not be called");
+			},
+			onSkip(skip: ConnectorContextSkip) {
+				skips.push(skip);
+			},
+		};
+
+		expect(
+			await createRoutedContextLoader({
+				tasks: reader("sentry:acme:web:42", OTHER_ORG),
+				...delegates,
+			})(REQUEST),
+		).toBeNull();
+		expect(
+			await createRoutedContextLoader({
+				tasks: { get: async () => null },
+				...delegates,
+			})(REQUEST),
+		).toBeNull();
+		expect(skips).toEqual([]);
+	});
+
+	test("a throwing skip sink never fails the route or blocks the fallback", async () => {
+		let githubCalls = 0;
+		const loader = createRoutedContextLoader({
+			tasks: reader("sentry:acme:web:42"),
+			github: async () => {
+				githubCalls += 1;
+				return null;
+			},
+			onSkip() {
+				throw new Error("timeline down");
+			},
+		});
+
+		expect(await loader(REQUEST)).toBeNull();
+		expect(githubCalls).toBe(1);
 	});
 });

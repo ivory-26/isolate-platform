@@ -58,6 +58,7 @@ import {
 	createLoggerTraceSink,
 	createMultiTraceSink,
 	createOtlpTraceSink,
+	type ExecutionLifecycle,
 	type Logger,
 	type OrganizationId,
 	PlatformError,
@@ -71,6 +72,7 @@ import {
 import type { WorkerCompositionOverrides } from "./composition";
 import type { WorkerConfig } from "./config";
 import {
+	type ConnectorContextSkipObserver,
 	createConnectorContextLoader,
 	createRoutedContextLoader,
 } from "./connector-context";
@@ -895,6 +897,28 @@ export function createOrganizationIncidentContextBundleLoader(
 }
 
 /**
+ * Wave 28: records a skipped evidence read on the run timeline.
+ *
+ * The payload is a bounded reason and a source token — never provider text, a
+ * URL, a header or a secret. The observers that call this swallow failures, so
+ * an unavailable timeline can never fail the task or change its verdict.
+ */
+export function createConnectorContextSkipSink(
+	lifecycle: Pick<ExecutionLifecycle, "event">,
+): ConnectorContextSkipObserver {
+	return async ({ organizationId, taskId, source, reason }) => {
+		await lifecycle.event({
+			organizationId,
+			taskId,
+			workflowRunId: null,
+			type: "connector.context_skipped",
+			actor: "worker",
+			data: { source, reason },
+		});
+	};
+}
+
+/**
  * Wave 17: connector tool binding for the device poll queue.
  *
  * Enabled only when `DEVICE_GATEWAY_ENABLED` is exactly `true` (the same gate
@@ -970,6 +994,9 @@ export async function createConfiguredWorkerComposition(
 	const taskAttemptRepository = new PostgresTaskAttemptRepository(sql);
 	const artifactRepository = new PostgresArtifactRepository(sql);
 	const branchLocks = new PostgresBranchLockRepository(sql);
+	// One durable lifecycle per worker: the task surface and the evidence-skip
+	// timeline share it.
+	const executionLifecycle = new PostgresExecutionLifecycle(sql);
 
 	const overrides: WorkerCompositionOverrides = {
 		...traceOverrides,
@@ -1006,7 +1033,7 @@ export async function createConfiguredWorkerComposition(
 		priceTable,
 		// Wave 11: one durable lifecycle per worker. It is inert until a task
 		// actually moves through the new handler path.
-		lifecycle: new PostgresExecutionLifecycle(sql),
+		lifecycle: executionLifecycle,
 		// Wave 11: full large payloads (diffs) go to the tenant-scoped blob table;
 		// artifacts keep a bounded inline preview and a `blob:<sha256>` reference.
 		blobStore: new PostgresBlobStore(sql),
@@ -1115,6 +1142,10 @@ export async function createConfiguredWorkerComposition(
 	// receives incident evidence.
 	const deviceGatewayEnabled =
 		env.DEVICE_GATEWAY_ENABLED?.trim().toLowerCase() === "true";
+	// Evidence loss is observable: a skipped connector read lands on the run
+	// timeline with a bounded reason, never as an empty bundle the run page
+	// cannot explain. The payload carries no provider text.
+	const reportContextSkip = createConnectorContextSkipSink(executionLifecycle);
 	// Wave 19: non-GitHub incidents are read by the user's device, which holds
 	// the provider key. Built only with the device gateway; the queue transport
 	// is `connector_calls`, never a synchronous provider call in the worker.
@@ -1127,6 +1158,7 @@ export async function createConfiguredWorkerComposition(
 				}),
 				calls: new PostgresConnectorCallRepository(sql),
 				signals: new PostgresIncidentRepository(sql),
+				onSkip: reportContextSkip,
 			})
 		: undefined;
 	const githubContextLoader =
@@ -1151,6 +1183,9 @@ export async function createConfiguredWorkerComposition(
 			...(connectorContextLoader === undefined
 				? {}
 				: { connector: connectorContextLoader }),
+			// A routing-level skip (no device gateway bound) uses the same sink
+			// as the loader's own reasons.
+			onSkip: reportContextSkip,
 		});
 	}
 

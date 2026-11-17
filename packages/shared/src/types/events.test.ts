@@ -18,6 +18,19 @@ describe("runEventEnvelopeSchema", () => {
 		expect(parsed.data).toEqual({});
 	});
 
+	test("accepts the connector evidence-skip event", () => {
+		expect(RUN_EVENT_TYPES).toContain("connector.context_skipped");
+		const parsed = runEventEnvelopeSchema.parse({
+			taskId: "task_1",
+			workflowRunId: null,
+			type: "connector.context_skipped",
+			actor: "worker",
+			data: { source: "sentry", reason: "call_timeout" },
+		});
+		expect(parsed.type).toBe("connector.context_skipped");
+		expect(parsed.data).toEqual({ source: "sentry", reason: "call_timeout" });
+	});
+
 	test("rejects unknown types and actors", () => {
 		expect(
 			runEventEnvelopeSchema.safeParse({

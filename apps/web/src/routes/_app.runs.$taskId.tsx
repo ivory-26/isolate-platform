@@ -43,7 +43,11 @@ import type {
 	RunTaskIdentity,
 	RunUsageRecord,
 } from "@/features/runs/contracts";
-import { RUN_MAX_RETRY_DEPTH } from "@/features/runs/contracts";
+import {
+	isLiveRunStatus,
+	RUN_LIVE_POLL_INTERVAL_MS,
+	RUN_MAX_RETRY_DEPTH,
+} from "@/features/runs/contracts";
 import { runDetailOptions } from "@/features/runs/queries";
 import {
 	approvalActionLabel,
@@ -160,6 +164,10 @@ function RunDetailPage() {
 
 	const detail = query.data.value;
 	const { task } = detail;
+	// A live run polls itself, so an in-flight background read must not look
+	// like a manual refresh (or disable the button every five seconds).
+	const live = isLiveRunStatus(task.status);
+	const pollSeconds = Math.round(RUN_LIVE_POLL_INTERVAL_MS / 1000);
 	const pullRequestUrl = safeExternalUrl(task.pullRequestUrl);
 	const latestRun = detail.workflowRuns.at(-1) ?? null;
 	const pendingApprovals = detail.approvals.filter((approval) =>
@@ -207,15 +215,27 @@ function RunDetailPage() {
 				}
 				actions={
 					<>
+						{live ? (
+							<span
+								className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted"
+								title={`This run is still active; the page refreshes every ${pollSeconds} seconds.`}
+							>
+								<span
+									aria-hidden="true"
+									className="size-1.5 rounded-full bg-brand"
+								/>
+								Live
+							</span>
+						) : null}
 						<Button
 							type="button"
 							variant="outline"
 							size="sm"
-							disabled={query.isFetching}
+							disabled={query.isFetching && !live}
 							onClick={() => void query.refetch()}
 						>
 							<RetryIcon />
-							{query.isFetching ? "Refreshing…" : "Refresh"}
+							{query.isFetching && !live ? "Refreshing…" : "Refresh"}
 						</Button>
 						{pullRequestUrl ? (
 							<Button asChild variant="outline" size="sm">
@@ -730,6 +750,12 @@ function RunDetailPage() {
 								})}
 							</ul>
 						)}
+						{detail.approvalsTruncated ? (
+							<p className="mt-2 text-[11px] text-warning">
+								Showing the {detail.approvals.length} most recent approvals;
+								older gates are not included.
+							</p>
+						) : null}
 					</Section>
 
 					<Section
@@ -745,7 +771,10 @@ function RunDetailPage() {
 						title="Artifacts"
 						description="Bounded previews. A stored blob payload can be downloaded by an authenticated member of this organization."
 					>
-						<ArtifactsSection artifacts={detail.artifacts} />
+						<ArtifactsSection
+							artifacts={detail.artifacts}
+							truncated={detail.artifactsTruncated}
+						/>
 					</Section>
 
 					<Section
@@ -785,6 +814,11 @@ function RunDetailPage() {
 								))}
 							</ul>
 						)}
+						{detail.workflowRunsTruncated ? (
+							<p className="mt-2 text-[11px] text-warning">
+								Showing the first {detail.workflowRuns.length} workflow runs.
+							</p>
+						) : null}
 					</Section>
 
 					<Section
@@ -962,7 +996,13 @@ function UsageSection({ usage }: { usage: RunUsageRecord[] }) {
 	);
 }
 
-function ArtifactsSection({ artifacts }: { artifacts: RunArtifact[] }) {
+function ArtifactsSection({
+	artifacts,
+	truncated,
+}: {
+	artifacts: RunArtifact[];
+	truncated: boolean;
+}) {
 	if (artifacts.length === 0) {
 		return (
 			<p className="text-sm text-ink-muted">
@@ -971,56 +1011,64 @@ function ArtifactsSection({ artifacts }: { artifacts: RunArtifact[] }) {
 		);
 	}
 	return (
-		<ul className="space-y-4">
-			{artifacts.map((artifact) => (
-				<li
-					key={artifact.id}
-					className="space-y-2 border-b border-line-subtle pb-4 last:border-0 last:pb-0"
-				>
-					<div className="flex flex-wrap items-center gap-2">
-						<LogsIcon size={14} className="text-ink-muted" />
-						<span className="text-xs font-medium text-ink">
-							{artifact.kind}
-						</span>
-						<span className="font-mono text-[11px] text-ink-muted">
-							{artifact.contentType}
-						</span>
-						<span className="font-mono text-[11px] tabular-nums text-ink-muted">
-							{formatBytes(artifact.byteSize)}
-						</span>
-						<ArtifactDownloadLink artifact={artifact} />
-						<span className="ml-auto text-[11px] text-ink-muted">
-							<RelativeTime value={artifact.createdAt} />
-						</span>
-					</div>
-					<p className="flex flex-wrap items-center gap-1 font-mono text-[11px] break-all text-ink-muted">
-						{artifact.isBlob ? "blob" : "ref"}: {artifact.storageRef}
-						<CopyButton
-							value={artifact.storageRef}
-							label="Copy storage reference"
-						/>
-					</p>
-					{artifact.contentPreview !== null ? (
-						<details>
-							<summary className="cursor-pointer rounded-sm text-[11px] text-ink-secondary focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
-								Preview{artifact.truncated ? " (truncated)" : ""}
-							</summary>
-							<CodeBlock
-								code={artifact.contentPreview}
-								label={`${artifact.kind} preview`}
-								maxHeightClassName="max-h-64"
-								className="mt-2"
+		<>
+			<ul className="space-y-4">
+				{artifacts.map((artifact) => (
+					<li
+						key={artifact.id}
+						className="space-y-2 border-b border-line-subtle pb-4 last:border-0 last:pb-0"
+					>
+						<div className="flex flex-wrap items-center gap-2">
+							<LogsIcon size={14} className="text-ink-muted" />
+							<span className="text-xs font-medium text-ink">
+								{artifact.kind}
+							</span>
+							<span className="font-mono text-[11px] text-ink-muted">
+								{artifact.contentType}
+							</span>
+							<span className="font-mono text-[11px] tabular-nums text-ink-muted">
+								{formatBytes(artifact.byteSize)}
+							</span>
+							<ArtifactDownloadLink artifact={artifact} />
+							<span className="ml-auto text-[11px] text-ink-muted">
+								<RelativeTime value={artifact.createdAt} />
+							</span>
+						</div>
+						<p className="flex flex-wrap items-center gap-1 font-mono text-[11px] break-all text-ink-muted">
+							{artifact.isBlob ? "blob" : "ref"}: {artifact.storageRef}
+							<CopyButton
+								value={artifact.storageRef}
+								label="Copy storage reference"
 							/>
-						</details>
-					) : (
-						<p className="text-[11px] text-ink-muted">
-							{artifact.isBlob
-								? "No inline preview was stored. Use the download link above for the stored payload."
-								: "No inline preview was stored for this artifact."}
 						</p>
-					)}
-				</li>
-			))}
-		</ul>
+						{artifact.contentPreview !== null ? (
+							<details>
+								<summary className="cursor-pointer rounded-sm text-[11px] text-ink-secondary focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
+									Preview{artifact.truncated ? " (truncated)" : ""}
+								</summary>
+								<CodeBlock
+									code={artifact.contentPreview}
+									label={`${artifact.kind} preview`}
+									maxHeightClassName="max-h-64"
+									className="mt-2"
+								/>
+							</details>
+						) : (
+							<p className="text-[11px] text-ink-muted">
+								{artifact.isBlob
+									? "No inline preview was stored. Use the download link above for the stored payload."
+									: "No inline preview was stored for this artifact."}
+							</p>
+						)}
+					</li>
+				))}
+			</ul>
+			{truncated ? (
+				<p className="mt-2 text-[11px] text-warning">
+					Showing the {artifacts.length} most recent artifacts; older ones are
+					not included.
+				</p>
+			) : null}
+		</>
 	);
 }

@@ -24,7 +24,9 @@ import { RunsFilterBar } from "@/features/runs/components/runs-filter-bar";
 import { RunSourceBadge } from "@/features/runs/components/source-badge";
 import {
 	applyRunsSearchPatch,
+	isLiveRunStatus,
 	parseRunsSearch,
+	RUN_LIVE_POLL_INTERVAL_MS,
 	RUN_MAX_RETRY_DEPTH,
 	RUNS_PAGE_LIMIT_DEFAULT,
 	RUNS_SEARCH_DEFAULTS,
@@ -106,6 +108,10 @@ function RunsPage() {
 	const data = query.data.ok ? query.data.value : null;
 	const summary = data?.summary ?? EMPTY_SUMMARY;
 	const filtered = isFiltered(search);
+	// The list polls while any row is still moving; a background poll must not
+	// read as a manual refresh or block the filter controls.
+	const live = data?.rows.some((row) => isLiveRunStatus(row.status)) ?? false;
+	const pollSeconds = Math.round(RUN_LIVE_POLL_INTERVAL_MS / 1000);
 
 	const updateSearch = (patch: Partial<RunsSearch>) => {
 		void navigate({
@@ -128,15 +134,27 @@ function RunsPage() {
 				description="Every task in the active organization with its latest workflow run. Filter, sort and open a run to inspect its timeline, tool decisions, usage and approvals."
 				actions={
 					<>
+						{live ? (
+							<span
+								className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted"
+								title={`A run on this page is still active; the list refreshes every ${pollSeconds} seconds.`}
+							>
+								<span
+									aria-hidden="true"
+									className="size-1.5 rounded-full bg-brand"
+								/>
+								Live
+							</span>
+						) : null}
 						<Button
 							type="button"
 							variant="ghost"
 							size="sm"
-							disabled={query.isFetching}
+							disabled={query.isFetching && !live}
 							onClick={() => void query.refetch()}
 						>
 							<RetryIcon />
-							{query.isFetching ? "Refreshing…" : "Refresh"}
+							{query.isFetching && !live ? "Refreshing…" : "Refresh"}
 						</Button>
 						<Button asChild size="sm">
 							<Link to="/submit">
@@ -181,7 +199,7 @@ function RunsPage() {
 				search={search}
 				onSearchChange={updateSearch}
 				onReset={resetSearch}
-				disabled={query.isFetching}
+				disabled={query.isFetching && !live}
 			/>
 
 			{query.isRefetchError ? (

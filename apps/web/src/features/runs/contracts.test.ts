@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { TASK_STATUSES, TASK_TERMINAL_STATUSES } from "@isolate/shared";
 import {
 	applyRunsSearchPatch,
+	isLiveRunStatus,
 	parseRunsPage,
 	parseRunsSearch,
+	RUN_LIVE_STATUSES,
 	RUNS_PAGE_LIMIT_DEFAULT,
 	RUNS_PAGE_MAX,
 	RUNS_QUERY_MAX_LENGTH,
@@ -134,5 +137,27 @@ describe("runsSearchToFilter", () => {
 
 	test("maps an empty repo to a null repository filter", () => {
 		expect(runsSearchToFilter(RUNS_SEARCH_DEFAULTS).repositoryId).toBeNull();
+	});
+});
+
+describe("isLiveRunStatus", () => {
+	test("a run that can still move on its own is live", () => {
+		for (const status of RUN_LIVE_STATUSES) {
+			expect(isLiveRunStatus(status)).toBe(true);
+		}
+	});
+
+	test("statuses waiting on a human or on nothing are not polled", () => {
+		expect(isLiveRunStatus("review_ready")).toBe(false);
+		expect(isLiveRunStatus("pull_request_created")).toBe(false);
+		for (const status of TASK_TERMINAL_STATUSES) {
+			expect(isLiveRunStatus(status)).toBe(false);
+		}
+	});
+
+	test("every live status is a real task status", () => {
+		for (const status of RUN_LIVE_STATUSES) {
+			expect(TASK_STATUSES).toContain(status);
+		}
 	});
 });

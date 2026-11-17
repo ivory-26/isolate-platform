@@ -365,7 +365,9 @@ export type RunTaskIdentity = {
 
 export type RunDetailView = {
 	task: RunTaskIdentity;
+	/** Bounded to `RUN_DETAIL_RUN_LIMIT`; see `workflowRunsTruncated`. */
 	workflowRuns: RunWorkflowRun[];
+	workflowRunsTruncated: boolean;
 	/** Bounded to `RUN_DETAIL_ATTEMPT_LIMIT`; see `attemptsTruncated`. */
 	attempts: RunAttempt[];
 	attemptsTruncated: boolean;
@@ -381,6 +383,31 @@ export type RunDetailView = {
 	toolInvocations: RunToolInvocation[];
 	usage: RunUsageRecord[];
 	connectorCalls: RunConnectorCall[];
+	/** Bounded to `RUN_DETAIL_APPROVAL_LIMIT`; see `approvalsTruncated`. */
 	approvals: RunApproval[];
+	approvalsTruncated: boolean;
+	/** Bounded to `RUN_DETAIL_ARTIFACT_LIMIT`; see `artifactsTruncated`. */
 	artifacts: RunArtifact[];
+	artifactsTruncated: boolean;
 };
+
+/**
+ * Statuses where the run can still change on its own: a worker or a policy
+ * decision will move it. `review_ready` and `pull_request_created` wait on a
+ * human, and the terminal statuses are final, so polling stops for those.
+ */
+export const RUN_LIVE_STATUSES = [
+	"queued",
+	"planning",
+	"awaiting_approval",
+	"executing",
+	"validating",
+	"repairing",
+] as const satisfies readonly TaskStatus[];
+
+export function isLiveRunStatus(status: TaskStatus): boolean {
+	return (RUN_LIVE_STATUSES as readonly TaskStatus[]).includes(status);
+}
+
+/** Detail and list polling cadence while a run is live. */
+export const RUN_LIVE_POLL_INTERVAL_MS = 5_000;

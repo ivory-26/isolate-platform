@@ -147,7 +147,12 @@ const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.incident_sou
 	  AND ($2::text = 'all' OR t.status = $2)
 	  AND ($3::uuid IS NULL OR t.repository_id = $3)
 	  AND ($4::text = ''
-		OR position(lower($4) in lower(t.id::text || ' ' || t.branch)) > 0)
+		OR position(
+			lower($4) in lower(
+				t.id::text || ' ' || t.branch || ' ' ||
+				coalesce(t.goal, '') || ' ' || r.external_full_name
+			)
+		) > 0)
 	ORDER BY
 		CASE WHEN $5 = 'created' THEN t.created_at END DESC,
 		CASE WHEN $5 = 'updated' THEN t.updated_at END DESC,
@@ -157,15 +162,24 @@ const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.incident_sou
 
 /**
  * Exact row count for the active filters. The status summary is
- * organization-wide, so it cannot bound a filtered page; this count can.
+ * organization-wide, so it cannot bound a filtered page; this count can. The
+ * predicate is identical to `LIST_SQL` (same columns, same join) so the count
+ * and the page can never disagree — including the goal and repository match.
  */
 const FILTERED_COUNT_SQL = `SELECT count(*)::int AS total
 	FROM tasks t
+	JOIN repositories r
+		ON r.id = t.repository_id AND r.organization_id = t.organization_id
 	WHERE t.organization_id = $1
 	  AND ($2::text = 'all' OR t.status = $2)
 	  AND ($3::uuid IS NULL OR t.repository_id = $3)
 	  AND ($4::text = ''
-		OR position(lower($4) in lower(t.id::text || ' ' || t.branch)) > 0)`;
+		OR position(
+			lower($4) in lower(
+				t.id::text || ' ' || t.branch || ' ' ||
+				coalesce(t.goal, '') || ' ' || r.external_full_name
+			)
+		) > 0)`;
 
 function rowError(): Error {
 	return new Error("run row is invalid");
@@ -540,9 +554,34 @@ export async function readRunsList(
 	const filter = parsed.data;
 	const limit = Math.min(filter.limit, RUNS_PAGE_LIMIT_MAX);
 
-	const summaryRows = (await sql.unsafe(STMT.summary, [
-		scope.organizationId,
-	])) as unknown as Record<string, unknown>[];
+	// The status summary covers the whole organization, so a filtered page
+	// needs its own exact count. The unfiltered case reuses `summary.total`.
+	const filtered =
+		filter.status !== "all" || filter.repositoryId !== null || filter.q !== "";
+
+	// These three reads are independent once the caller is authorized. Running
+	// them together removes two serial round trips from the hot list path; the
+	// page rows still wait because the offset is clamped against `total`.
+	const [summaryRows, repositoryRows, totalRows] = (await Promise.all([
+		sql.unsafe(STMT.summary, [scope.organizationId]),
+		sql.unsafe(STMT.repositories, [
+			scope.organizationId,
+			RUN_REPOSITORY_OPTION_LIMIT,
+		]),
+		filtered
+			? sql.unsafe(FILTERED_COUNT_SQL, [
+					scope.organizationId,
+					filter.status,
+					filter.repositoryId,
+					filter.q,
+				])
+			: Promise.resolve(null),
+	])) as [
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+		Record<string, unknown>[] | null,
+	];
+
 	const counts: Record<string, number> = {};
 	for (const row of summaryRows) {
 		const status = text(row.status);
@@ -550,19 +589,12 @@ export async function readRunsList(
 	}
 	const summary = summarizeStatusCounts(counts);
 
-	// The status summary covers the whole organization, so a filtered page
-	// needs its own exact count. The unfiltered case reuses `summary.total`.
-	const filtered =
-		filter.status !== "all" || filter.repositoryId !== null || filter.q !== "";
 	let total = summary.total;
 	if (filtered) {
-		const totalRows = (await sql.unsafe(FILTERED_COUNT_SQL, [
-			scope.organizationId,
-			filter.status,
-			filter.repositoryId,
-			filter.q,
-		])) as unknown as Record<string, unknown>[];
-		total = totalRows.length === 0 ? 0 : count(totalRows[0]?.total);
+		total =
+			totalRows === null || totalRows.length === 0
+				? 0
+				: count(totalRows[0]?.total);
 	}
 
 	// Clamp an out-of-range offset to the last page that exists, and snap it
@@ -579,11 +611,6 @@ export async function readRunsList(
 		filter.sort,
 		limit,
 		offset,
-	])) as unknown as Record<string, unknown>[];
-
-	const repositoryRows = (await sql.unsafe(STMT.repositories, [
-		scope.organizationId,
-		RUN_REPOSITORY_OPTION_LIMIT,
 	])) as unknown as Record<string, unknown>[];
 
 	return {
@@ -615,58 +642,74 @@ export async function readRunDetail(
 	const taskRow = taskRows[0];
 	if (taskRow === undefined) throw new UiNotFoundError();
 
-	// Reuses the wave-19 trace read model: same tenancy gate, credential
-	// scan, argument hashing and bounded sections as the trace API.
-	const trace = await new PostgresTraceReadRepository(sql).getTaskTrace({
-		organizationId: scope.organizationId,
-		taskId: asTaskId(taskId),
-		maxEvents: RUN_DETAIL_EVENT_LIMIT,
-	});
+	// Tenancy is proven above, so every child read below is independent and
+	// safe to issue concurrently: each one binds `organization_id` as $1 and
+	// the normalized task id as $2. One round trip instead of seven.
+	//
+	// One row beyond each cap tells us the section was truncated without a
+	// second count query; the extra row is never mapped or returned.
+	const [
+		trace,
+		runRows,
+		attemptRows,
+		eventCountRows,
+		retryRows,
+		approvalRows,
+		artifactRows,
+	] = (await Promise.all([
+		// Reuses the wave-19 trace read model: same tenancy gate, credential
+		// scan, argument hashing and bounded sections as the trace API.
+		new PostgresTraceReadRepository(sql).getTaskTrace({
+			organizationId: scope.organizationId,
+			taskId: asTaskId(taskId),
+			maxEvents: RUN_DETAIL_EVENT_LIMIT,
+		}),
+		sql.unsafe(STMT.workflowRuns, [
+			scope.organizationId,
+			taskId,
+			RUN_DETAIL_RUN_LIMIT + 1,
+		]),
+		sql.unsafe(STMT.attempts, [
+			scope.organizationId,
+			taskId,
+			RUN_DETAIL_ATTEMPT_LIMIT + 1,
+		]),
+		sql.unsafe(STMT.eventCount, [scope.organizationId, taskId]),
+		sql.unsafe(STMT.retryChildren, [
+			scope.organizationId,
+			taskId,
+			RUN_DETAIL_ATTEMPT_LIMIT + 1,
+		]),
+		sql.unsafe(STMT.approvals, [
+			scope.organizationId,
+			taskId,
+			RUN_DETAIL_APPROVAL_LIMIT + 1,
+		]),
+		sql.unsafe(STMT.artifacts, [
+			scope.organizationId,
+			taskId,
+			RUN_DETAIL_ARTIFACT_LIMIT + 1,
+			RUN_ARTIFACT_PREVIEW_CHARS,
+		]),
+	])) as [
+		Awaited<ReturnType<PostgresTraceReadRepository["getTaskTrace"]>>,
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+		Record<string, unknown>[],
+	];
 	if (trace === null) throw new UiNotFoundError();
 
-	const runRows = (await sql.unsafe(STMT.workflowRuns, [
-		scope.organizationId,
-		taskId,
-		RUN_DETAIL_RUN_LIMIT,
-	])) as unknown as Record<string, unknown>[];
-	// One row beyond each cap tells us the list was truncated without a second
-	// count query; the extra row is never mapped or returned.
-	const attemptRows = (await sql.unsafe(STMT.attempts, [
-		scope.organizationId,
-		taskId,
-		RUN_DETAIL_ATTEMPT_LIMIT + 1,
-	])) as unknown as Record<string, unknown>[];
-	const eventCountRows = (await sql.unsafe(STMT.eventCount, [
-		scope.organizationId,
-		taskId,
-	])) as unknown as Record<string, unknown>[];
-	const retryRows = (await sql.unsafe(STMT.retryChildren, [
-		scope.organizationId,
-		taskId,
-		RUN_DETAIL_ATTEMPT_LIMIT + 1,
-	])) as unknown as Record<string, unknown>[];
-	const approvalRows = (await sql.unsafe(STMT.approvals, [
-		scope.organizationId,
-		taskId,
-		RUN_DETAIL_APPROVAL_LIMIT,
-	])) as unknown as Record<string, unknown>[];
-	const artifactRows = (await sql.unsafe(STMT.artifacts, [
-		scope.organizationId,
-		taskId,
-		RUN_DETAIL_ARTIFACT_LIMIT,
-		RUN_ARTIFACT_PREVIEW_CHARS,
-	])) as unknown as Record<string, unknown>[];
-
-	const attempts = attemptRows
-		.slice(0, RUN_DETAIL_ATTEMPT_LIMIT)
-		.map(mapAttempt);
 	const eventsTotal =
 		eventCountRows.length === 0 ? 0 : count(eventCountRows[0]?.total);
 
 	return {
 		task: mapTask(taskRow),
-		workflowRuns: runRows.map(mapWorkflowRun),
-		attempts,
+		workflowRuns: runRows.slice(0, RUN_DETAIL_RUN_LIMIT).map(mapWorkflowRun),
+		workflowRunsTruncated: runRows.length > RUN_DETAIL_RUN_LIMIT,
+		attempts: attemptRows.slice(0, RUN_DETAIL_ATTEMPT_LIMIT).map(mapAttempt),
 		attemptsTruncated: attemptRows.length > RUN_DETAIL_ATTEMPT_LIMIT,
 		retryChildren: retryRows
 			.slice(0, RUN_DETAIL_ATTEMPT_LIMIT)
@@ -679,7 +722,13 @@ export async function readRunDetail(
 		toolInvocations: trace.toolInvocations.map(mapTool),
 		usage: trace.usage.map(mapUsage),
 		connectorCalls: trace.connectorCalls.map(mapConnectorCall),
-		approvals: approvalRows.map(mapApproval),
-		artifacts: artifactRows.map(mapArtifact),
+		approvals: approvalRows
+			.slice(0, RUN_DETAIL_APPROVAL_LIMIT)
+			.map(mapApproval),
+		approvalsTruncated: approvalRows.length > RUN_DETAIL_APPROVAL_LIMIT,
+		artifacts: artifactRows
+			.slice(0, RUN_DETAIL_ARTIFACT_LIMIT)
+			.map(mapArtifact),
+		artifactsTruncated: artifactRows.length > RUN_DETAIL_ARTIFACT_LIMIT,
 	};
 }

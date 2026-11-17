@@ -63,13 +63,13 @@ export function RunsFilterBar({
 				}}
 			>
 				<Label htmlFor="runs-q" className="sr-only">
-					Search task id or branch
+					Search runs by task id, branch, goal or repository
 				</Label>
 				<Input
 					id="runs-q"
 					name="q"
 					defaultValue={search.q}
-					placeholder="Search task id or branch"
+					placeholder="Task id, branch, goal or repository"
 					autoComplete="off"
 					spellCheck={false}
 					disabled={disabled}

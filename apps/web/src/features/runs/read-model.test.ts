@@ -388,6 +388,46 @@ describe("readRunsList", () => {
 		).toBe(false);
 	});
 
+	test("searches goal and repository with a matching count", async () => {
+		const { sql, calls } = detailSql();
+		await readRunsList(
+			sql,
+			{ organizationId: ORG },
+			{
+				status: "all",
+				repositoryId: null,
+				q: "acme",
+				sort: "created",
+				limit: 25,
+			},
+		);
+
+		const listCall = calls.find((call) =>
+			call.statement.includes("LEFT JOIN LATERAL"),
+		);
+		const countCall = calls.find((call) =>
+			call.statement.includes("count(*)::int AS total"),
+		);
+		for (const statement of [listCall?.statement, countCall?.statement]) {
+			expect(statement).toContain("coalesce(t.goal, '')");
+			expect(statement).toContain("r.external_full_name");
+			expect(statement).toContain("lower($4)");
+		}
+		// The count must span the same join, or a task whose repository row is
+		// missing could be counted but never listed.
+		expect(countCall?.statement).toContain("JOIN repositories r");
+		expect(countCall?.params).toEqual([ORG, "all", null, "acme"]);
+		expect(listCall?.params).toEqual([
+			ORG,
+			"all",
+			null,
+			"acme",
+			"created",
+			25,
+			0,
+		]);
+	});
+
 	test("rejects invalid input before any SQL", async () => {
 		const { sql, calls } = detailSql();
 		await expect(
@@ -542,11 +582,11 @@ describe("readRunDetail", () => {
 		const runCall = calls.find((call) =>
 			call.statement.includes("FROM workflow_runs"),
 		);
-		expect(runCall?.params).toEqual([ORG, TASK_ID, 20]);
+		// One row past each cap detects truncation without a second query.
+		expect(runCall?.params).toEqual([ORG, TASK_ID, 21]);
 		const attemptCall = calls.find((call) =>
 			call.statement.includes("FROM task_attempts"),
 		);
-		// One row past the cap detects truncation without a second query.
 		expect(attemptCall?.params).toEqual([ORG, TASK_ID, 11]);
 		expect(attemptCall?.statement).toContain(
 			"JOIN tasks t ON t.id = a.task_id AND t.organization_id = $1",
@@ -564,10 +604,86 @@ describe("readRunDetail", () => {
 		const approvalCall = calls.find((call) =>
 			call.statement.includes("FROM approvals a"),
 		);
-		expect(approvalCall?.params).toEqual([ORG, TASK_ID, 50]);
+		expect(approvalCall?.params).toEqual([ORG, TASK_ID, 51]);
 		const artifactCall = calls.find((call) =>
 			call.statement.includes("FROM artifacts a"),
 		);
-		expect(artifactCall?.params).toEqual([ORG, TASK_ID, 20, 16_384]);
+		expect(artifactCall?.params).toEqual([ORG, TASK_ID, 21, 16_384]);
+	});
+
+	test("reports every capped section as truncated", async () => {
+		const rows = (count: number, row: () => Record<string, unknown>) =>
+			Array.from({ length: count }, row);
+		const { sql } = scriptedSql((statement) => {
+			if (statement.includes("FROM workflow_runs")) {
+				return rows(21, () => ({
+					id: "44444444-4444-4444-8444-444444444444",
+					status: "failed",
+					started_at: WHEN,
+					finished_at: WHEN,
+				}));
+			}
+			if (statement.includes("FROM task_attempts")) {
+				return rows(11, () => ({
+					attempt_index: 1,
+					started_at: WHEN,
+					finished_at: WHEN,
+					outcome: { status: "failed" },
+				}));
+			}
+			if (statement.includes("FROM approvals a")) {
+				return rows(51, () => ({
+					id: "66666666-6666-4666-8666-666666666666",
+					action: "git.push_branch",
+					status: "pending",
+					payload_sha256: "c".repeat(64),
+					requested_by: "agent",
+					decided_by: null,
+					decided_at: null,
+					expires_at: WHEN,
+					created_at: WHEN,
+				}));
+			}
+			if (statement.includes("FROM artifacts a")) {
+				return rows(21, () => ({
+					id: "77777777-7777-4777-8777-777777777777",
+					kind: "diff",
+					content_type: "text/x-diff",
+					byte_size: 10,
+					sha256: "d".repeat(64),
+					storage_ref: `blob:${"d".repeat(64)}`,
+					content_preview: "diff",
+					content_bytes: 4,
+					created_at: WHEN,
+				}));
+			}
+			if (statement.includes("t.retry_of = $2")) return [];
+			if (statement.includes("t.incident_source")) return [taskRow()];
+			if (statement.includes("SELECT t.id FROM tasks t")) {
+				return [{ id: TASK_ID }];
+			}
+			if (statement.includes("count(*)::int AS total")) return [{ total: 0 }];
+			if (statement.includes("FROM run_events")) return [];
+			if (statement.includes("FROM tool_invocations")) return [];
+			if (statement.includes("FROM usage_records")) return [];
+			if (statement.includes("FROM connector_calls")) return [];
+			throw new Error(`Unexpected statement: ${statement.slice(0, 40)}`);
+		});
+
+		const detail = await readRunDetail(
+			sql,
+			{ organizationId: ORG },
+			{ taskId: TASK_ID },
+		);
+
+		// The extra row is never returned, but it is enough to state the cap.
+		expect(detail.workflowRuns).toHaveLength(20);
+		expect(detail.workflowRunsTruncated).toBe(true);
+		expect(detail.attempts).toHaveLength(10);
+		expect(detail.attemptsTruncated).toBe(true);
+		expect(detail.approvals).toHaveLength(50);
+		expect(detail.approvalsTruncated).toBe(true);
+		expect(detail.artifacts).toHaveLength(20);
+		expect(detail.artifactsTruncated).toBe(true);
 	});
 });

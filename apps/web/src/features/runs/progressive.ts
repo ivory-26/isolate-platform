@@ -6,7 +6,9 @@ import { useCallback, useState } from "react";
  * A run can hold `RUN_DETAIL_EVENT_LIMIT` (200) events, and the timeline and
  * log render one row each. Rendering every row on the first commit makes the
  * detail page pay for history the reader has not asked to see, so both
- * surfaces start with a small newest-first window and grow it on demand.
+ * surfaces start with the newest rows in the loaded window and grow it on
+ * demand. The server's bounded event read can omit later history; its separate
+ * truncation notice remains authoritative.
  */
 
 /** Rows rendered before the reader asks for more. */

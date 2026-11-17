@@ -1,6 +1,9 @@
 # Landing illustration redesign — reference study and implementation spec
 
-Status: proposed, not implemented.
+Status: illustration implementation merged as `5ef4a9a`; implementation record
+and design-rule amendments are in [`design.md`](design.md#landing-schematics-2026-11-14).
+The reference study and original checklist below are retained as design history;
+unchecked boxes are not evidence that the merged code is missing.
 Scope: illustration and diagram language for the public landing page only.
 Owner: landing surface (`apps/web/src/features/landing/**`, `apps/web/public/ill/**`).
 

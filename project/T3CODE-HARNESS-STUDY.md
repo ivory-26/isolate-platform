@@ -1,5 +1,13 @@
 # T3 Code harness study
 
+**Implementation reconciliation (2026-11-17):** the P0 registry, prompt preflight,
+failure classification and connector-tool scoping were merged before this wave.
+Wave 28 fixes classification through Mastra's bounded error-cause chain and sets
+`modelSettings.maxRetries: 0`, making the platform retry wrapper the sole retry
+owner. The worker shares `MAX_PROVIDER_RETRY_ATTEMPTS` instead of duplicating its
+ceiling. All verification uses fakes; P1 and design-only recommendations below
+are proposals, not prerequisites for completing the original research request.
+
 **Status:** research note, docs-only. No source, schema, or configuration change is part of this
 document. No provider key was read or used, and no live provider call was made.
 

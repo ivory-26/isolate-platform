@@ -1,5 +1,13 @@
 # Benchmark plan — connector intake and evidence pipeline
 
+**Replay evidence (2026-11-17):** the integrated wave-28 branch passes all 24
+connector scenarios twice with zero provider calls. The cached ITBench-AA
+Scenario-16 replay retains entity recall 1.00 and decisive-token recall 1.00,
+full condition-token recall 0.29, 3 items / 1,077 bytes, and deterministic digest
+`6e05b5e44139b69e`. These numbers measure evidence extraction with fakes/snapshots;
+they do not measure model success, production incident resolution or live SaaS
+performance. No paid benchmark was run.
+
 Status: wave 25 planning artefact plus an executable offline harness.
 Owner: benchmark task branch. No provider credential is read, requested or used.
 

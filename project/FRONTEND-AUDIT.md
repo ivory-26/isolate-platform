@@ -1,5 +1,15 @@
 # Frontend audit — `apps/web`
 
+**Implementation reconciliation (2026-11-17):** the findings below are the
+historical 2026-11-14 audit, not a current bug list. Run detail, artifact download,
+attempts, validation, trace links, retry descendants, table scopes, inbox severity
+and delivery truncation were already merged. Wave 28 additionally implements
+goal/repository search with matching counts, parallel authorized reads, active-run
+polling, workflow/approval/artifact cap notices, progressive event/log rendering
+and concurrent usage reads. Product expansions (membership writes, workflow
+builder, task-title migration) remain outside this bug-fix wave. Live visual
+checks and combined validation are recorded in `project/STATUS.md`.
+
 **Date:** 2026-11-14
 **Base commit:** `c58e8f8` (worktree `worktree-agent-a5acd98b69b7eb3ed`)
 **Scope:** every route and feature under `apps/web/src`, with a deep dive on the run detail page.

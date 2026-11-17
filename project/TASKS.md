@@ -2,6 +2,35 @@
 
 Owner / file ownership / dependencies / acceptance criteria / DoD per task. Statuses: planned / in progress / blocked / done.
 
+## Wave 28 — recover the Claude Code goals (2026-11-17)
+
+Coordinator: Codex on `task/w28-recovery-coordinator`. Execution: four T3-managed
+isolated Claude Code worktrees using `deepseek-v4.1-flash` through the existing
+Open Code Go Anthropic endpoint. T3's supported Claude custom-model setting was
+registered locally; no provider credentials were changed.
+
+| Lane | Ownership | Acceptance | Status |
+|---|---|---|---|
+| W28-WEB | `apps/web/**` | Reconcile the old audit; close remaining concrete P0/P1 data, refresh, truncation and latency gaps | done — `a129262` → `6709f4b` |
+| W28-CONNECTORS | `packages/integrations/**`, `apps/device-daemon/**` | Capability-aware bounded Honeycomb verification; preserve honest partial evidence; fake transports only | done — `e9b5921` → `1617a84` |
+| W28-HARNESS | `packages/mastra/**` | Verify and repair concrete gaps in the merged harness P0 work | done — `ccc4b95` → `160b7b2` |
+| W28-CONTEXT | `apps/worker/**`, `packages/shared/**` | Finish the preserved context-skip diagnostics without breaking consumers; bounded events, observer isolation and tenancy tests | done — `91997f0` → `c04322a` |
+| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | integration/gates done; final browser evidence pending |
+| W28-BROWSER | browser configuration/visual checks only; no source edits | Honeycomb/Datadog pairing and bounded read verification, then close task tabs | in progress — Claude Code/DeepSeek; coordinator stopped browser execution at user request |
+
+Every execution lane must commit on its own `task/*` branch and supply scoped
+Biome, project `tsc --noEmit`, and scoped test evidence twice. Never push.
+The three preexisting context-diagnostic edits are preserved in a named stash
+and a local handoff patch; `.mcp.json` remains untracked and untouched.
+
+Browser finding: Honeycomb's existing enabled Configuration key cannot enable
+**Run queries**: the control is disabled with “This feature is only available
+for enterprise plans.” Re-pairing alone does not unblock query evidence.
+The old Onboarding ingest key is confirmed disabled. Datadog site: US1,
+confirmed by the user; sign-in and `monitors_read` inspection remain in progress.
+No Baseten/Modal acceptance or model/sandbox-backed webhook run is authorized
+by this offline implementation wave.
+
 ## Wave 27 — connector live E2E and honest run budgets (2026-11-14)
 
 | Lane | Branch | Commit | Status |

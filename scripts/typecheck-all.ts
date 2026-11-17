@@ -18,13 +18,14 @@ const candidates = [
 let failed = false;
 const projects: string[] = [];
 for (const project of candidates) {
-	if (await Bun.file(`${project}/tsconfig.json`).exists()) projects.push(project);
+	if (await Bun.file(`${project}/tsconfig.json`).exists())
+		projects.push(project);
 }
 
 for (const project of projects) {
 	console.log(`typecheck: ${project}`);
 	try {
-		await Bun.$`bunx --bun tsc -p ${project}/tsconfig.json --noEmit`;
+		await Bun.$`bun --no-env-file x --bun tsc -p ${project}/tsconfig.json --noEmit`;
 	} catch {
 		console.error(`typecheck FAILED: ${project}`);
 		failed = true;

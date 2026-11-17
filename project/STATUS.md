@@ -1,8 +1,77 @@
 # Status
 
-Last updated: 2026-11-15 (wave 27 follow-up: SigNoz reaches a PR with evidence; Honeycomb sender invariants and credential blocker measured)
+Last updated: 2026-11-17 (wave 28: Claude Code goals recovered; four DeepSeek lanes integrated and offline gates green twice)
 
-## Current: wave 27 — connector live E2E and honest run budgets (2026-11-14)
+## Current: wave 28 — goal recovery and offline completion (2026-11-17)
+
+The imported Claude Code goals cover connector evidence, offline benchmarks,
+T3 Code harness research/optimization, frontend/run detail, skills, and landing
+illustrations. The research reports, benchmarks, run-detail page, 19 skills and
+orthographic landing illustrations were already merged before this wave. Their
+stale headers have been reconciled instead of repeating completed work.
+
+### Execution and integration
+
+Codex coordinates; implementation ran in four isolated Claude Code worktrees
+using **`deepseek-v4.1-flash`**, confirmed by T3's `executedModel` for every lane.
+The existing Open Code Go Anthropic route was preserved. T3 initially rejected
+the custom model; adding its supported local Claude `customModels` entry fixed
+delegation without changing credentials or substituting a Claude model.
+
+| Lane | Source commit | Integrated commit | Result |
+|---|---|---|---|
+| Connectors | `e9b59218feec094767e0896518cf1289a4e1f002` | `1617a84` | Single-request Honeycomb verification distinguishes Configuration/ingest keys; partial trigger evidence survives query denial; normalized incident kinds and digest fingerprints accepted |
+| Harness | `ccc4b95435aec1324370c4f355e4d56affde08ae` | `160b7b2` | Bounded/cycle-safe wrapped error classification; Mastra internal retries explicitly zero so only the platform retry budget applies |
+| Worker/shared | `91997f03c494d30e0d8ca337039b5bccc20f2bed` | `c04322a` | Bounded `connector.context_skipped` reasons on the timeline; observer failures isolated; existing nullable loader/benchmark contract preserved; retry ceiling shared |
+| Frontend | `a1292627c76fefd16bc68d83aa6db543c8580cc6` | `6709f4b` | Active-run polling, goal/repository search and consistent count, authorized parallel reads, honest section caps, progressive event/log rendering |
+
+The preexisting unfinished context-diagnostic edits were preserved in the named
+stash `coordinator-preserve-preexisting-context-diagnostics-2026-11-17` and used
+by the worker lane. That recovery stash remains available. `.mcp.json` is left
+untracked and untouched. All code is local; nothing was pushed.
+
+### Combined offline evidence
+
+Every command ran with `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`, paid
+provider/live flags removed from the child environment by name, and Bun's
+`--no-env-file`. The root test/typecheck/validation scripts now also disable
+automatic dotenv loading in their child Bun processes.
+
+- `bun --no-env-file run validate` **twice**: Biome **0 errors / 13 warnings**, **9/9** project
+  typechecks, **3,319 pass / 10 live skips / 0 fail** (3,329 tests, 225 files).
+- Integrated scoped tests: connectors/device **808 pass twice**; Mastra
+  **154 pass twice**. Worker/shared **560 pass twice** and web **861 pass twice**
+  were also recorded by their execution lanes and covered by both full runs.
+- `bun --no-env-file scripts/acceptance-offline.ts`: **7/7**, including success,
+  throw, abort, validation pass/fail, approved fake PR and retry lifecycle.
+- Web production build, `check:build` and `check:client`: public SSR works,
+  anonymous tenant routes refused, **106 client files / 34 secret checks pass**.
+- Connector benchmark: **24/24 twice**, **0 provider calls**.
+- ITBench-AA Scenario 16 replay: **entity recall 1.00**, **decisive token recall
+  1.00**, full condition-token recall **0.29**, 3 items / 1,077 bytes, digest
+  `6e05b5e44139b69e`, byte-deterministic. This is evidence extraction over a
+  cached Kubernetes snapshot, not live model or cluster performance.
+
+### Connector/browser work still in progress
+
+Honeycomb's Onboarding ingest key is confirmed **Disabled**. Its enabled
+Configuration key has **Run queries** disabled with the explicit enterprise-plan
+message. Re-pairing alone cannot supply query evidence on this account. The
+integration now preserves the locally derived trigger snapshot honestly as a
+partial bundle; no live query-evidence success is claimed.
+
+The user confirmed Datadog US1. Existing test keys inspected in its console are
+**Not Scoped**, owned by **Datadog Admin Role**, so the old missing-`monitors_read`
+diagnosis remains unproven until the relay's actual binding/read is checked.
+
+At the user's direction, **all remaining browser execution** (pairing, bounded
+vendor verification, visual checks and tab cleanup) is assigned to a dedicated
+Claude Code/DeepSeek task; the coordinator no longer operates the browser.
+No Baseten/Modal key, sandbox or model-backed delivery was used in this wave.
+Any paid end-to-end acceptance remains a separate bounded, explicitly authorized
+phase under `AGENTS.md`; the previous wave's PR/spend records below are historical.
+
+## Previous: wave 27 — connector live E2E and honest run budgets (2026-11-14)
 
 Design source: the user's goal to test Datadog, New Relic, Honeycomb, Axiom, SigNoz
 and Kubernetes end to end from `ivory-26/isolate-e2e-fixture`, then bring the docs

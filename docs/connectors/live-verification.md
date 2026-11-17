@@ -67,6 +67,26 @@ No provider key was read or printed; no secret appears in any request, log or fi
 
 ## Known residual gaps
 
+### Browser reinspection — 2026-11-17
+
+Browse reached the signed-in Honeycomb environment `test` and dataset `checkout`.
+The old Onboarding ingest key is **Disabled**. An enabled Configuration key
+already exists, but its **Run queries** permission is unchecked and disabled;
+the permission editor explicitly says **“This feature is only available for
+enterprise plans.”** Read service maps has the same restriction. The console
+also says all enabled Configuration keys can read/list datasets. This corrects
+the earlier assumption that a Configuration-key re-pair alone enables query
+evidence. No plan upgrade, trial, key creation, query, signed delivery, model
+turn or sandbox was initiated during this inspection.
+
+The user confirmed Datadog **US1**. Its signed-out browser session was restored
+through the existing Google session; the Application Keys page is reachable.
+Key scopes and relay binding remain to be verified. No new live context result
+or PR is claimed by this browser inspection.
+
+The bullets below record the earlier run state; the Honeycomb credential-only
+recommendation is superseded by the measured account limitation above.
+
 - SigNoz is complete: run 7 carried one evidence item and opened PR #8. The earlier "no alert rules" state was an API-version bug plus a missing RBAC grant, both fixed.
 - **Honeycomb has real vendor data now, but the paired credential cannot read it.** Dataset `checkout` exists in environment `test` with three events (`service: checkout`, status codes `500`, `502`, `200`, tag `incident: signoz-error-spike`). Every query call still fails `INTEGRATION_UNAVAILABLE` because the stored key is ingest-class. Re-pairing Honeycomb with an environment **Configuration** API key is the remaining step; no code change is needed.
 - Datadog still has no evidence row: the account's only monitor is `344995520` ("Isolate E2E CPU load", `avg(last_5m):avg:system.load.1{*} > 90`, state `NO DATA`, no service tag). Its id was previously mistyped as `344490966`.

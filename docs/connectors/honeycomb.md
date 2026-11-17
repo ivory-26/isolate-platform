@@ -9,7 +9,13 @@
 | Read | Query Data API (create, run, fetch result), SLO API, trigger snapshot from the signal |
 | Writes | None in scope (trigger create/update is a later wave) |
 
-Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §5.4 (metrics backend alternatives). The adapter, read context and relay tools exist in `packages/integrations/src/honeycomb/` and `apps/device-daemon/src/vendors/honeycomb.ts`. There is no Honeycomb intake mode in `apps/web`, so a webhook delivery cannot create a task directly; it must be re-signed onto the generic bridge. No live Honeycomb acceptance run has been recorded.
+Design reference: [`docs/devsecops-connectors.md`](../devsecops-connectors.md) §5.4 (metrics backend alternatives). The adapter, read context and relay tools exist in `packages/integrations/src/honeycomb/` and `apps/device-daemon/src/vendors/honeycomb.ts`. There is no Honeycomb intake mode in `apps/web`, so a webhook delivery cannot create a task directly; it must be re-signed onto the generic bridge. Live runs reached PRs with no query evidence; see §8 and [`live-verification.md`](live-verification.md).
+
+**Measured account limitation (2026-11-17):** in environment `test`, the enabled
+Configuration key's **Run queries** permission is unchecked and disabled. The
+Honeycomb console states “This feature is only available for enterprise plans.”
+A Configuration key alone is insufficient for the Query Data API on this account.
+No upgrade, trial, new key or query request was made during this inspection.
 
 ## 1. Role in the agent
 
@@ -30,7 +36,10 @@ It must not be used to explore arbitrary fields, to pull raw events, or to repla
 | Query limits | Query duration **≤ 7 days**; **10,000 rows**; **10 requests/minute** [S3] | Per dataset/query result call |
 | Trial / credits | No trial credits; Free is the entry plan [S1] | Not a platform credit provider |
 
-Free is viable for a design partner with one environment and two triggers. The 60-day retention is a hard ceiling for incident lookback.
+The Free account can supply trigger metadata, but its API key editor does not
+permit Query Data API access. Treat query evidence as unavailable until the
+account has the required entitlement and a key with **Run queries** enabled.
+The 60-day retention is a hard ceiling for incident lookback.
 
 ## 3. Auth and least privilege
 
@@ -57,7 +66,7 @@ Use one environment-scoped configuration key per tenant. Do not use a management
 | Headers | `x-isolate-timestamp` (Unix seconds) and `x-isolate-signature: sha256=<64 hex>` |
 | Body | A strict `IncidentSignal`; unknown fields rejected; 64 KiB cap; `source` must be `honeycomb` |
 | Fingerprint | `honeycomb:<dataset>:<triggerId>:<state>`; over 128 characters it is rebuilt as `honeycomb:<34>:<34>:<16>~<12hex>` so two long prefixes cannot merge |
-| Fingerprint bounds | Whole value <= 128 characters; each `:`-separated segment 1-64 characters; parser charset `[A-Za-z0-9._:@/-]`. The builder's over-length form appends `~<12hex>`, which the parser rejects, so such a fingerprint yields no evidence |
+| Fingerprint bounds | Whole value <= 128 characters; each `:`-separated identifier 1-64 characters; parser charset `[A-Za-z0-9._:@/-]`. The state also accepts the builder's exact `~<12 lowercase hex>` digest suffix; the digest is excluded from the state selector |
 | States | `triggered`, `firing`, `critical`, `warning` are incidents; `ok`, `resolved` and `recovered` are lifecycle updates and do not create a task |
 | Dedupe | `(organization, source, fingerprint)` for 30 minutes; the delivery id is traceability only |
 | Response | `202 {taskId, jobId, deduped}` after task submission; no model work and no provider fetch in the request |
@@ -78,7 +87,7 @@ Base host: `https://api.honeycomb.io` (US); EU environments use the environment-
 | SLO state | `GET /1/slos/{datasetSlug}` | SLO name, target, current, status; Free returns an empty list, treated as `truncated` | [S6] |
 | Trigger detail | The normalized signal only | `honeycomb.get_trigger` performs no provider call; the full definition may embed recipients | [S2] |
 
-Fixed plan on the device path: trigger snapshot rebuilt from the fingerprint (0 calls) → create query (1) → run query (1) → fetch result (1) → SLO list (1). Total **4 provider calls** (hard cap 4), 10-second timeout each, one page each. Query templates are selected by `kind` (`latency`, `error_rate`, `saturation`), defaulting to `latency`; the service filter comes from the validated signal, never from model output, and the window is 1-60 minutes (default 60).
+Fixed plan on the device path: trigger snapshot rebuilt from the fingerprint (0 calls) → create query (1) → run query (1) → fetch result (1) → SLO list (1). Total **at most 4 provider calls**, 10-second timeout each, one page each, no retries. Query templates are selected by `kind` (`latency`, `error_rate`, `saturation`), defaulting to `latency`; the normalizer's `trigger_triggered` incident kind also maps to that default. The service filter comes from the validated signal, never from model output, and the window is 1-60 minutes (default 60). A refused/unavailable/rate-limited query or SLO read preserves the locally derived trigger item with `truncated: true`; it does not prove that query data was read.
 
 Caps: at most **8 items** from this source, **4,000 characters** per excerpt, **2,000 characters** per query or SLO summary, **20 query rows**, **20 SLO rows**, **256 KiB** per response and per bundle. `truncated: true` when a source is capped, a call is denied or malformed, the query is incomplete, or the SLO list is empty.
 
@@ -94,7 +103,8 @@ The worker never holds the Honeycomb key. For a task carrying a `honeycomb:` fin
 - Device tools: `honeycomb.run_query`, `honeycomb.get_trigger`, `honeycomb.list_slos`, plus `honeycomb.context.fetch` for incident context. The context call is worker-enqueued; the three read tools are available to the model only when the registry finds an `active` credential and the tool is enabled. `get_trigger` makes no provider call: it reads the snapshot captured with the incident.
 - Pairing fields: secret `apiKey`; required selector `dataset`; optional selector `apiBaseUrl`. The pairing page stores them in the relay's encrypted local store; the server stores metadata only.
 - Sandbox: all reads execute on the user's device; sandbox egress stays denied; the configuration key never enters a prompt, tool result, error or audit detail; bounded redacted rows only.
-- Tests: fake HTTP only; a delivery without a bridge verdict is refused; wrong token fails the constant-time comparison; stale alert rejected; `401` and transport failures map to `INTEGRATION_UNAVAILABLE`; `429` maps to `RATE_LIMITED`; an empty SLO list on Free yields `truncated`, not an error; tenant isolation by environment key.
+- Tests: fake HTTP only; bridge authentication and freshness, strict fingerprint/digest parsing, normalized incident-kind mapping, tenant isolation, and trigger-only partial evidence on query/SLO failures. Standalone query tools retain typed `INTEGRATION_UNAVAILABLE`/`RATE_LIMITED` failures; context assembly preserves its trigger snapshot instead.
+- Verification: one bounded `/1/auth` read inspects credential `type`; `configuration` verifies, explicit `ingest` returns `AUTH_FAILED`, and missing/unknown types return `PROVIDER_ERROR` without promoting the credential. Verification proves authentication and class; it does not prove enterprise query entitlement.
 
 ## 7. Operator setup checklist
 
@@ -132,7 +142,7 @@ Live: **runs 2026-11-13 and 2026-11-14.** The 2026-11-13 run executed `honeycomb
 - Run 9 (`b1f2fc0d`) sent `honeycomb:checkout:checkout-error-rate:triggered` with signal kind `alert`. Fingerprint, trigger id and state pass, but the daemon maps the signal kind through `HONEYCOMB_QUERY_KINDS`, which accepts only `latency`, `error_rate` and `saturation`, so the call failed `VALIDATION_FAILED` in 4 ms. That task was rejected at its push gate.
 - Run 10 (`0a6bf6e8`, PR #10) sent kind `error_rate` and the same fingerprint with a fresh trigger id. The call now reaches Honeycomb and fails `INTEGRATION_UNAVAILABLE` after ~850 ms; the bundle builder maps only a `401` or a transport failure to that code, and `/1/auth` accepted the same key on 2026-11-14T15:32Z (the integration page shows Connected/verified), so the key is ingest-class rather than query-capable. The run still committed `100a2cf` and opened PR #10.
 
-Two invariants for a bridge sender follow from this: the fingerprint must carry `dataset:triggerId:state`, and the signal kind must be a query kind, not `alert`. The remaining blocker is the credential class — the environment key must be a **Configuration** API key, because ingest keys cannot read query results. Measured spend: 354,585/21,116 (2026-11-13), 229,224/29,967 (run 8). Full run log: [`live-verification.md`](live-verification.md).
+Two invariants for a bridge sender follow from this: the fingerprint must carry `dataset:triggerId:state`, and the signal kind must be a query kind, not `alert`. A Configuration key is required, but the 2026-11-17 browser inspection established an additional account-entitlement blocker: **Run queries** is disabled with the enterprise-plan message above. Re-pairing alone cannot establish query-read acceptance. The old Onboarding ingest key is confirmed **Disabled**. Measured spend: 354,585/21,116 (2026-11-13), 229,224/29,967 (run 8). Full run log: [`live-verification.md`](live-verification.md).
 
 ## 9. Risks / never in model context
 

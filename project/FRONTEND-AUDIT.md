@@ -10,6 +10,12 @@ and concurrent usage reads. Product expansions (membership writes, workflow
 builder, task-title migration) remain outside this bug-fix wave. Live visual
 checks and combined validation are recorded in `project/STATUS.md`.
 
+The later browser finding that pairing defaulted to a stale registration is
+fixed in `982b14c`: most-recent-heartbeat proposal, measured freshness hints,
+manual selection preservation and a code-bound relay label. The new selector
+has unit/SSR coverage; the prior 1440/390 px browser checks covered the runs
+surfaces, not this later selector change.
+
 **Date:** 2026-11-14
 **Base commit:** `c58e8f8` (worktree `worktree-agent-a5acd98b69b7eb3ed`)
 **Scope:** every route and feature under `apps/web/src`, with a deep dive on the run detail page.

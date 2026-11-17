@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-17 (wave 28: Claude Code goals recovered; four DeepSeek lanes integrated and offline gates green twice)
+Last updated: 2026-11-17 (wave 28: DeepSeek source lanes integrated, connector pairing complete, Datadog monitor read proven)
 
 ## Current: wave 28 — goal recovery and offline completion (2026-11-17)
 
@@ -12,7 +12,7 @@ stale headers have been reconciled instead of repeating completed work.
 
 ### Execution and integration
 
-Codex coordinates; implementation ran in four isolated Claude Code worktrees
+Codex coordinates; initial implementation ran in four isolated Claude Code worktrees
 using **`deepseek-v4.1-flash`**, confirmed by T3's `executedModel` for every lane.
 The existing Open Code Go Anthropic route was preserved. T3 initially rejected
 the custom model; adding its supported local Claude `customModels` entry fixed
@@ -24,6 +24,7 @@ delegation without changing credentials or substituting a Claude model.
 | Harness | `ccc4b95435aec1324370c4f355e4d56affde08ae` | `160b7b2` | Bounded/cycle-safe wrapped error classification; Mastra internal retries explicitly zero so only the platform retry budget applies |
 | Worker/shared | `91997f03c494d30e0d8ca337039b5bccc20f2bed` | `c04322a` | Bounded `connector.context_skipped` reasons on the timeline; observer failures isolated; existing nullable loader/benchmark contract preserved; retry ceiling shared |
 | Frontend | `a1292627c76fefd16bc68d83aa6db543c8580cc6` | `6709f4b` | Active-run polling, goal/repository search and consistent count, authorized parallel reads, honest section caps, progressive event/log rendering |
+| Pairing relay follow-up | `150f8dc83ebaaf5f4d23e3ce9c060236080838ab` | `982b14c` | Propose the most recently seen active relay; show honest heartbeat hints and code-bound relay; preserve manual choice |
 
 The preexisting unfinished context-diagnostic edits were preserved in the named
 stash `coordinator-preserve-preexisting-context-diagnostics-2026-11-17` and used
@@ -37,15 +38,22 @@ provider/live flags removed from the child environment by name, and Bun's
 `--no-env-file`. The root test/typecheck/validation scripts now also disable
 automatic dotenv loading in their child Bun processes.
 
-- `bun --no-env-file run validate` **twice**: Biome **0 errors / 13 warnings**, **9/9** project
+- Initial integrated `bun --no-env-file run validate` **twice**: Biome **0 errors / 13 warnings**, **9/9** project
   typechecks, **3,319 pass / 10 live skips / 0 fail** (3,329 tests, 225 files).
 - Integrated scoped tests: connectors/device **808 pass twice**; Mastra
   **154 pass twice**. Worker/shared **560 pass twice** and web **861 pass twice**
   were also recorded by their execution lanes and covered by both full runs.
+- Relay-selection follow-up: **23 focused tests twice**, then **104 combined
+  integration/device UI tests twice**, scoped Biome clean and web typecheck.
+  Final integrated `bun --no-env-file run validate` **twice**:
+  **3,342 pass / 10 live skips / 0 fail** (3,352 tests, 227 files), **9/9**
+  project typechecks, Biome **750 files / 0 errors / 13 warnings**.
 - `bun --no-env-file scripts/acceptance-offline.ts`: **7/7**, including success,
   throw, abort, validation pass/fail, approved fake PR and retry lifecycle.
 - Web production build, `check:build` and `check:client`: public SSR works,
   anonymous tenant routes refused, **106 client files / 34 secret checks pass**.
+  Repeated successfully after the selector follow-up; the security check passes
+  on **567 source/migration files / 1,009 tracked files**.
 - Connector benchmark: **24/24 twice**, **0 provider calls**.
 - ITBench-AA Scenario 16 replay: **entity recall 1.00**, **decisive token recall
   1.00**, full condition-token recall **0.29**, 3 items / 1,077 bytes, digest
@@ -63,8 +71,13 @@ partial bundle; no live query-evidence success is claimed.
 Claude Code/DeepSeek completed both pairings on the running **Verification
 relay**. The earlier failures were device-selection errors: the form defaulted
 to the stale **Local daemon** registration, whose pairing cannot be claimed by
-a different authenticating device. The device-scoped claim remains correct;
-the relay-selection UX is assigned to a focused frontend follow-up.
+a different authenticating device. The device-scoped claim remains correct.
+The integrated selector fix now proposes the most recent trustworthy heartbeat,
+labels the existing five-minute freshness window without claiming a daemon is
+online, preserves manual selection across refetch, and names the relay to which
+a created code is bound. Invalid/missing and implausible-future timestamps are
+treated as unknown. An idle tab still needs focus/invalidation to refresh the
+server's heartbeat rows; the displayed age re-evaluates every 30 seconds.
 
 Datadog US1 now uses a dedicated scoped application key granting exactly
 `monitors_read`, `metrics_read`, `incident_read`, `logs_read_data` and

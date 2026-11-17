@@ -15,10 +15,10 @@ registered locally without changing the Claude/Open Code credentials.
 | W28-CONNECTORS | `packages/integrations/**`, `apps/device-daemon/**` | Capability-aware bounded Honeycomb verification; preserve honest partial evidence; fake transports only | done — `e9b5921` → `1617a84` |
 | W28-HARNESS | `packages/mastra/**` | Verify and repair concrete gaps in the merged harness P0 work | done — `ccc4b95` → `160b7b2` |
 | W28-CONTEXT | `apps/worker/**`, `packages/shared/**` | Finish the preserved context-skip diagnostics without breaking consumers; bounded events, observer isolation and tenancy tests | done — `91997f0` → `c04322a` |
-| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | integration/gates done; relay-selection follow-up pending |
+| W28-COORD | root scripts and `project/`, connector docs | Review/integrate exact commits, replay offline benchmarks, full offline gates twice, record actual vendor limitations | done — final validation 3,342 pass / 10 skips / 0 fail twice; 9/9 typechecks, build/client/security checks pass |
 | W28-BROWSER | browser configuration/visual checks only; no source edits | Honeycomb/Datadog pairing and bounded auth verification, then close task tabs | done — both paired on Verification relay; query-plan blocker recorded; temporary exposed Datadog key revoked/replaced |
 | W28-DD-READ | existing relay queue/Neon MCP only; no source edits | Exactly one `datadog.get_monitor` read, no model/sandbox or retry | done — call `7793917d-12ac-4f86-9651-8da14c99d32d`, 1 request / 0 errors, 7.95 s, 0 usage rows |
-| W28-RELAY-CHOICE | focused pairing UI/helper/tests under `apps/web/**` | Prefer the reachable relay without overriding a manual selection or weakening device-bound claims | in progress — Claude Code/DeepSeek |
+| W28-RELAY-CHOICE | focused pairing UI/helper/tests under `apps/web/**` | Prefer the reachable relay without overriding a manual selection or weakening device-bound claims | done — `150f8dc` → `982b14c`; 23 focused / 104 integration-device tests pass twice |
 
 Every execution lane must commit on its own `task/*` branch and supply scoped
 Biome, project `tsc --noEmit`, and scoped test evidence twice. Never push.

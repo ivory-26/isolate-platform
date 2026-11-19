@@ -353,9 +353,13 @@ export async function runPollLoop(
 				context.maxBackoffMs,
 				context.random,
 			);
+			// Without the reason a retry loop is blind: "claim status 503" and
+			// "claim body is not JSON" need different fixes. `detail` is built
+			// from status codes and fixed strings, never provider or server text.
 			context.logger.warn("claim retry", {
 				attempt: failures,
 				delayMs: delay,
+				reason: claim.detail,
 			});
 			await pause(context, delay);
 			continue;

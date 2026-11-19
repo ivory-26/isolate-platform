@@ -66,6 +66,7 @@ describe("poll loop", () => {
 
 	test("backs off with a ceiling on repeated 5xx", async () => {
 		const sleeps: number[] = [];
+		const logger = createMemoryLogger();
 		const fetchImpl = (async () =>
 			new Response("", { status: 503 })) as unknown as typeof fetch;
 		const result = await runPollLoop({
@@ -76,6 +77,7 @@ describe("poll loop", () => {
 			sleep: async (ms) => {
 				sleeps.push(ms);
 			},
+			logger,
 			random: () => 1,
 			baseBackoffMs: 500,
 			maxBackoffMs: 8_000,
@@ -85,6 +87,12 @@ describe("poll loop", () => {
 		expect(sleeps).toEqual([
 			500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000,
 		]);
+		// A retry with no reason cannot be acted on: the log must name the status.
+		expect(logger.lines).toHaveLength(9);
+		for (const line of logger.lines) {
+			expect(line).toContain('"reason":"claim status 503"');
+		}
+		expect(logger.lines.join("\n")).not.toContain(TOKEN);
 	});
 
 	test("treats a malformed claim body as retryable", async () => {

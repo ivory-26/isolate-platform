@@ -132,6 +132,7 @@ Offline (providers disabled: `INFERENCE_PROVIDER=none`, `SANDBOX_PROVIDER=null`)
 - [x] `verifyHoneycombWebhookToken`: a short or missing expected token fails; comparison is constant-time.
 - [x] `normalizeHoneycombIncident`: triggering states only; dataset + trigger id + state fingerprint stable; stale/future alert rejected; unknown payload fields rejected.
 - [x] `fetchHoneycombIncidentContext`: exactly 4 calls (query create/run/fetch plus SLO list); rows <= 20; window <= 60 minutes; `truncated` on an empty SLO list.
+- [x] `fetchHoneycombIncidentContext`: a 403 on query creation emits a `query_denied` item (excerpt states the status and "not permitted"), keeps the trigger and SLO items, sets `truncated`, and stops after 2 calls. 401/429 and transport failures still degrade to trigger-only with no denied item.
 - [x] Redaction: configuration key, webhook token, email/IP/hostname fields removed before truncation.
 - [x] Relay context: `honeycomb.context.fetch` parses `dataset:triggerId:state`, validates the trigger id and state, and requires a service; a malformed fingerprint fails validation without a provider call.
 - [ ] Scoped `biome check`, project `tsc --noEmit`, scoped `bun test` twice.
@@ -143,6 +144,14 @@ Live: **runs 2026-11-13 and 2026-11-14.** The 2026-11-13 run executed `honeycomb
 - Run 10 (`0a6bf6e8`, PR #10) sent kind `error_rate` and the same fingerprint with a fresh trigger id. The call now reaches Honeycomb and fails `INTEGRATION_UNAVAILABLE` after ~850 ms; the bundle builder maps only a `401` or a transport failure to that code, and `/1/auth` accepted the same key on 2026-11-14T15:32Z (the integration page shows Connected/verified), so the key is ingest-class rather than query-capable. The run still committed `100a2cf` and opened PR #10.
 
 Two invariants for a bridge sender follow from this: the fingerprint must carry `dataset:triggerId:state`, and the signal kind must be a query kind, not `alert`. A Configuration key is required, but the 2026-11-17 browser inspection established an additional account-entitlement blocker: **Run queries** is disabled with the enterprise-plan message above. Re-pairing alone cannot establish query-read acceptance. The old Onboarding ingest key is confirmed **Disabled**. Measured spend: 354,585/21,116 (2026-11-13), 229,224/29,967 (run 8). Full run log: [`live-verification.md`](live-verification.md).
+
+Re-inspection on **2026-11-19** in the signed-in console confirmed the same two facts and narrowed the cause:
+
+- Ingest key "Onboarding" (`hcaik_…`) is **Disabled**; it cannot authenticate any call.
+- The only enabled key is Configuration class (`hcalk_…`). Its permissions list shows **Queries and columns ✗**, and **Edit** shows **Run queries** unchecked with “This feature is only available for enterprise plans.” (Read service maps is disabled for the same reason.)
+- The blocker is plan entitlement, not key class or pairing. No upgrade, new key, re-pair or provider call was made during this inspection.
+
+Because that denial is the expected outcome on this account, the reader now states it instead of leaving an empty query section: a `403` on query creation produces a `query_denied` context item naming the dataset, the query kind and the HTTP status. Before this change a 403 and an empty result were indistinguishable in the bundle (both query evidence absent, `truncated` set). The trigger snapshot and the SLO read are still returned, and `401`/`429`/transport failures keep their existing trigger-only degradation with no denied item.
 
 ## 9. Risks / never in model context
 

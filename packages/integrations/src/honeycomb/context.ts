@@ -669,6 +669,31 @@ export async function fetchHoneycombIncidentContext(
 	);
 	if (query.item !== null) candidates.push(query.item);
 	truncated = truncated || query.truncated;
+	// A 403 is the plan or key permission, not a transient failure. Saying so
+	// turns an empty query section into a diagnosable state: without it the
+	// bundle cannot tell "no rows" from "not allowed to ask". Measured on the
+	// Free plan, where the Configuration key's "Run queries" is enterprise-only.
+	if (query.failure === "denied") {
+		const denied = await toContextItem(config, {
+			kind: "query_denied",
+			title: `Honeycomb query permission unavailable (${config.dataset})`,
+			url: `${config.client.baseUrl}/1/queries/${config.dataset}`,
+			excerpt: boundText(
+				redactHoneycombText(
+					[
+						`Query: ${parsedInput.data.kind ?? "latency"}`,
+						`Dataset: ${config.dataset}`,
+						"The Honeycomb credential was not permitted to run queries (HTTP 403).",
+						"Query rows are unavailable; the trigger snapshot is unaffected.",
+					].join("\n"),
+					config.extraSecrets,
+				),
+				HONEYCOMB_QUERY_SUMMARY_MAX_CHARS,
+			),
+		});
+		if (denied.item !== null) candidates.push(denied.item);
+		truncated = truncated || denied.truncated;
+	}
 
 	const slo = await degradeUnavailableEvidence(() =>
 		fetchHoneycombSloEvidence(dependencies, {}),

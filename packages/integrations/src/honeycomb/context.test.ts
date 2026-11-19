@@ -344,7 +344,15 @@ describe("fetchHoneycombIncidentContext", () => {
 			dependencies(impl),
 			INPUT,
 		);
-		expect(bundle.items.map((item) => item.kind)).toEqual(["trigger", "slo"]);
+		// A denied query is stated, not implied by an empty section.
+		expect(bundle.items.map((item) => item.kind)).toEqual([
+			"trigger",
+			"query_denied",
+			"slo",
+		]);
+		const denied = bundle.items.find((item) => item.kind === "query_denied");
+		expect(denied?.excerpt).toContain("403");
+		expect(denied?.excerpt).toContain("not permitted");
 		expect(bundle.truncated).toBe(true);
 		expect(calls).toHaveLength(2);
 	});

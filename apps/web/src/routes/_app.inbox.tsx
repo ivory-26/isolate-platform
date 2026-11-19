@@ -18,6 +18,7 @@ import {
 	InboxTable,
 } from "@/features/inbox/inbox-view";
 import { inboxOptions } from "@/features/inbox/queries";
+import { requestWorkspaceScrollPreservation } from "@/lib/workspace-scroll";
 
 export const Route = createFileRoute("/_app/inbox")({
 	validateSearch: (search: Record<string, unknown>): InboxSearch =>
@@ -64,6 +65,7 @@ function InboxPage() {
 	const items = query.data.ok ? query.data.value.items : [];
 
 	const updateSearch = (changes: Partial<InboxSearch>) => {
+		requestWorkspaceScrollPreservation();
 		void navigate({
 			to: "/inbox",
 			search: inboxSearchFor(search, changes),

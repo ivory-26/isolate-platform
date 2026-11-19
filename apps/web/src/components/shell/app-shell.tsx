@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import {
+	WORKSPACE_MAIN_ID,
+	WORKSPACE_SCROLL_ATTRIBUTE,
+	WORKSPACE_SCROLL_ID,
+} from "@/lib/workspace-scroll";
 import { AppSidebar } from "./app-sidebar";
 import { AppTopbar } from "./app-topbar";
 import { CommandMenu } from "./command-menu";
+import { useWorkspaceScrollRestoration } from "./use-workspace-scroll";
+import { WorkspaceFrame } from "./workspace-frame";
+import { WorkspaceHashLink } from "./workspace-hash-link";
 
 const SIDEBAR_STORAGE_KEY = "isolate.sidebar.collapsed";
 
@@ -11,6 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [commandOpen, setCommandOpen] = useState(false);
+	const paneRef = useWorkspaceScrollRestoration();
 
 	useEffect(() => {
 		try {
@@ -44,17 +53,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 	};
 
 	return (
-		<div className="min-h-dvh bg-canvas text-ink">
-			<a
-				href="#main-content"
+		<WorkspaceFrame>
+			<WorkspaceHashLink
+				hash={WORKSPACE_MAIN_ID}
 				className="sr-only z-50 rounded-md bg-brand px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:top-3 focus:left-3"
 			>
 				Skip to content
-			</a>
-			<div className="flex min-h-dvh">
+			</WorkspaceHashLink>
+			<div className="flex h-full">
 				<aside
 					className={cn(
-						"sticky top-0 hidden h-dvh shrink-0 transition-[width] duration-150 lg:block",
+						"hidden h-full shrink-0 transition-[width] duration-150 lg:block",
 						collapsed ? "w-16" : "w-60",
 					)}
 				>
@@ -63,12 +72,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 						onToggleCollapsed={toggleCollapsed}
 					/>
 				</aside>
-				<div className="flex min-w-0 flex-1 flex-col">
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 					<AppTopbar
 						onOpenMobileNav={() => setMobileOpen(true)}
 						onOpenCommand={() => setCommandOpen(true)}
 					/>
-					<main id="main-content" className="min-w-0 flex-1">
+					<main
+						ref={paneRef}
+						id={WORKSPACE_MAIN_ID}
+						{...{ [WORKSPACE_SCROLL_ATTRIBUTE]: WORKSPACE_SCROLL_ID }}
+						tabIndex={-1}
+						className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
+					>
 						{children}
 					</main>
 				</div>
@@ -86,6 +101,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			</Sheet>
 
 			<CommandMenu open={commandOpen} onOpenChange={setCommandOpen} />
-		</div>
+		</WorkspaceFrame>
 	);
 }

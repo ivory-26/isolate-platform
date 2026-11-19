@@ -34,6 +34,7 @@ import {
 } from "@/features/runs/contracts";
 import { runsListOptions } from "@/features/runs/queries";
 import { shortId } from "@/lib/format";
+import { requestWorkspaceScrollPreservation } from "@/lib/workspace-scroll";
 
 export const Route = createFileRoute("/_app/runs/")({
 	// The Partial return type keeps `/runs/$taskId` links valid without
@@ -114,6 +115,9 @@ function RunsPage() {
 	const pollSeconds = Math.round(RUN_LIVE_POLL_INTERVAL_MS / 1000);
 
 	const updateSearch = (patch: Partial<RunsSearch>) => {
+		// Filtering is a same-view update: keep the reader's offset instead of
+		// treating the new search entry as a fresh page.
+		requestWorkspaceScrollPreservation();
 		void navigate({
 			search: (previous) =>
 				applyRunsSearchPatch(parseRunsSearch(previous), patch),
@@ -121,6 +125,7 @@ function RunsPage() {
 		});
 	};
 	const resetSearch = () => {
+		requestWorkspaceScrollPreservation();
 		void navigate({ search: RUNS_SEARCH_DEFAULTS, resetScroll: false });
 	};
 	const pageCount = data

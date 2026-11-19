@@ -113,7 +113,13 @@ async function runBaseten(): Promise<MeasuredUsage[]> {
 		signal: AbortSignal.timeout(BASETEN_TIMEOUT_MS),
 	});
 	if (!completion.ok) {
-		console.error(`Baseten completion failed: HTTP ${completion.status}`);
+		// A status alone cannot be acted on: the provider's validation message
+		// says which field it rejected. The key never appears in the body, and
+		// the text is bounded before it is printed.
+		const detail = (await completion.text().catch(() => "")).trim();
+		console.error(
+			`Baseten completion failed: HTTP ${completion.status}${detail === "" ? "" : `: ${detail.slice(0, 240)}`}`,
+		);
 		process.exit(1);
 	}
 	const body = await readJson(completion);

@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
-import { WORKSPACE_SCROLL_ROUTER_OPTIONS } from "@/lib/workspace-scroll";
+import { workspaceScrollRouterOptions } from "@/lib/workspace-scroll";
 import { routeTree } from "./routeTree.gen";
 
 export function getRouter() {
@@ -11,13 +11,20 @@ export function getRouter() {
 			mutations: { retry: false },
 		},
 	});
+	// The scroll predicate runs after the router exists (on render and while
+	// generating the SSR restoration script), so hand it a late-bound reader
+	// rather than referencing `router` inside its own initializer.
+	let readMatches: () => ReadonlyArray<{ routeId: string }> = () => [];
 	const router = createRouter({
 		routeTree,
 		context: { queryClient },
-		...WORKSPACE_SCROLL_ROUTER_OPTIONS,
+		// Only layouts that mount the reading pane suppress the router's own
+		// document scrolling; public pages keep native router restoration.
+		...workspaceScrollRouterOptions(() => readMatches()),
 		defaultPreload: "intent",
 		defaultPreloadStaleTime: 0,
 	});
+	readMatches = () => router.state.matches;
 	setupRouterSsrQueryIntegration({ router, queryClient });
 	return router;
 }

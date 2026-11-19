@@ -2,12 +2,15 @@
  * Workspace scroll ownership.
  *
  * The workspace shell is a fixed, clipped frame. Exactly one element may
- * scroll the page: the reading pane (`<main>`). TanStack Router's built-in
- * scroll restoration is disabled in `router.tsx` because it owns `window` and
- * calls `scrollIntoView` on fragment targets, which walks and scrolls every
- * scrollport — including a shell that merely uses `overflow: hidden`. The
- * helpers below are the single source of truth for the shell, the pane
- * attributes, fragment alignment and per-history-entry restoration.
+ * scroll the page: the reading pane (`<main>`). On the layouts that mount the
+ * shell (`/_app` and `/organizations`), TanStack Router's own scroll handling
+ * is suppressed: it owns `window` and calls `scrollIntoView` on fragment
+ * targets, which walks and scrolls every scrollport — including a shell that
+ * merely uses `overflow: hidden`. Public documents (`/`, `/login`, `/signup`)
+ * keep the router's native window restoration, including the inline SSR
+ * restoration script, because no workspace pane exists there. The helpers
+ * below are the single source of truth for the shell, the pane attributes,
+ * fragment alignment and per-history-entry restoration.
  */
 
 /** Value of the pane's `data-scroll-restoration-id` marker. */
@@ -36,19 +39,58 @@ export const WORKSPACE_SCROLL_MAX_ENTRIES = 50;
 export const WORKSPACE_SCROLL_PRESERVE_WINDOW_MS = 2_000;
 
 /**
- * TanStack Router options that hand all scrolling to the workspace pane.
- *
- * The router installs its `onRendered` scroll handler even when
- * `scrollRestoration` is `false`; the handler still calls `scrollIntoView`
- * for a location hash (the direct-load case, whose history state has no
- * `__hashScrollIntoViewOptions` yet). Returning `false` from the function
- * form makes that handler bail out before touching any scrollport, so only
- * {@link WorkspaceScrollCoordinator} decides where the pane lands.
+ * Layout route ids whose component tree mounts {@link AppShell} and therefore
+ * the workspace reading pane. `_app` is the authenticated workspace layout;
+ * `organizations` reuses the same shell outside it. They are matched by route
+ * id (not pathname) so a public page can never be mistaken for a workspace.
  */
-export const WORKSPACE_SCROLL_ROUTER_OPTIONS = {
-	scrollRestoration: () => false,
-	defaultHashScrollIntoView: false,
-} as const;
+export const WORKSPACE_SCROLL_OWNER_ROUTE_IDS = ["/_app", "/organizations"];
+
+export interface WorkspaceScrollRouteMatch {
+	routeId: string;
+}
+
+/** True when `routeId` is an owner layout or one of its descendants. */
+export function isWorkspaceScrollRouteId(routeId: string): boolean {
+	return WORKSPACE_SCROLL_OWNER_ROUTE_IDS.some(
+		(owner) => routeId === owner || routeId.startsWith(`${owner}/`),
+	);
+}
+
+/**
+ * True when the committed route matches include a layout that mounts the
+ * workspace pane. TanStack Router publishes the next matches before it emits
+ * `onRendered`, and the same store backs the SSR inline-restoration decision,
+ * so this answers "who owns scrolling" for the page being rendered — not for
+ * a path allowlist.
+ */
+export function workspaceScrollOwnedByMatches(
+	matches: ReadonlyArray<WorkspaceScrollRouteMatch> | null | undefined,
+): boolean {
+	if (!matches) return false;
+	return matches.some((match) => isWorkspaceScrollRouteId(match.routeId));
+}
+
+/**
+ * TanStack Router options for a router whose pages may mount the workspace
+ * shell.
+ *
+ * The pinned router-core (`1.171.39`, `scroll-restoration.js`) checks the
+ * function form of `scrollRestoration` before any scrollport work: a `false`
+ * result stops both window/element restoration and the `scrollIntoView` call
+ * for fragments. The same predicate also gates the inline SSR restoration
+ * script (`getScrollRestorationScriptForRouter`), so public routes get the
+ * router's document handling on first paint while workspace routes keep
+ * exclusive custom ownership. `getMatches` is read lazily because the router
+ * instance does not exist yet when these options are constructed.
+ */
+export function workspaceScrollRouterOptions(
+	getMatches: () => ReadonlyArray<WorkspaceScrollRouteMatch> | null | undefined,
+) {
+	return {
+		scrollRestoration: () => !workspaceScrollOwnedByMatches(getMatches()),
+	} as const;
+}
 
 export type WorkspaceScrollPositions = Map<string, number>;
 
@@ -123,6 +165,26 @@ export function workspaceFragmentScrollTop(input: {
 	return Math.max(0, Math.round(top));
 }
 
+/**
+ * Compare a fragment id with the router's location hash.
+ *
+ * Pinned TanStack Router normalizes `location.hash` in `parseLocation` as
+ * `decodePath(hash.slice(1))`: the stored value never includes the leading
+ * `#`. Callers may still pass either form (this module's plan helper accepts
+ * both), so drop the prefix on both sides before comparing.
+ */
+export function isCurrentWorkspaceFragment(
+	hash: string | null | undefined,
+	locationHash: string | null | undefined,
+): boolean {
+	const normalize = (value: string | null | undefined) =>
+		typeof value === "string" && value.startsWith("#") ? value.slice(1) : value;
+	const target = normalize(hash);
+	return typeof target === "string" && target !== ""
+		? target === normalize(locationHash)
+		: false;
+}
+
 export function parseWorkspaceScrollPositions(
 	raw: string | null | undefined,
 ): WorkspaceScrollPositions {
@@ -188,7 +250,9 @@ export type WorkspaceScrollPlan =
  * 2. A history entry that was left before restores its own position — this is
  *    what makes Back return to the /runs pane offset, including entries that
  *    also carry a fragment.
- * 3. A new entry with a fragment aligns that fragment inside the pane.
+ * 3. A new entry with a fragment starts at the top until the pane hook can
+ *    align the target; if the target never mounts, the entry stays at the top
+ *    instead of inheriting the offset of the page it replaced.
  * 4. Any other new entry starts at the top.
  */
 export function planWorkspaceScroll(input: {
@@ -276,6 +340,19 @@ export class WorkspaceScrollCoordinator {
 		// navigation therefore cannot hand its preserve request to a later,
 		// unrelated one.
 		this.preserveNextRender = consumeWorkspaceScrollPreservation(this.now());
+		if (this.preserveNextRender && this.current !== null) {
+			// Same-view updates keep the live offset. Recording it under the
+			// destination entry also carries it across a shell remount: the
+			// pending shell may unmount this pane (and this coordinator) before
+			// the destination renders, but the destination's saved position
+			// survives in storage for the next coordinator's `initial`.
+			recordWorkspaceScrollPosition(
+				this.positions,
+				this.current,
+				this.pane.scrollTop,
+				this.maxEntries,
+			);
+		}
 		this.persist();
 	}
 
@@ -355,7 +432,13 @@ export class WorkspaceScrollCoordinator {
 		});
 		if (plan.kind === "restore") this.apply(plan.top);
 		else if (plan.kind === "reset") this.apply(0);
-		else if (plan.kind === "preserve") this.record();
+		else if (plan.kind === "fragment") {
+			// A new entry must never show the offset of the page it replaced
+			// while its fragment target is still mounting. Start at the top;
+			// the pane hook aligns the target when it appears and leaves the
+			// entry at the top when it never does.
+			this.apply(0);
+		} else if (plan.kind === "preserve") this.record();
 		this.persist();
 		return plan;
 	}

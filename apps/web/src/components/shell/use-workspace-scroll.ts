@@ -136,6 +136,10 @@ export function useWorkspaceScrollRestoration(): RefObject<HTMLElement | null> {
 				if (plan.hash === WORKSPACE_MAIN_ID) {
 					pane.focus({ preventScroll: true });
 				}
+				// The coordinator already started this new entry at the top.
+				// Align as soon as the target mounts; if it never does, the
+				// settle loop ends with the entry at the top instead of the
+				// offset of the page it replaced.
 				settle(() => alignFragment(plan.hash));
 				return;
 			}

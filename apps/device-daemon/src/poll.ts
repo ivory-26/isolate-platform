@@ -287,6 +287,9 @@ async function executeCall(
 		tool: call.toolName,
 		connector: call.connectorId,
 		outcome: result.ok ? "ok" : "error",
+		// A failed call is only actionable with its closed error code; the
+		// provider's own text stays off the log.
+		...(result.ok ? {} : { errorCode: result.errorCode }),
 		durationMs,
 		// Correlate the device-side provider call with the enqueuing run.
 		traceId: call.traceparent?.split("-")[1] ?? null,

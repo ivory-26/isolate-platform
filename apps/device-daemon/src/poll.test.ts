@@ -198,6 +198,7 @@ describe("poll loop", () => {
 
 	test("does not dispatch a call whose deadline has passed", async () => {
 		let dispatched = 0;
+		const logger = createMemoryLogger();
 		const posted: unknown[] = [];
 		let claimCount = 0;
 		const call = deviceCall({
@@ -223,12 +224,20 @@ describe("poll loop", () => {
 			},
 			fetchImpl,
 			sleep: noopSleep,
+			logger,
 			maxClaims: 2,
 		});
 		expect(dispatched).toBe(0);
 		expect(posted).toEqual([
 			{ ok: false, errorCode: "INTEGRATION_UNAVAILABLE" },
 		]);
+		// The posted code must also reach the log; "outcome":"error" alone
+		// does not say whether the deadline, the settings or the provider failed.
+		expect(logger.lines).toHaveLength(1);
+		const line = logger.lines[0] ?? "";
+		expect(line).toContain('"outcome":"error"');
+		expect(line).toContain('"errorCode":"INTEGRATION_UNAVAILABLE"');
+		expect(line).not.toContain(TOKEN);
 	});
 
 	test("stops when the result endpoint rejects the token", async () => {

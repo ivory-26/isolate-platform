@@ -14,6 +14,7 @@ export function getRouter() {
 		routeTree,
 		context: { queryClient },
 		scrollRestoration: true,
+		scrollToTopSelectors: ['[data-scroll-restoration-id="workspace-content"]'],
 		defaultPreload: "intent",
 		defaultPreloadStaleTime: 0,
 	});

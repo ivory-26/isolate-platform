@@ -13,18 +13,18 @@ import { setupStateOptions } from "@/features/onboarding/queries";
  */
 function AppPending() {
 	return (
-		<div className="min-h-dvh bg-canvas text-ink">
-			<div className="flex min-h-dvh">
+		<div className="fixed inset-0 overflow-hidden bg-canvas text-ink">
+			<div className="flex h-full">
 				<div
 					aria-hidden="true"
-					className="sticky top-0 hidden h-dvh w-60 shrink-0 border-r border-line-subtle bg-elevated lg:block"
+					className="hidden h-full w-60 shrink-0 border-r border-line-subtle bg-elevated lg:block"
 				/>
-				<div className="flex min-w-0 flex-1 flex-col">
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 					<div
 						aria-hidden="true"
 						className="h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 border-b border-line-subtle bg-canvas"
 					/>
-					<main className="min-w-0 flex-1">
+					<main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none">
 						<PageContainer>
 							<output aria-busy="true" className="flex flex-col gap-6">
 								<span className="sr-only">Loading workspace</span>

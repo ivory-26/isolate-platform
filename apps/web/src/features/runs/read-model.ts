@@ -128,8 +128,8 @@ const STMT = {
 		LIMIT $3`,
 } as const;
 
-const LIST_SQL = `SELECT t.id, t.branch, t.status, t.retry_depth, t.incident_source,
-		t.created_at, t.updated_at,
+const LIST_SQL = `SELECT t.id, t.branch, t.goal, t.status, t.retry_depth,
+		t.incident_source, t.created_at, t.updated_at,
 		r.id AS repository_id, r.external_full_name, r.default_branch,
 		w.id AS run_id, w.status AS run_status, w.started_at AS run_started_at,
 		w.finished_at AS run_finished_at

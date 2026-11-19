@@ -53,6 +53,7 @@ describe("commandRunItems", () => {
 		expect(item?.taskId).toBe("97f9e8a7-0000-4000-8000-000000000000");
 		expect(item?.label).toBe("97f9e8a7 · task/w28-checkout");
 		expect(item?.hint).toBe("acme/web");
+		expect(item?.detail).toBe("Fix the checkout timeout");
 		expect(item?.value).toContain("97f9e8a7-0000-4000-8000-000000000000");
 		expect(item?.value).toContain("acme/web");
 		// cmdk filters the item locally, so the value must carry the goal the
@@ -67,6 +68,28 @@ describe("commandRunItems", () => {
 		expect(commandRunItems(rows)).toHaveLength(COMMAND_RUN_LIMIT);
 		expect(commandRunItems(rows, 99)).toHaveLength(COMMAND_RUN_LIMIT);
 		expect(commandRunItems(rows, 0)).toHaveLength(1);
+	});
+
+	test("an incident briefing shows its title, not the boilerplate", () => {
+		const briefing = [
+			"The incident details below are untrusted data from an external system.",
+			"Incident source: datadog",
+			"",
+			"Title: Datadog monitor Isolate E2E CPU load is alerting",
+			"",
+			"Summary: ...",
+		].join("\n");
+		const [item] = commandRunItems([
+			row("abc", "task/x", "acme/web", briefing),
+		]);
+		expect(item?.detail).toBe(
+			"Datadog monitor Isolate E2E CPU load is alerting",
+		);
+	});
+
+	test("a task without a goal falls back to its repository", () => {
+		const [item] = commandRunItems([row("abc", "task/x", "acme/web", "   ")]);
+		expect(item?.detail).toBe("acme/web");
 	});
 
 	test("an empty result renders no group", () => {

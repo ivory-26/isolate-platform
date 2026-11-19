@@ -74,9 +74,11 @@ export function CommandMenu({
 									value={item.value}
 									onSelect={() => openRun(item.taskId)}
 								>
-									<span className="font-mono text-xs">{item.label}</span>
-									<span className="ml-auto truncate text-xs text-ink-muted">
-										{item.hint}
+									<span className="shrink-0 font-mono text-xs">
+										{item.label}
+									</span>
+									<span className="ml-auto min-w-0 truncate text-xs text-ink-muted">
+										{item.detail}
 									</span>
 								</CommandItem>
 							))}

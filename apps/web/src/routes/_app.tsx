@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { PageContainer } from "@/components/common/page-container";
 import { AppShell } from "@/components/shell/app-shell";
+import { WorkspaceFrame } from "@/components/shell/workspace-frame";
 import { requireSession } from "@/features/auth/guard";
 import { authStateOptions } from "@/features/auth/queries";
 import { shouldStartOnboarding } from "@/features/onboarding/contracts";
@@ -13,7 +14,7 @@ import { setupStateOptions } from "@/features/onboarding/queries";
  */
 function AppPending() {
 	return (
-		<div className="fixed inset-0 overflow-hidden bg-canvas text-ink">
+		<WorkspaceFrame>
 			<div className="flex h-full">
 				<div
 					aria-hidden="true"
@@ -24,7 +25,7 @@ function AppPending() {
 						aria-hidden="true"
 						className="h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 border-b border-line-subtle bg-canvas"
 					/>
-					<main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none">
+					<main className="min-h-0 min-w-0 flex-1 overflow-clip overscroll-none">
 						<PageContainer>
 							<output aria-busy="true" className="flex flex-col gap-6">
 								<span className="sr-only">Loading workspace</span>
@@ -50,7 +51,7 @@ function AppPending() {
 					</main>
 				</div>
 			</div>
-		</div>
+		</WorkspaceFrame>
 	);
 }
 

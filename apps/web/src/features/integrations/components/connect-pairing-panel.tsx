@@ -12,6 +12,7 @@ import {
 	KeyIcon,
 	LockIcon,
 } from "@/components/icons";
+import { WorkspaceHashLink } from "@/components/shell/workspace-hash-link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -292,23 +293,23 @@ export function ConnectPairingPanel({
 						<ConsoleNote tone="danger" role="alert" className="mt-3">
 							Stored on relay but not verified.{" "}
 							{verificationFailureMessage(verificationOutcome.error.code)} Run{" "}
-							<a
-								href="#verification"
+							<WorkspaceHashLink
+								hash="verification"
 								className="font-medium underline underline-offset-2"
 							>
 								Verify connection
-							</a>{" "}
+							</WorkspaceHashLink>{" "}
 							in the Verification section below.
 						</ConsoleNote>
 					) : (
 						<ConsoleNote tone="warning" role="status" className="mt-3">
 							Stored on relay. The credential is not verified yet. Run{" "}
-							<a
-								href="#verification"
+							<WorkspaceHashLink
+								hash="verification"
 								className="font-medium underline underline-offset-2"
 							>
 								Verify connection
-							</a>{" "}
+							</WorkspaceHashLink>{" "}
 							in the Verification section below.
 						</ConsoleNote>
 					)

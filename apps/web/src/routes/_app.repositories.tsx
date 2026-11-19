@@ -23,6 +23,7 @@ import {
 	RepositoriesTable,
 	RepositoryFilters,
 } from "@/features/repositories/repositories-view";
+import { requestWorkspaceScrollPreservation } from "@/lib/workspace-scroll";
 
 type GitHubCallbackState = "connected" | "error";
 
@@ -103,6 +104,7 @@ function RepositoriesPage() {
 	const navigate = useNavigate();
 
 	const updateSearch = (changes: Partial<RepositoriesRouteSearch>) => {
+		requestWorkspaceScrollPreservation();
 		void navigate({
 			to: "/repositories",
 			search: { q: search.q, provider: search.provider, ...changes },

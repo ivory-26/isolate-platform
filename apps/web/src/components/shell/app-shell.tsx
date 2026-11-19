@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import {
+	WORKSPACE_MAIN_ID,
+	WORKSPACE_SCROLL_ATTRIBUTE,
+	WORKSPACE_SCROLL_ID,
+} from "@/lib/workspace-scroll";
 import { AppSidebar } from "./app-sidebar";
 import { AppTopbar } from "./app-topbar";
 import { CommandMenu } from "./command-menu";
+import { useWorkspaceScrollRestoration } from "./use-workspace-scroll";
+import { WorkspaceFrame } from "./workspace-frame";
+import { WorkspaceHashLink } from "./workspace-hash-link";
 
 const SIDEBAR_STORAGE_KEY = "isolate.sidebar.collapsed";
 
@@ -11,6 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [commandOpen, setCommandOpen] = useState(false);
+	const paneRef = useWorkspaceScrollRestoration();
 
 	useEffect(() => {
 		try {
@@ -44,13 +53,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 	};
 
 	return (
-		<div className="fixed inset-0 overflow-hidden bg-canvas text-ink">
-			<a
-				href="#main-content"
+		<WorkspaceFrame>
+			<WorkspaceHashLink
+				hash={WORKSPACE_MAIN_ID}
 				className="sr-only z-50 rounded-md bg-brand px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:top-3 focus:left-3"
 			>
 				Skip to content
-			</a>
+			</WorkspaceHashLink>
 			<div className="flex h-full">
 				<aside
 					className={cn(
@@ -69,8 +78,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 						onOpenCommand={() => setCommandOpen(true)}
 					/>
 					<main
-						id="main-content"
-						data-scroll-restoration-id="workspace-content"
+						ref={paneRef}
+						id={WORKSPACE_MAIN_ID}
+						{...{ [WORKSPACE_SCROLL_ATTRIBUTE]: WORKSPACE_SCROLL_ID }}
 						tabIndex={-1}
 						className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
 					>
@@ -91,6 +101,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			</Sheet>
 
 			<CommandMenu open={commandOpen} onOpenChange={setCommandOpen} />
-		</div>
+		</WorkspaceFrame>
 	);
 }

@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/common/relative-time";
 import { ConsoleNote } from "@/components/console/note";
 import { StatusMark } from "@/components/console/status-mark";
 import { ArrowRightIcon, ConnectorsIcon } from "@/components/icons";
+import { WorkspaceHashLink } from "@/components/shell/workspace-hash-link";
 import { Button } from "@/components/ui/button";
 import { deviceListOptions } from "@/features/devices/queries";
 import {
@@ -123,17 +124,17 @@ function ConnectorDetail({
 						</Button>
 						{detail === null ? null : connection !== null ? (
 							<Button asChild variant="outline" size="sm">
-								<a href="#trigger-rules">
+								<WorkspaceHashLink hash="trigger-rules">
 									Triggers
 									<ArrowRightIcon />
-								</a>
+								</WorkspaceHashLink>
 							</Button>
 						) : (
 							<Button asChild size="sm">
-								<a href="#connect">
+								<WorkspaceHashLink hash="connect">
 									Connect securely
 									<ArrowRightIcon />
-								</a>
+								</WorkspaceHashLink>
 							</Button>
 						)}
 					</>

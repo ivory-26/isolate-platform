@@ -14,6 +14,7 @@ import {
 	UsageTable,
 } from "@/features/usage/usage-view";
 import { formatDate } from "@/lib/format";
+import { requestWorkspaceScrollPreservation } from "@/lib/workspace-scroll";
 
 export const Route = createFileRoute("/_app/usage")({
 	validateSearch: (search: Record<string, unknown>): UsageSearch =>
@@ -56,6 +57,7 @@ function UsagePage() {
 
 	// Page changes are client-side; the loader dependency is the period only.
 	const setPage = (page: number) => {
+		requestWorkspaceScrollPreservation();
 		void navigate({
 			search: (previous) => ({ ...previous, page }),
 			resetScroll: false,

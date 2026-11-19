@@ -183,6 +183,8 @@ export type RunLatestRun = {
 export type RunListRow = {
 	taskId: string;
 	branch: string;
+	/** Task goal text; the list search matches it, so the row carries it. */
+	goal: string;
 	status: TaskStatus;
 	retryDepth: number;
 	/** Provenance of the signal that opened the task; null means manual. */
